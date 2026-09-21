@@ -1,0 +1,628 @@
+/* ------------------------------------------------------------------
+   Meshora 站点主题覆盖
+   ------------------------------------------------------------------ */
+
+:root {
+  --vp-font-family-base: "IBM Plex Sans", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --vp-font-family-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular,
+    "Cascadia Code", Consolas, monospace;
+
+  --vp-c-brand-1: #24508f;
+  --vp-c-brand-2: #2e58a4;
+  --vp-c-brand-3: #4a7bc8;
+  --vp-c-brand-soft: rgba(46, 88, 164, 0.14);
+
+  --meshora-ease: cubic-bezier(0.22, 0.8, 0.3, 1);
+  --meshora-dur: 620ms;
+
+  /* ---- 毛玻璃令牌：文档页 · 浅色 ---- */
+  --meshora-glass-bg: rgba(255, 255, 255, 0.6);
+  --meshora-glass-bg-soft: rgba(255, 255, 255, 0.44);
+  --meshora-glass-bg-solid: rgba(255, 255, 255, 0.95); /* @supports 回退用 */
+  --meshora-glass-border: rgba(15, 30, 40, 0.1);
+  --meshora-glass-blur: 14px;
+  --meshora-on-glass: var(--vp-c-text-1);
+  --meshora-on-glass-dim: var(--vp-c-text-2);
+
+  /*
+    覆盖层：决定流体透出多少。
+    文档页要厚 —— 长文阅读容不得背景在底下晃。
+  */
+  --meshora-scrim: rgba(255, 255, 255, 0.9);
+}
+
+.dark {
+  --vp-c-brand-1: #8ab4e8;
+  --vp-c-brand-2: #a9c9f0;
+  --vp-c-brand-3: #3c6bb5;
+  --vp-c-brand-soft: rgba(138, 180, 232, 0.16);
+
+  --meshora-glass-bg: rgba(22, 30, 35, 0.56);
+  --meshora-glass-bg-soft: rgba(22, 30, 35, 0.4);
+  --meshora-glass-bg-solid: rgba(18, 25, 29, 0.96);
+  --meshora-glass-border: rgba(255, 255, 255, 0.1);
+
+  --meshora-scrim: rgba(11, 17, 20, 0.9);
+}
+
+/*
+  首页：流体清晰可见，整页恒为深色（明暗主题都是），文字恒为浅色。
+  :has() 让服务端渲染出来就是对的，不会在水合后闪一下；
+  .is-home 是 index.ts 给不支持 :has() 的浏览器留的兜底。
+  两条必须分开写 —— 写成选择器列表的话，不支持 :has() 的浏览器会把整条规则丢掉。
+*/
+:root:has(.VPHome) {
+  /*
+    这两个值是算出来的，不是调出来的。流体最亮处是 #AED5F3，实测：
+      遮罩 0.3 + 白色调玻璃 0.07 → hero 文字 3.01、面板白字 2.75（远不够）
+      遮罩 0.5 + 深色调玻璃 0.25 → hero 文字 5.18、面板白字 7.45（过 AA）
+    关键是玻璃底色要用**深色调**：深色设计里用白色调等于没压住流体的亮区，
+    那时连纯白文字都只有 3.67。
+  */
+  --meshora-scrim: rgba(4, 10, 20, 0.5);
+  --meshora-glass-bg: rgba(6, 14, 26, 0.25);
+  --meshora-glass-bg-soft: rgba(6, 14, 26, 0.18);
+  --meshora-glass-bg-solid: rgba(10, 18, 28, 0.92);
+  --meshora-glass-border: rgba(255, 255, 255, 0.14);
+  --meshora-glass-blur: 18px;
+  --meshora-on-glass: #ffffff;
+  --meshora-on-glass-dim: rgba(255, 255, 255, 0.72);
+}
+:root.is-home {
+  /*
+    这两个值是算出来的，不是调出来的。流体最亮处是 #AED5F3，实测：
+      遮罩 0.3 + 白色调玻璃 0.07 → hero 文字 3.01、面板白字 2.75（远不够）
+      遮罩 0.5 + 深色调玻璃 0.25 → hero 文字 5.18、面板白字 7.45（过 AA）
+    关键是玻璃底色要用**深色调**：深色设计里用白色调等于没压住流体的亮区，
+    那时连纯白文字都只有 3.67。
+  */
+  --meshora-scrim: rgba(4, 10, 20, 0.5);
+  --meshora-glass-bg: rgba(6, 14, 26, 0.25);
+  --meshora-glass-bg-soft: rgba(6, 14, 26, 0.18);
+  --meshora-glass-bg-solid: rgba(10, 18, 28, 0.92);
+  --meshora-glass-border: rgba(255, 255, 255, 0.14);
+  --meshora-glass-blur: 18px;
+  --meshora-on-glass: #ffffff;
+  --meshora-on-glass-dim: rgba(255, 255, 255, 0.72);
+}
+
+/* ------------------------------------------------------------------
+   让固定背景层透出来
+
+   背景层是 position: fixed; z-index: -1，画在所有内容之下、但在根元素
+   背景之上。所以：html 留一层兜底底色（着色器挂了也不会白屏），
+   body 和 VitePress 那些默认不透明的容器一律改透明。
+   ------------------------------------------------------------------ */
+
+html {
+  background-color: var(--vp-c-bg);
+}
+
+body,
+.VPContent,
+.VPDoc,
+.VPHome,
+.VPPage {
+  background-color: transparent;
+}
+
+/* 导航、侧边栏、移动端局部导航改成毛玻璃 */
+:root {
+  --vp-nav-bg-color: transparent;
+  --vp-sidebar-bg-color: transparent;
+  --vp-local-nav-bg-color: transparent;
+}
+
+.VPNavBar:not(.top) {
+  background-color: var(--meshora-glass-bg);
+  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(150%);
+}
+
+.VPSidebar {
+  background-color: var(--meshora-glass-bg-soft);
+  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+}
+
+.VPLocalNav {
+  background-color: var(--meshora-glass-bg);
+  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+}
+
+/*
+  不支持 backdrop-filter 时，所有玻璃面板退回更不透明的底色。
+  否则会变成「半透明面板直接压在流动的流体上」，文字完全没法读。
+*/
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .VPNavBar:not(.top),
+  .VPSidebar,
+  .VPLocalNav,
+  .VPHome .VPFeature,
+  .vp-doc div[class*="language-"],
+  .vp-doc .custom-block {
+    background-color: var(--meshora-glass-bg-solid);
+  }
+}
+
+/* ------------------------------------------------------------------
+   首页：整页深色
+   hero 原先那层向下渐隐的遮罩不再需要 —— 现在整页都浮在流体上。
+   这里把首页子树的颜色令牌整体换成浅色版。
+   ------------------------------------------------------------------ */
+
+.VPHome {
+  position: relative;
+  z-index: 1;
+
+  /*
+    这一行不能省。color 是按**计算值**继承的：VitePress 在 .VPContent 那一层
+    就已经把 var(--vp-c-text-1) 解析成了浅色主题的 #3c3c43 并往下继承，
+    在更深的 .VPHome 上只重定义变量是改不动它的 —— 变量链全是白色，
+    文字却依然是深色（首页表格一度对比度只有 1.35，基本不可读）。
+    在这里重新应用一次 color，它才会用下面这组本地变量重新解析。
+  */
+  color: var(--vp-c-text-1);
+
+  --vp-c-text-1: #ffffff;
+  --vp-c-text-2: rgba(255, 255, 255, 0.76);
+  --vp-c-text-3: rgba(255, 255, 255, 0.56);
+  --vp-c-divider: rgba(255, 255, 255, 0.14);
+  --vp-c-brand-1: #8ab4e8;
+  --vp-c-brand-2: #a9c9f0;
+  --vp-c-brand-3: #6f9fd8;
+  --vp-c-brand-soft: rgba(138, 180, 232, 0.18);
+  --vp-c-bg-soft: transparent;
+  --vp-c-bg: transparent;
+}
+
+.VPHome .VPHero {
+  padding-top: 96px;
+}
+
+@media (max-width: 960px) {
+  .VPHome .VPHero { padding-top: 72px; }
+}
+
+.VPHome .VPHero .name,
+.VPHome .VPHero .text {
+  display: block;
+  color: #fff;
+  background: none;
+  -webkit-text-fill-color: #fff;
+}
+
+/* 项目名是最大的元素 —— Meshora 才是项目名，标语是次一级 */
+.VPHome .VPHero .name {
+  font-size: clamp(46px, 7.2vw, 78px);
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.035em; /* 收紧只对拉丁文成立 */
+  text-transform: none;
+  opacity: 1;
+  margin-bottom: 10px;
+}
+
+/* 标语是中文，绝不能用负字距，汉字会挤在一起 */
+.VPHome .VPHero .text {
+  font-size: clamp(17px, 2.4vw, 25px);
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: 0;
+  max-width: 24ch;
+  color: #ffffff;
+  -webkit-text-fill-color: #ffffff;
+}
+
+/*
+  hero 的文字背后只有「流体 + 遮罩」，没有玻璃面板兜底，所以透明度不能太低。
+  实测（流体最亮处 + 0.5 遮罩，合成底色 rgb(89,112,132)）：
+      0.72 → 3.56 不过   0.88 → 4.44 不过   0.92 → 4.68 过   1.0 → 5.18
+  层级差别改由字号和字重承担，不靠压低透明度。
+*/
+.VPHome .VPHero .tagline {
+  padding-top: 18px;
+  color: rgba(255, 255, 255, 0.94);
+  max-width: 46ch;
+  font-size: clamp(14.5px, 1.7vw, 17px);
+  line-height: 1.75;
+}
+
+.VPHome .VPHero .actions {
+  padding-top: 40px;
+}
+
+.VPHome .VPHero .actions .VPButton {
+  transition: background-color 0.18s, border-color 0.18s, transform 0.18s;
+}
+.VPHome .VPHero .actions .VPButton:hover {
+  transform: translateY(-1px);
+}
+.VPHome .VPHero .actions .VPButton.alt {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.26);
+  color: #fff;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.VPHome .VPHero .actions .VPButton.alt:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.VPHome .VPHero .actions .VPButton.brand {
+  background: #fff;
+  border-color: #fff;
+  color: #14213d;
+}
+.VPHome .VPHero .actions .VPButton.brand:hover {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(255, 255, 255, 0.88);
+}
+
+/* ------------------------------------------------------------------
+   首屏入场编排
+
+   整组挂在 html.meshora-animate 之下，而那个类只由 reveal.ts 在挂载后添加。
+   原因：入场动画用的是 fill-mode: both，动画一旦没跑起来（JS 没执行、
+   脚本报错、标签页一直隐藏），元素就永久停在 opacity: 0。
+   加了这层门之后，没有 JS 就没有这些规则，hero 是完全可见的静态首屏。
+   ------------------------------------------------------------------ */
+
+@keyframes meshora-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.meshora-animate .VPHome .VPHero .status-chip,
+.meshora-animate .VPHome .VPHero .name,
+.meshora-animate .VPHome .VPHero .text,
+.meshora-animate .VPHome .VPHero .tagline,
+.meshora-animate .VPHome .VPHero .actions .action {
+  animation: meshora-rise var(--meshora-dur) var(--meshora-ease) both;
+}
+
+.meshora-animate .VPHome .VPHero .status-chip { animation-delay: 80ms; }
+.meshora-animate .VPHome .VPHero .name        { animation-delay: 160ms; }
+.meshora-animate .VPHome .VPHero .text        { animation-delay: 240ms; }
+.meshora-animate .VPHome .VPHero .tagline     { animation-delay: 320ms; }
+.meshora-animate .VPHome .VPHero .actions .action:nth-child(1) { animation-delay: 400ms; }
+.meshora-animate .VPHome .VPHero .actions .action:nth-child(2) { animation-delay: 460ms; }
+.meshora-animate .VPHome .VPHero .actions .action:nth-child(3) { animation-delay: 520ms; }
+
+/* ------------------------------------------------------------------
+   滚动渐入
+   「待入场」的 .reveal 只由 reveal.ts 添加 —— JS 没跑，内容就是正常可见的。
+   ------------------------------------------------------------------ */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+}
+
+/*
+  过渡只声明在「已入场」这一侧，不能写在 .reveal 上。
+  写在 .reveal 上的话，加类的那一刻元素会先花 620ms 从可见淡出、
+  然后 IntersectionObserver 触发时再淡入 —— 一次多余的闪烁。
+*/
+.reveal.reveal-in,
+.reveal-in {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--meshora-dur) var(--meshora-ease),
+    transform var(--meshora-dur) var(--meshora-ease);
+  transition-delay: calc(var(--reveal-i, 0) * 70ms);
+}
+
+/* ------------------------------------------------------------------
+   路由切换过渡
+   只动 opacity，不动 transform —— transform 会改变包含块，
+   可能影响侧边栏和右侧大纲的 sticky 定位。
+   ------------------------------------------------------------------ */
+
+@keyframes meshora-page-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.VPContent.page-enter {
+  animation: meshora-page-enter 320ms ease both;
+}
+
+/* ------------------------------------------------------------------
+   首页顶部导航
+   .VPNavBar.home.top = 「在首页且没滚动」，透明压在流体上。
+   ------------------------------------------------------------------ */
+
+/*
+  注意作用域是 .home 而不是 .home.top：首页滚动之后导航变成**深色**玻璃
+  （--meshora-glass-bg 在首页是深色调），此时若退回默认的深灰文字，
+  对比度只有 2.11，完全看不清。所以整个首页的导航都要保持浅色文字。
+
+  和 .VPHome 那里同理，必须重新应用一次 color —— 光改变量动不了继承下来的颜色。
+*/
+.VPNavBar.home {
+  --vp-c-text-1: #ffffff;
+  --vp-c-text-2: rgba(255, 255, 255, 0.8);
+  --vp-c-text-3: rgba(255, 255, 255, 0.6);
+  --vp-c-divider: rgba(255, 255, 255, 0.18);
+  --vp-c-gutter: rgba(255, 255, 255, 0.18);
+  color: var(--vp-c-text-1);
+}
+
+/* 汉堡按钮的横线用的是 background-color: var(--vp-c-text-1)，
+   上面重定义令牌就已经覆盖到了，不需要也不能靠 color 改。 */
+.VPNavBar.home .VPNavBarTitle .title,
+.VPNavBar.home .VPNavBarMenuLink,
+.VPNavBar.home .VPNavBarExtra .button {
+  color: var(--vp-c-text-1);
+}
+
+/* 同样是 .home 而不是 .home.top：滚动后导航是深色玻璃，
+   搜索框若回落到 VitePress 的浅色默认值，会变成一个突兀的白色胶囊。 */
+.VPNavBar.home .DocSearch-Button {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.VPNavBar.home .DocSearch-Button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.VPNavBar.home .DocSearch-Search-Icon {
+  color: rgba(255, 255, 255, 0.8);
+}
+/* 占位文字要写到这个特异性才压得过 DocSearch 自带的样式 */
+.VPNavBar.home .DocSearch-Button .DocSearch-Button-Placeholder {
+  color: rgba(255, 255, 255, 0.75);
+}
+.VPNavBar.home .DocSearch-Button-Keys .DocSearch-Button-Key {
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.8);
+  box-shadow: none;
+}
+.VPNavBar.home .VPSwitchAppearance {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* 导航链接悬停时下划线滑入 */
+.VPNavBarMenuLink {
+  position: relative;
+}
+.VPNavBarMenuLink::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 16px;
+  height: 1.5px;
+  background: currentColor;
+  opacity: 0.55;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.24s var(--meshora-ease);
+}
+.VPNavBarMenuLink:hover::after {
+  transform: scaleX(1);
+}
+
+/* ------------------------------------------------------------------
+   能力卡片（毛玻璃）
+   内边距在 article.box 上，栅格间距在 .item 上，边框在 .VPFeature 上。
+   ------------------------------------------------------------------ */
+
+.VPHome .VPFeatures {
+  position: relative;
+  z-index: 1;
+}
+
+.VPHome .VPFeatures .item {
+  padding: 12px;
+}
+
+.VPHome .VPFeature {
+  border-color: var(--meshora-glass-border);
+  background: var(--meshora-glass-bg);
+  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  transition: border-color 0.18s, transform 0.18s, box-shadow 0.18s, background-color 0.18s;
+}
+.VPHome .VPFeature:hover {
+  border-color: var(--vp-c-brand-1);
+  background: var(--meshora-glass-bg-soft);
+  transform: translateY(-3px);
+  box-shadow: 0 12px 30px -16px rgba(0, 0, 0, 0.55);
+}
+
+.VPHome .VPFeature .box {
+  padding: 28px;
+}
+.VPHome .VPFeature .title {
+  font-size: 16.5px;
+  line-height: 26px;
+  color: var(--meshora-on-glass);
+}
+.VPHome .VPFeature .details {
+  font-size: 15px;
+  line-height: 26px;
+  padding-top: 10px;
+  color: var(--meshora-on-glass-dim);
+}
+
+/* 首页正文区也浮在流体上 */
+.VPHome .vp-doc {
+  position: relative;
+  z-index: 1;
+}
+
+.VPHome .vp-doc blockquote {
+  border-left-color: var(--vp-c-brand-1);
+}
+
+/* ------------------------------------------------------------------
+   文档页排版
+   段间距是「挤」的头号来源：行高 28px 配 16px 段距，段落边界糊成一片。
+   只放开正文流里的直接子元素，不碰 custom block、表格单元格里的段落。
+   ------------------------------------------------------------------ */
+
+.vp-doc > div > p {
+  margin: 24px 0;
+}
+
+.vp-doc > div > ul,
+.vp-doc > div > ol {
+  margin: 20px 0;
+}
+
+.vp-doc li + li {
+  margin-top: 8px;
+}
+
+.vp-doc > div > blockquote {
+  margin: 26px 0;
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+  margin: 28px 0;
+  background: var(--meshora-glass-bg-soft);
+  border-radius: 10px;
+  /*
+    这里刻意不写 overflow —— 它对 display: table 的盒子不生效（写 auto 会被
+    解析成 visible），而写 hidden 则会在表格压不下时**静默吞掉内容**。
+    实测最窄视口下 5 列表格也没有裁切：中文逐字换行，很能压。
+    将来如果加了含长串英文的宽表格，正确做法是给它套一个
+    display: block; overflow-x: auto 的外层容器，而不是在 table 上设 overflow。
+  */
+}
+.vp-doc td,
+.vp-doc th {
+  padding: 12px 18px;
+  line-height: 26px;
+  border-color: var(--meshora-glass-border);
+}
+.vp-doc th {
+  font-weight: 600;
+}
+
+/*
+   文档页的玻璃只用在「容器」上：代码块、提示框、表格。
+   **正文段落底下一律不加模糊** —— 长文本下面有东西在动，字会发虚。
+*/
+.vp-doc div[class*="language-"] {
+  background-color: var(--meshora-glass-bg);
+  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  border: 1px solid var(--meshora-glass-border);
+}
+
+.vp-doc .custom-block {
+  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+}
+
+/* 路线图 / 状态标记 */
+.status-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  border: 1px solid var(--meshora-glass-border);
+  color: var(--vp-c-text-2);
+  background: var(--meshora-glass-bg-soft);
+}
+
+/* ------------------------------------------------------------------
+   搜索弹窗
+
+   原来「很生硬」的根因：VitePress 给 .backdrop 写了 transition: opacity .5s，
+   但弹窗是 v-if 新建的元素 —— 元素一出现就已经是终态，transition 根本不会播；
+   .shell 则连时长都没有（transition: all），完全没有入场动画。
+
+   所以这里用 @keyframes：动画在元素挂载时自动播放，正好绕开这个问题，
+   而且不需要覆写 VitePress 内部组件。
+
+   注意搜索框被 teleport 到 body，不在 .VPHome 子树内，所以它跟随明暗主题
+   而不是首页的深色 —— 这是对的。但根级的玻璃令牌（0.6）是给页面面板调的，
+   对压在内容之上的模态框太透，这里单独给一组更实的令牌。
+   ------------------------------------------------------------------ */
+
+:root {
+  --meshora-modal-bg: rgba(255, 255, 255, 0.92);
+  --meshora-modal-blur: 20px;
+}
+
+.dark {
+  --meshora-modal-bg: rgba(20, 27, 31, 0.92);
+}
+
+@keyframes meshora-modal-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes meshora-modal-shell-in {
+  from { opacity: 0; transform: translateY(-10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+.VPLocalSearchBox .backdrop {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: meshora-modal-backdrop-in 240ms ease both;
+}
+
+/*
+  选择器重复一次类名是为了提高一级特异性。VitePress 自己的 scoped 样式
+  把 .shell 设成了不透明白，和 `.VPLocalSearchBox .shell` 特异性相同，
+  按源码顺序赢过我们 —— 现象是同一条规则里 animation 生效、background 不生效。
+  重复类名能压过它，且不必动用 !important。
+*/
+.VPLocalSearchBox.VPLocalSearchBox .shell {
+  background: var(--meshora-modal-bg);
+  backdrop-filter: blur(var(--meshora-modal-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--meshora-modal-blur)) saturate(150%);
+  border: 1px solid var(--meshora-glass-border);
+  animation: meshora-modal-shell-in 300ms var(--meshora-ease) both;
+}
+
+/* 结果项原本是 transition: none，选中态切换是硬跳。
+   和 .shell 一样要重复类名压过 VitePress 的 scoped 规则。 */
+.VPLocalSearchBox.VPLocalSearchBox .result {
+  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s var(--meshora-ease);
+}
+.VPLocalSearchBox.VPLocalSearchBox .result:hover {
+  transform: translateX(2px);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .VPLocalSearchBox.VPLocalSearchBox .shell {
+    background: var(--vp-c-bg);
+  }
+}
+
+/* ------------------------------------------------------------------
+   减少动态效果
+   加了整套动画之后，只关 transition-duration 是不够的 —— animation 也要关，
+   否则带 fill-mode: both 的入场动画会把元素永久停在 opacity: 0。
+   ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* 兜底：即便 .reveal 因为某种原因被加上了，也必须可见 */
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}

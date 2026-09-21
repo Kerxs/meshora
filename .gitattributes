@@ -1,0 +1,13 @@
+# 换行符。
+#
+# 仓库里一律存 LF，由 git 在 Windows 上按需转 CRLF —— 这是默认行为。
+# 下面这一类**必须**连工作副本都是 LF：
+#
+#   *.yml  GitHub Actions 的 workflow 在 Linux runner 上解析。YAML 本身容忍
+#          CRLF，但 `run: |` 里内联的 shell 不容忍 —— 行尾的 \r 会被 bash
+#          当成命令的一部分，报出来的错和真正的原因隔得很远。
+#
+* text=auto
+
+*.yml  text eol=lf
+*.yaml text eol=lf
