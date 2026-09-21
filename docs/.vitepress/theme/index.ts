@@ -8,7 +8,13 @@ import MeshDiagram from './MeshDiagram.vue'
 import Pipeline from './Pipeline.vue'
 import HomeSection from './HomeSection.vue'
 import ScenarioGrid from './ScenarioGrid.vue'
-import { enableEntranceAnimations, playPageEnter, setupReveal, teardownReveal } from './reveal'
+import {
+  enableEntranceAnimations,
+  playPageEnter,
+  setupReveal,
+  teardownReveal,
+  updateScrollbarWidth
+} from './reveal'
 import './custom.css'
 
 /**
@@ -52,6 +58,7 @@ export default {
       markHome(route.path === '/')
       enableEntranceAnimations()
       setupReveal()
+      window.addEventListener('resize', updateScrollbarWidth)
     })
 
     watch(
@@ -65,6 +72,9 @@ export default {
       }
     )
 
-    onUnmounted(teardownReveal)
+    onUnmounted(() => {
+      teardownReveal()
+      window.removeEventListener('resize', updateScrollbarWidth)
+    })
   }
 } satisfies Theme

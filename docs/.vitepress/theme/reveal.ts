@@ -26,6 +26,23 @@ const TARGETS = [
 let observer: IntersectionObserver | undefined
 let failsafe: number | undefined
 
+/**
+ * 记录当前滚动条宽度，供 custom.css 在搜索弹窗打开时做补偿。
+ *
+ * VitePress 打开弹窗时用 body{overflow:hidden} 锁滚动，滚动条随之消失，
+ * 视口瞬间变宽（实测 15px），所有横跨视口的元素跟着变宽 —— 正文重新折行，
+ * 看起来就是"点一下搜索，页面抽搐一下"。VitePress 没有补偿这个宽度。
+ *
+ * **必须在弹窗没开的时候测量** —— 开着的时候滚动条已经没了，量出来是 0。
+ * 页面长短不同滚动条也可能不存在，所以路由切换和窗口尺寸变化时都要重测。
+ */
+export function updateScrollbarWidth() {
+  if (typeof document === 'undefined') return
+  if (document.querySelector('.VPLocalSearchBox')) return // 弹窗开着，此刻的测量无意义
+  const w = Math.max(0, window.innerWidth - document.documentElement.clientWidth)
+  document.documentElement.style.setProperty('--meshora-sbw', w + 'px')
+}
+
 export function teardownReveal() {
   observer?.disconnect()
   observer = undefined
@@ -72,6 +89,9 @@ export function setupReveal() {
 
   // 路由切换会重新调用本函数，先断掉上一页的观察器，否则会一页页累积
   teardownReveal()
+
+  // 页面长短变了，滚动条可能从有变无，重测一次
+  updateScrollbarWidth()
 
   // 同一个元素可能被多个选择器命中，去重，并按各自分组算错峰序号。
   // 还要跳过「祖先已经在入场名单里」的元素：父子都渐入的话，两层 opacity

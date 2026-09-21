@@ -559,6 +559,28 @@ body,
   --meshora-modal-bg: rgba(20, 27, 31, 0.92);
 }
 
+/*
+  滚动条补偿 —— 修「点一下搜索，页面抽搐一下」。
+
+  VitePress 用 body{overflow:hidden} 锁滚动，滚动条随之消失，视口瞬间多出
+  滚动条那么宽（实测 15px），所有横跨视口的元素跟着变宽，正文重新折行。
+  VitePress 自己没有补这个宽度。
+
+  两条规则缺一不可，因为受影响的元素分两类：
+    body   —— 普通流里的正文、内容容器、标题都在它内部
+    .VPNav —— 固定定位，不受 body 内边距影响，要单独补
+
+  宽度由 reveal.ts 在弹窗未打开时实测写进 --meshora-sbw，不能写死：
+  不同系统、不同浏览器、甚至页面够不够长（有没有滚动条）都不一样。
+
+  用 :has() 是因为 VitePress 打开弹窗时不会在 body 上加任何标记类。
+  浏览器不支持 :has() 时整条规则被丢弃 —— 退化成现在的抽搐，不会更糟。
+*/
+html:has(.VPLocalSearchBox) body,
+html:has(.VPLocalSearchBox) .VPNav {
+  padding-right: var(--meshora-sbw, 0px);
+}
+
 @keyframes meshora-modal-backdrop-in {
   from { opacity: 0; }
   to   { opacity: 1; }
