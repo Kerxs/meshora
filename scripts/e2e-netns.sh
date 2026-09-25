@@ -27,7 +27,10 @@
 #      然后掐断两个 NAT 之间的 UDP：回落中继；恢复之后切回直连
 #   4. 同样的两边，A 的路由器换了公网地址（运营商重新分配）：A 的连接全断，
 #      重连、重新探测到新的公网端点、重新打洞，回到直连
-#   5. B 在对称 NAT 后面（每个目标换一个外部端口）：打洞打不通，经中继照样通
+#   5. 同样的两边，A 换了网络（从路由器 A 后面挪到新的路由器 C 后面）：本机地址也变了，
+#      同样要重连、重新探测、重新打洞，回到直连；再掐断直连，经中继也得通（A 到中继的
+#      连接同样绑着旧地址，得自己发现、重连）
+#   6. B 在对称 NAT 后面（每个目标换一个外部端口）：打洞打不通，经中继照样通
 #
 # 需要 root（建命名空间和虚拟网卡）、iproute2、iptables、ping。先编译：
 #   cargo build -p meshorad -p meshora-coord
@@ -101,27 +104,26 @@ setup_nat() {
   COORD_IP=192.0.2.1
 }
 
-# nat_side <a 或 b> <路由器的公网地址> <内网前缀> <cone 或 symmetric>
+# nat_side <a 或 b> <路由器的公网地址> <内网前缀> <cone 或 symmetric>：一台路由器，后面一台机器
 nat_side() {
   local side=$1 public=$2 lan=$3 kind=$4
-  local router=msh-e2e-nat-$side host=msh-e2e-$side
+  add_router "$side" "$public" "$kind"
+  new_ns "msh-e2e-$side"
+  attach "msh-e2e-$side" "$side" "$lan"
+}
+
+# add_router <名字> <公网地址> <cone 或 symmetric>：往"公网"上接一台 NAT 路由器
+add_router() {
+  local name=$1 public=$2 kind=$3
+  local router=msh-e2e-nat-$name
   new_ns "$router"
-  new_ns "$host"
 
   # 路由器的公网口接到服务器的网桥上
-  ip link add wan netns "$router" type veth peer name "to-$side" netns msh-e2e-srv
-  ip -n msh-e2e-srv link set "to-$side" master br0
-  ip -n msh-e2e-srv link set "to-$side" up
+  ip link add wan netns "$router" type veth peer name "to-$name" netns msh-e2e-srv
+  ip -n msh-e2e-srv link set "to-$name" master br0
+  ip -n msh-e2e-srv link set "to-$name" up
   ip -n "$router" addr add "$public/24" dev wan
   ip -n "$router" link set wan up
-
-  # 路由器和它后面的机器
-  ip link add lan netns "$router" type veth peer name eth0 netns "$host"
-  ip -n "$router" addr add "$lan.1/24" dev lan
-  ip -n "$host" addr add "$lan.2/24" dev eth0
-  ip -n "$router" link set lan up
-  ip -n "$host" link set eth0 up
-  ip -n "$host" route add default via "$lan.1"
 
   ip netns exec "$router" sysctl -qw net.ipv4.ip_forward=1
   # --random-fully：每条新连接随机挑外部端口，也就是对称 NAT
@@ -137,6 +139,18 @@ nat_side() {
       -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ip netns exec "$router" iptables -A "$chain" -i wan -j DROP
   done
+}
+
+# attach <机器的命名空间> <路由器的名字> <内网前缀>：把机器接到这台路由器后面，拿 .2
+attach() {
+  local host=$1 name=$2 lan=$3
+  local router=msh-e2e-nat-$name
+  ip link add lan netns "$router" type veth peer name "eth-$name" netns "$host"
+  ip -n "$router" addr add "$lan.1/24" dev lan
+  ip -n "$host" addr add "$lan.2/24" dev "eth-$name"
+  ip -n "$router" link set lan up
+  ip -n "$host" link set "eth-$name" up
+  ip -n "$host" route add default via "$lan.1"
 }
 
 # genkey 带文件名：私钥写进文件（只有自己能读写），标准输出打出公钥
@@ -253,17 +267,28 @@ wait_for_path_to() {
   echo "用了约 $((SECONDS - started)) 秒，$side 直连到 $addr"
 }
 
-# 在 B 的 NAT 路由器上掐断（或恢复）两边公网地址之间的 UDP：直连断了，
-# 到协调服务和中继的连接不受影响
+# direct_link <cut 或 restore> [A 那边的公网地址，默认 192.0.2.2]：在 B 的 NAT 路由器上掐断
+# （或恢复）两边公网地址之间的 UDP。直连断了，到协调服务和中继的连接不受影响
 direct_link() {
-  local op
+  local op peer=${2:-192.0.2.2}
   case $1 in
     cut) op=-I ;;
     restore) op=-D ;;
   esac
   for match in -s -d; do
-    ip netns exec msh-e2e-nat-b iptables "$op" FORWARD -p udp "$match" 192.0.2.2 -j DROP
+    ip netns exec msh-e2e-nat-b iptables "$op" FORWARD -p udp "$match" "$peer" -j DROP
   done
+}
+
+# wait_for_ping <最多等几秒>：等到 A 能 ping 通 B
+wait_for_ping() {
+  local timeout=$1 started=$SECONDS
+  until ip netns exec msh-e2e-a ping -c 1 -W 1 100.64.0.2 > /dev/null 2>&1; do
+    if [ $((SECONDS - started)) -ge "$timeout" ]; then
+      fail "$SCENARIO：$timeout 秒内没 ping 通"
+    fi
+  done
+  echo "用了约 $((SECONDS - started)) 秒 ping 通"
 }
 
 begin() {
@@ -331,6 +356,29 @@ wait_for_path Direct 30
 ping_both
 assert_path Direct
 grep -q "已重新连上协调服务" "$WORK/a.log" || fail "$SCENARIO：A 应该重连过协调服务"
+pass
+
+del_namespaces
+setup_nat cone
+
+begin "A 换了网络（比如从 Wi-Fi 换到蜂窝网）：本机地址、路由器、公网地址全变了，回到直连"
+start_nodes
+wait_for_path Direct 30
+ping_both
+echo "把 A 从路由器 A（公网 192.0.2.2）后面挪到新的路由器 C（公网 192.0.2.4）后面"
+add_router c 192.0.2.4 cone
+ip -n msh-e2e-a link del eth-a
+attach msh-e2e-a c 10.3.0
+wait_for_path_to b 192.0.2.4 90
+wait_for_path Direct 30
+ping_both
+# A 到中继的连接也绑着旧地址。掐断直连逼它走中继：得靠它自己发现旧连接死了、重连
+echo "再掐断两边之间的 UDP，只能经中继"
+direct_link cut 192.0.2.4
+wait_for_path Relay 30
+wait_for_ping 60
+ping_both
+assert_path Relay
 pass
 
 del_namespaces

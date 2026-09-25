@@ -44,7 +44,13 @@ const TICK: Duration = Duration::from_secs(1);
 /// 连接和握手的时限。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// 多久向协调服务发一次保活。协调服务 90 秒收不到任何消息就断开。
-const CONTROL_PING_INTERVAL: Duration = Duration::from_secs(30);
+const CONTROL_PING_INTERVAL: Duration = Duration::from_secs(10);
+/// 多久听不到协调服务的任何消息，就认为连接已经死了，重连。协调服务对每个保活都回 Pong，
+/// 连接正常时每隔 [`CONTROL_PING_INTERVAL`] 至少听到一次。
+///
+/// 不能指望 TCP 自己发现：比如本机换了网络，连接绑着的旧地址已经不在了，发出去的东西
+/// 哪儿也到不了，却不报错 —— TCP 要十几分钟才放弃
+const COORD_SILENCE: Duration = Duration::from_secs(25);
 /// 多久重新探测一次本机的公网地址。
 const PROBE_INTERVAL: Duration = Duration::from_secs(20);
 /// 没有直连时，多久请对方打一次洞。
@@ -141,12 +147,17 @@ impl Session {
         let mut tick = tokio::time::interval(TICK);
 
         loop {
-            // 连着的时候
+            // 连着的时候。这条连接是在当前的网络上建的：此前记下的"换了网络"不再作数
+            let mut last_heard = Instant::now();
+            node.take_network_changed();
             loop {
                 let now = Instant::now();
                 let outgoing = tokio::select! {
                     message = connection.inbox.recv() => match message {
-                        Some(message) => node.on_server_message(message, now),
+                        Some(message) => {
+                            last_heard = now;
+                            node.on_server_message(message, now)
+                        }
                         None => break,
                     },
                     event = events.recv() => match event {
@@ -159,6 +170,14 @@ impl Session {
                     if let Err(err) = connection.writer.send(&message.encode()).await {
                         debug!(%err, "发往协调服务失败");
                     }
+                }
+                if now.duration_since(last_heard) > COORD_SILENCE {
+                    warn!(silence = ?COORD_SILENCE, "协调服务太久没有回音");
+                    break;
+                }
+                // 这条连接多半绑着已经不在的旧地址，别等它自己超时
+                if node.take_network_changed() {
+                    break;
                 }
             }
 
@@ -333,6 +352,11 @@ struct Node {
     pending: HashMap<TxId, Pending>,
     disco_budget: TokenBucket,
     reflexive: Option<SocketAddr>,
+    /// 本机的局域网端点，每个节拍重新看一次。没有网络时是 None
+    local: Option<SocketAddr>,
+    /// 最近一次有网络时的本机地址。换网络往往中间断一下（None），所以跟它比，不跟上一拍比
+    last_local_ip: Option<IpAddr>,
+    network_changed: bool,
     reported: Option<Vec<SocketAddr>>,
     next_probe: Instant,
     next_control_ping: Instant,
@@ -355,6 +379,9 @@ impl Node {
             pending: HashMap::new(),
             disco_budget: TokenBucket::new(DISCO_RATE, now),
             reflexive: None,
+            local: None,
+            last_local_ip: None,
+            network_changed: false,
             reported: None,
             next_probe: now,
             next_control_ping: now + CONTROL_PING_INTERVAL,
@@ -507,6 +534,7 @@ impl Node {
             self.next_probe = now + PROBE_INTERVAL;
         }
 
+        self.check_network(now);
         let endpoints = self.endpoints();
         if self.reported.as_ref() != Some(&endpoints) {
             outgoing.push(ClientMessage::Endpoints(endpoints.clone()));
@@ -532,13 +560,36 @@ impl Node {
         outgoing
     }
 
+    /// 看看本机换没换网络：通往协调服务的那个本地地址变了，就是换了（Wi-Fi 换成蜂窝网、
+    /// 换了一个路由器……）。换了的话，探测到的公网地址也作废，马上重新探测；
+    /// 到协调服务的连接由 [`Session::run`] 重连
+    fn check_network(&mut self, now: Instant) {
+        self.local = local_endpoint(self.coord, self.local_port);
+        let Some(new) = self.local.map(|local| local.ip()) else {
+            return;
+        };
+        if let Some(old) = self.last_local_ip
+            && old != new
+        {
+            info!(%old, %new, "本机换了网络，重连协调服务、重新探测");
+            self.network_changed = true;
+            self.reflexive = None;
+            self.next_probe = now;
+        }
+        self.last_local_ip = Some(new);
+    }
+
+    fn take_network_changed(&mut self) -> bool {
+        std::mem::take(&mut self.network_changed)
+    }
+
     /// 本机的候选端点：局域网地址，加上探测到的公网地址
     fn endpoints(&self) -> Vec<SocketAddr> {
         let mut endpoints = Vec::new();
         if self.relay_only {
             return endpoints;
         }
-        if let Some(local) = local_endpoint(self.coord, self.local_port) {
+        if let Some(local) = self.local {
             endpoints.push(local);
         }
         if let Some(reflexive) = self.reflexive

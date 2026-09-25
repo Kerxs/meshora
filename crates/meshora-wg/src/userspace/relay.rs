@@ -19,7 +19,12 @@ use super::{Link, Shared};
 /// 连接和握手的时限。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// 保活间隔。中继 90 秒收不到任何帧就断开。
-const PING_INTERVAL: Duration = Duration::from_secs(30);
+const PING_INTERVAL: Duration = Duration::from_secs(10);
+/// 多久收不到中继的任何帧，就认为连接已经死了，重连。中继对每个保活都回 Pong。
+///
+/// 不能指望 TCP 自己发现：比如本机换了网络，连接绑着的旧地址已经不在了，写进去的东西
+/// 哪儿也到不了，却不报错 —— TCP 要十几分钟才放弃，这期间经中继的路全断
+const SILENCE: Duration = Duration::from_secs(25);
 /// 重连等待的上限。
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
@@ -89,6 +94,7 @@ async fn session(
     });
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await;
+    let mut last_heard = Instant::now();
 
     let keep_going = loop {
         tokio::select! {
@@ -101,20 +107,27 @@ async fn session(
                 }
                 None => break false,
             },
-            incoming = inbox.recv() => match incoming.as_deref().map(ServerFrame::decode) {
-                Some(Ok(ServerFrame::Recv { src, datagram })) => {
-                    let link = Link::Relay { relay, addr, peer: src };
-                    let actions = shared.engine().inbound(&datagram, link, Instant::now());
-                    shared.act(actions).await;
+            incoming = inbox.recv() => {
+                let Some(bytes) = incoming else { break true };
+                last_heard = Instant::now();
+                match ServerFrame::decode(&bytes) {
+                    Ok(ServerFrame::Recv { src, datagram }) => {
+                        let link = Link::Relay { relay, addr, peer: src };
+                        let actions = shared.engine().inbound(&datagram, link, Instant::now());
+                        shared.act(actions).await;
+                    }
+                    Ok(ServerFrame::Pong) => {}
+                    Err(err) => {
+                        debug!(%relay, %err, "中继发来的帧解不开，断开");
+                        break true;
+                    }
                 }
-                Some(Ok(ServerFrame::Pong)) => {}
-                Some(Err(err)) => {
-                    debug!(%relay, %err, "中继发来的帧解不开，断开");
+            }
+            _ = ping.tick() => {
+                if last_heard.elapsed() > SILENCE {
+                    info!(%relay, silence = ?SILENCE, "中继太久没有回音，重连");
                     break true;
                 }
-                None => break true,
-            },
-            _ = ping.tick() => {
                 if writer.send(&ClientFrame::Ping.encode()).await.is_err() {
                     break true;
                 }
