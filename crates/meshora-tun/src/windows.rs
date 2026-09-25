@@ -1,6 +1,6 @@
 //! Windows：wintun。
 //!
-//! **还没在 Windows 上跑过。** 这一版只保证编译通过，照着 wintun crate 的接口写成；
+//! 在 CI 的 Windows 虚拟机上实测过：两个方向都能收发报文，meshorad 能经它和别的节点通信。
 //! 地址和 MTU 由 wintun crate 调 netsh 设置。
 
 use std::io;

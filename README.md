@@ -19,10 +19,11 @@
 - **`crates/`** —— Rust 代码：节点守护进程 `meshorad`、协调服务 `meshora-coord`（可顺带跑中继），
   以及它们用到的数据面（基于 boringtun）、控制面、虚拟网卡、线协议。
   **在 Linux 上，两台机器之间能经加密隧道 ping 通**：同一网段直连、两边各在一个 NAT 后面打洞直连、
-  打不通时经中继，都验证过（NAT 是用 Linux 模拟的）。
+  打不通时经中继，都验证过（NAT 是用 Linux 模拟的）。**Windows 上**，守护进程和 wintun 虚拟网卡在
+  CI 的 Windows 虚拟机里实测过：和同一台机器上的另一个节点经加密隧道收发报文，直连和经中继都通。
 - **仓库元文件** —— 许可证、贡献指南、安全策略。
 
-还差的：**没在 Windows 上跑过**（M1 的目标平台）；**没在真实网络里测过打洞**（家用路由器、运营商的 NAT）；
+还差的：**没在两台真的 Windows 机器之间试过**（M1 的目标）；**没在真实网络里测过打洞**（家用路由器、运营商的 NAT）；
 **没经过任何安全审查**。
 [路线图](https://kerxs.github.io/meshora/guide/roadmap)里每一项的状态都是真实的。
 
@@ -119,7 +120,7 @@ cargo test --workspace
 
 CI 在 Linux 和 Windows 上都跑测试，见 [`.github/workflows/rust.yml`](.github/workflows/rust.yml)。
 
-## 在 Linux 上试一试
+## 自己试一试
 
 > **还没经过任何安全审查，别拿它保护真实的流量。** 这一节是给想亲手验证设计的人看的。
 
@@ -159,6 +160,17 @@ meshora-coord --key coord.key --listen 0.0.0.0:7443 \
 ```bash
 sudo meshorad up --key node.key --coord <服务器地址>:7443 --coord-key <协调服务的公钥>
 ```
+
+### Windows 上
+
+只在 CI 的 Windows 虚拟机里跑过，还没在真机上试过。节点的步骤和上面一样，另外：
+
+- 从 [wintun.net](https://www.wintun.net) 下载 wintun 0.14.1，把压缩包里对应 CPU 架构的 `wintun.dll`
+  （一般是 `bin/amd64/`）放到 `meshorad.exe` 旁边。meshorad 只从自己所在的目录加载它，不走系统搜索路径
+- 在"以管理员身份运行"的终端里启动 `meshorad up`（不用 `sudo`）
+- Windows 上不检查私钥文件的权限，自己把它放在别人读不到的地方
+- Windows 防火墙默认挡进来的 ping：从别的节点 ping 这台 Windows，要先在防火墙里放行 ICMPv4 回显请求。
+  从 Windows 往外 ping 不受影响
 
 ## 部署
 

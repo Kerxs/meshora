@@ -136,7 +136,7 @@ WireGuard 部分的判定和 boringtun 自己解析报文的规则一致。有�
 | `meshora-types` | 共享词汇：节点身份 `NodeKey` 和它的私钥、路径 `Path`、控制报文的魔数。不做网络 I/O | 已建 |
 | `meshora-dataplane` | 这份契约：`DataPlane` trait、它收发的类型、共享 socket 上的分流规则。不依赖 boringtun | 已建 |
 | `meshora-wg` | 数据面的实现：基于 boringtun 的、不做 I/O 的核心引擎，加上跑在 tokio 上的 UDP 驱动 | 已建 |
-| `meshora-tun` | 虚拟网卡：Windows 用 wintun，Linux 用 tun，macOS 用 utun。平台相关的 unsafe 代码集中在这里 | 已建：Linux 实测过，Windows 只编译过，macOS 还没有 |
+| `meshora-tun` | 虚拟网卡：Windows 用 wintun，Linux 用 tun，macOS 用 utun。平台相关的 unsafe 代码集中在这里 | 已建：Linux 实测过，Windows 在 CI 的虚拟机上实测过，macOS 还没有 |
 | `meshora-proto` | 节点、协调服务、中继之间的线协议：编解码、Noise 连接、节点间控制报文 | 已建 |
 | `meshora-control` | 节点侧控制面：注册与认证、发现、端点探测、穿透、链路探测、选路 | M1 |
 | `meshora-coord` | 协调服务（可自建）：注册、密钥分发、打洞对时 | M1 |

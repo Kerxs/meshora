@@ -7,7 +7,7 @@
 //! | 平台 | 实现 | 状态 |
 //! | --- | --- | --- |
 //! | Linux | `/dev/net/tun` + ioctl | 实测过 |
-//! | Windows | wintun | 只做过编译检查，还没在 Windows 上跑过 |
+//! | Windows | wintun | CI 的 Windows 虚拟机上实测过 |
 //!
 //! 平台相关的 unsafe 代码集中在这个 crate 里，每一处都写了 SAFETY。
 

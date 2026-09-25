@@ -67,10 +67,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-有两类测试需要 root，默认不跑：
+需要管理员权限（Linux 上是 root）的测试默认不跑：
 
-- 真正创建虚拟网卡的测试：`cargo test -p meshora-tun -- --ignored`
-- 用网络命名空间模拟几台机器和 NAT 路由器，真的 ping 一遍：先 `cargo build -p meshorad -p meshora-coord`，
+- 真的创建虚拟网卡，真的 meshorad 和测试进程里的另一个节点经隧道收发：
+  `cargo test -p meshora-tun -p meshorad -- --ignored`。Windows 上要先把 wintun.dll 放到
+  `target/debug/deps/` 和 `target/debug/`，CI 里怎么下载、核对见 `.github/workflows/rust.yml`
+- 只在 Linux 上：用网络命名空间模拟几台机器和 NAT 路由器，真的 ping 一遍。先 `cargo build -p meshorad -p meshora-coord`，
   再 `sudo scripts/e2e-netns.sh target/debug`（需要 iproute2、iptables、ping）
-
-Windows 上的安装说明（wintun.dll 放在哪）等在 Windows 上实测过再补。

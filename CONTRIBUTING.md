@@ -42,7 +42,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-需要 root 的测试默认不跑：`cargo test -p meshora-tun -- --ignored`（真的创建虚拟网卡），以及
+需要管理员权限（Linux 上是 root）的测试默认不跑：
+`cargo test -p meshora-tun -p meshorad -- --ignored`（真的创建虚拟网卡，真的 meshorad 经隧道收发；
+Windows 上要先把 wintun.dll 放到 `target/debug/deps/` 和 `target/debug/`），以及只在 Linux 上的
 `sudo scripts/e2e-netns.sh target/debug`（用网络命名空间模拟几台机器和 NAT 路由器，真的 ping 一遍；
 先编译好 meshorad 和 meshora-coord，需要 iproute2、iptables、ping）。
-Windows 上的安装说明等在 Windows 上实测过再补。
