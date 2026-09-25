@@ -1,0 +1,56 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Kerxs/meshora"
+# 还没有任何东西值得发到 crates.io，防止手滑
+publish = false
+
+# 依赖版本在这里统一管。每加一个都要说得出理由 —— 供应链是威胁模型里的一项。
+[workspace.dependencies]
+meshora-types = { path = "crates/meshora-types" }
+meshora-dataplane = { path = "crates/meshora-dataplane" }
+meshora-proto = { path = "crates/meshora-proto" }
+meshora-wg = { path = "crates/meshora-wg" }
+meshora-tun = { path = "crates/meshora-tun" }
+meshora-coord = { path = "crates/meshora-coord" }
+meshora-control = { path = "crates/meshora-control" }
+meshora-relay = { path = "crates/meshora-relay" }
+
+# 和 boringtun 用同一个版本，免得依赖树里出现两份
+base64 = "0.22"
+ipnet = "2.12"
+# WireGuard 协议本身。只用它的 noise 模块（不做 I/O 的状态机），不开 device feature ——
+# socket、虚拟网卡、选路都归 Meshora 自己管
+boringtun = { version = "0.7", default-features = false }
+# 必须和 boringtun 用同一个大版本：Tunn::new 收的就是这里的 StaticSecret / PublicKey
+x25519-dalek = { version = "2", features = ["static_secrets", "getrandom"] }
+# 私钥材料用完即清零。x25519-dalek、boringtun 本来就依赖它，这里只是直接用上
+zeroize = "1"
+# 分配 WireGuard 会话索引用的随机数。boringtun 本来就依赖同一个版本
+rand_core = { version = "0.6", features = ["getrandom"] }
+# 异步 I/O。数据面、控制面、协调服务、中继都跑在它上面。只开用得到的 feature
+tokio = { version = "1.53", default-features = false, features = ["rt", "net", "time", "sync", "macros"] }
+# 只用它的宏打日志，输出到哪由 meshorad 决定。boringtun 本来就依赖它
+tracing = "0.1"
+# Noise 协议框架：节点与协调服务、中继之间的 IK 握手，节点之间控制报文的 K 封装。
+# 只开 ChaChaPoly、BLAKE2s、Curve25519 —— 和 WireGuard 同一套原语，不要 AES、SHA2
+snow = { version = "0.10", default-features = false, features = ["std", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+# 命令行解析。没有任何依赖，功能刚好够用
+lexopt = "0.3"
+# 把 tracing 的日志打到标准错误。不开颜色、不开正则过滤，少拉依赖
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+# Linux 虚拟网卡的 ioctl。tokio、boringtun 本来就依赖它
+libc = "0.2"
+# Windows 的虚拟网卡驱动 wintun 的绑定。运行时要求 wintun.dll 在 meshorad.exe 旁边
+wintun = "0.5"
+
+[workspace.lints.rust]
+# M1 接 wintun 时免不了 FFI：届时在具体模块上 allow，并写清 SAFETY
+unsafe_code = "deny"
+# 契约本身就是文档。CI 开着 -D warnings，所以这条等于强制
+missing_docs = "warn"

@@ -1,0 +1,15 @@
+[package]
+name = "meshora-dataplane"
+description = "控制面与数据面之间的接口契约：DataPlane trait、它收发的类型、共享 socket 上的分流规则"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+meshora-types.workspace = true
+ipnet.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+[package]
+name = "meshorad"
+description = "Meshora 节点守护进程：把控制面、数据面、虚拟网卡接起来"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+meshora-types.workspace = true
+meshora-dataplane.workspace = true
+meshora-control.workspace = true
+meshora-wg.workspace = true
+meshora-tun.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+lexopt.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+# 真机测试在测试进程里跑协调服务、中继和另一个节点
+meshora-coord.workspace = true
+meshora-relay.workspace = true
+meshora-proto.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+# 固定工具链版本。
+#
+# CI 对 clippy 开着 -D warnings：跟着 stable 走的话，新版本加的 lint 会在
+# 没人改代码的时候把 CI 弄红。升级工具链是一次单独的提交。
+#
+# 本机装了 rustup 就不用管这个文件 —— 第一次在仓库里跑 cargo 时会自动装上。
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

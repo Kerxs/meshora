@@ -91,7 +91,7 @@ Meshora 和 Tailscale 架构上高度相似，这没必要遮掩 —— 同样�
 <HomeSection title="常见问题" more="/guide/faq" moreText="更多问题">
 
 **现在能用吗？**
-不能。没有可运行的网络引擎，也没有可下载的二进制。现在这个仓库里只有官网和设计文档。
+还不能用于实际用途。M1 正在做：在 Linux 上从源码编译，两台机器之间能经加密隧道 ping 通；但没在两台真的 Windows 机器之间试过，没在真实网络里测过打洞，也没经过安全审查。
 
 **中继能看到我的数据吗？**
 看不到内容 —— 转发的是已经用 WireGuard 加密的报文，改了也会在对端被丢弃。
@@ -107,11 +107,11 @@ Meshora 和 Tailscale 架构上高度相似，这没必要遮掩 —— 同样�
 
 <HomeSection eyebrow="Pre-alpha" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
 
-**项目处于设计阶段，还没有可运行的网络引擎，也没有可下载的二进制。**
+**M1 开发中。有了能运行的程序，但没有可下载的二进制，也还不适合实际使用。**
 
-现在这个仓库里只有两样东西：这个站点，和它承载的设计文档。核心引擎计划用 Rust 实现，
-数据面采用 WireGuard 协议（[boringtun](https://github.com/cloudflare/boringtun) 用户态实现），
-控制面自研，首个目标平台是 Windows。
+核心引擎用 Rust 写，数据面采用 WireGuard 协议（[boringtun](https://github.com/cloudflare/boringtun) 用户态实现），
+控制面自研，首个目标平台是 Windows。在 Linux 上，两台机器之间已经能经加密隧道 ping 通 ——
+能直连时走直连，在 NAT 后面先打洞，打不通时经中继。还没有的：两台真的 Windows 机器之间的实测、真实网络里的打洞验证、安全审查。
 
 先做官网是因为这个阶段最需要的是把设计讲清楚并收到反馈 —— 方向错了，代码写得再多也是白写。
 

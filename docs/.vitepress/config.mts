@@ -95,7 +95,9 @@ export default defineConfig({
           items: [
             { text: '架构：控制面与数据面', link: '/guide/architecture' },
             { text: '自动网络：建连流水线', link: '/guide/connection-flow' },
-            { text: '六大能力', link: '/guide/capabilities' }
+            { text: '六大能力', link: '/guide/capabilities' },
+            { text: '接口契约', link: '/guide/interfaces' },
+            { text: '威胁模型', link: '/guide/threat-model' }
           ]
         },
         {
