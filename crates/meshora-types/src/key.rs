@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn same_text_form_as_wg() {
-        // wg-quick(8) 手册里的示例公钥：解析再格式化，必须原样回来
+        // wg(8) 手册里的示例公钥：解析再格式化，必须原样回来
         let text = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
         let key: NodeKey = text.parse().unwrap();
         assert_eq!(key.to_string(), text);

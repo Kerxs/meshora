@@ -2,8 +2,10 @@
 //!
 //! # 现在有什么
 //!
-//! M0 只有契约：[`DataPlane`] trait、它收发的类型，以及共享 socket 上的分流规则
-//! [`classify`]。**还没有任何实现**，boringtun 数据面是 M1 的事。
+//! - **契约**（M0）：[`DataPlane`] trait、它收发的类型，以及共享 socket 上的分流规则 [`classify`]
+//! - **核心**（M1）：[`engine::Engine`]，基于 boringtun 的、不做 I/O 的状态机。
+//!   契约的不变量在这一层落地，所以不需要真的网络就能完整测试
+//! - **还没有**：把核心接到真实 socket 和虚拟网卡上的驱动，M1 正在做
 //!
 //! # 边界
 //!
@@ -31,6 +33,7 @@
 
 mod config;
 mod datagram;
+pub mod engine;
 
 use std::error::Error;
 use std::fmt;

@@ -62,9 +62,9 @@ pub enum WgMessage {
 /// WireGuard 的判定规则和 boringtun 的 `Tunn::parse_incoming_packet` 一致：
 /// 前 4 字节按小端 u32 读出来是消息类型（也就是说 3 个保留字节必须为零），再按类型核对长度。
 ///
-/// 数据报文**只检查下限，不检查长度是不是 16 的倍数**。WireGuard 会把明文填充到 16 的倍数，
-/// 但填充不会超过 MTU —— 贴着 MTU 的报文填不满，长度就不是 16 的倍数。加上这条检查，
-/// 被当成垃圾丢掉的恰好是最大的那些报文。
+/// 数据报文**只检查下限，不检查长度是不是 16 的倍数**。WireGuard 规范要求把明文填充到
+/// 16 的倍数，但填充不会超过 MTU —— 贴着 MTU 的报文填不满；boringtun 更是干脆不填充。
+/// 加上这条检查，被当成垃圾丢掉的会是大量正常报文。
 pub fn classify(datagram: &[u8]) -> DatagramKind {
     let Some(&header) = datagram.first_chunk::<4>() else {
         return DatagramKind::Unknown;

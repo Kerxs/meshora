@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
+x25519-dalek.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

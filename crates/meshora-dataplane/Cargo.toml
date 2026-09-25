@@ -10,6 +10,9 @@ publish.workspace = true
 [dependencies]
 meshora-types.workspace = true
 ipnet.workspace = true
+boringtun.workspace = true
+x25519-dalek.workspace = true
+rand_core.workspace = true
 
 [lints]
 workspace = true
