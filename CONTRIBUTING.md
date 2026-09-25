@@ -42,5 +42,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-真正创建虚拟网卡的测试需要 root（Linux 上是 `CAP_NET_ADMIN`），默认跳过：`cargo test -p meshora-tun -- --ignored`。
-Windows 上的安装说明等 [M1](https://kerxs.github.io/meshora/guide/roadmap) 能跑起来再补。
+需要 root 的测试默认不跑：`cargo test -p meshora-tun -- --ignored`（真的创建虚拟网卡），以及
+`sudo scripts/e2e-netns.sh target/debug`（两个网络命名空间里真的 ping 一遍，先编译好 meshorad 和 meshora-coord）。
+Windows 上的安装说明等在 Windows 上实测过再补。

@@ -11,17 +11,17 @@
 
 ## 先说清楚仓库里现在有什么
 
-**还没有能运行的程序，也没有可下载的二进制。** 项目正在做 M1。
+**有了能运行的程序，但没有可下载的二进制，也还不适合实际使用。** 项目正在做 M1。
 
 这个仓库目前有三样东西：
 
 - **`docs/`** —— 官网和设计文档的源码（VitePress）。
-- **`crates/`** —— Rust 代码：控制面与数据面之间的[接口契约](https://kerxs.github.io/meshora/guide/interfaces)，
-  以及 M1 正在写的部分 —— 基于 boringtun 的数据面、Linux 和 Windows 的虚拟网卡。
-  它们有测试覆盖，**但还没有组装成能用的程序**。
+- **`crates/`** —— Rust 代码：节点守护进程 `meshorad`、协调服务 `meshora-coord`（可顺带跑中继），
+  以及它们用到的数据面（基于 boringtun）、控制面、虚拟网卡、线协议。
+  **在 Linux 上，两台机器之间能经加密隧道 ping 通**，直连和经中继两种路径都验证过。
 - **仓库元文件** —— 许可证、贡献指南、安全策略。
 
-控制面、中继、守护进程**一行都还没写**；Windows 的虚拟网卡只做过编译检查，没在 Windows 上跑过。
+还差的：**没在 Windows 上跑过**（M1 的目标平台）；**没在真实的 NAT 后面测过打洞**；**没经过任何安全审查**。
 [路线图](https://kerxs.github.io/meshora/guide/roadmap)里每一项的状态都是真实的。
 
 先做官网是因为这个阶段最需要的是把设计讲清楚并收到反馈 —— 方向错了，代码写得再多也是白写。
@@ -116,6 +116,47 @@ cargo test --workspace
 ```
 
 CI 在 Linux 和 Windows 上都跑测试，见 [`.github/workflows/rust.yml`](.github/workflows/rust.yml)。
+
+## 在 Linux 上试一试
+
+> **还没经过任何安全审查，别拿它保护真实的流量。** 这一节是给想亲手验证设计的人看的。
+
+最省事的是跑端到端脚本：它在一台机器上用两个网络命名空间模拟两台机器，把整个流程走一遍
+（需要 root、iproute2、ping）：
+
+```bash
+cargo build -p meshorad -p meshora-coord
+sudo scripts/e2e-netns.sh target/debug
+```
+
+真的用两台机器的话，先在每台机器上生成密钥，把公钥记下来：
+
+```bash
+meshorad genkey > node.key && chmod 600 node.key
+meshorad pubkey < node.key
+```
+
+再找一台两边都连得上的服务器跑协调服务（顺带跑一个中继）。它也要一把密钥，公钥要告诉节点：
+
+```bash
+meshorad genkey > coord.key && chmod 600 coord.key
+meshora-coord pubkey < coord.key
+```
+
+把节点的公钥写进名单，启动：
+
+```bash
+meshora-coord --key coord.key --listen 0.0.0.0:7443 \
+    --probe 0.0.0.0:7443 --probe-public <服务器地址>:7443 \
+    --relay-listen 0.0.0.0:7444 --relay-public <服务器地址>:7444 \
+    --node <节点A的公钥> --node <节点B的公钥>
+```
+
+每台机器上以 root 启动节点。overlay 地址按名单顺序分配：A 是 `100.64.0.1`，B 是 `100.64.0.2`：
+
+```bash
+sudo meshorad up --key node.key --coord <服务器地址>:7443 --coord-key <协调服务的公钥>
+```
 
 ## 部署
 

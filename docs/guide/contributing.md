@@ -57,7 +57,7 @@ npm run docs:build
 
 ## 关于代码
 
-Rust 代码在仓库的 `crates/` 下：M0 的[接口契约](/guide/interfaces)，以及 M1 正在写的数据面和虚拟网卡。
+Rust 代码在仓库的 `crates/` 下：节点守护进程、协调服务、中继，以及它们用到的数据面、控制面、虚拟网卡、线协议。
 需要 [rustup](https://rustup.rs)，工具链版本固定在 `rust-toolchain.toml` 里，第一次跑 cargo 时会自动装上。
 提交前跑一遍下面三条，CI 也会跑它们（另外还检查文档）：
 
@@ -67,6 +67,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-真正创建虚拟网卡的测试需要 root（Linux 上是 `CAP_NET_ADMIN`），默认跳过，要跑的话：
-`cargo test -p meshora-tun -- --ignored`。Windows 上的安装说明（wintun.dll 放在哪）等
-[M1](/guide/roadmap#m1-打通主干) 能跑起来再补。
+有两类测试需要 root，默认不跑：
+
+- 真正创建虚拟网卡的测试：`cargo test -p meshora-tun -- --ignored`
+- 两个网络命名空间里真的 ping 一遍：先 `cargo build -p meshorad -p meshora-coord`，
+  再 `sudo scripts/e2e-netns.sh target/debug`（需要 iproute2 和 ping）
+
+Windows 上的安装说明（wintun.dll 放在哪）等在 Windows 上实测过再补。
