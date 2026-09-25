@@ -26,11 +26,53 @@ use meshora_dataplane::{
 /// 再在 `Tunn::decapsulate` 里），所以实际触发 cookie 的门槛是每秒 50 个。
 const HANDSHAKE_RATE_LIMIT: u64 = 100;
 
+/// 每秒最多交出多少条控制报文。
+///
+/// 它们还没经过任何认证，谁都能往我们的端口发，而交出去的事件可能进的是无界的通道。
+/// 控制面那边另有更紧的限速（先限速再做密码学运算），这里只保证它们不会在队列里无限堆积 ——
+/// 比如控制面正卡在给协调服务写消息的时候。契约允许丢控制报文
+const CONTROL_DATAGRAM_RATE: u32 = 1000;
+
 /// 暂存缓冲区：装得下最大的 UDP 报文，再留出 WireGuard 的 32 字节开销。
 const BUF_LEN: usize = u16::MAX as usize + 32;
 
 /// boringtun 把 peer 编号左移 8 位当会话索引，所以编号只有 24 位可用。
 const INDEX_MASK: u32 = 0x00FF_FFFF;
+
+/// 每秒补满的令牌桶。
+struct Budget {
+    capacity: u32,
+    tokens: u32,
+    /// 上次补满的时刻；还没用过就是 None
+    refilled: Option<Instant>,
+}
+
+impl Budget {
+    fn new(capacity: u32) -> Self {
+        Self {
+            capacity,
+            tokens: capacity,
+            refilled: None,
+        }
+    }
+
+    fn take(&mut self, now: Instant) -> bool {
+        let refill = self.refilled.is_none_or(|refilled| {
+            now.saturating_duration_since(refilled) >= Duration::from_secs(1)
+        });
+        if refill {
+            self.tokens = self.capacity;
+            self.refilled = Some(now);
+        }
+        match self.tokens.checked_sub(1) {
+            Some(left) => {
+                self.tokens = left;
+                true
+            }
+            None => false,
+        }
+    }
+}
 
 /// 报文实际经过的链路：[`Path`] 再加上"经中继时，对端是谁"。
 ///
@@ -128,6 +170,7 @@ pub struct Engine {
     public: PublicKey,
     local: NodeKey,
     rate_limiter: Arc<RateLimiter>,
+    control_budget: Budget,
     config: PeerSet,
     peers: HashMap<NodeKey, Peer>,
     by_index: HashMap<u32, NodeKey>,
@@ -141,6 +184,7 @@ impl Engine {
         let public = PublicKey::from(&secret);
         Self {
             rate_limiter: Arc::new(RateLimiter::new(&public, HANDSHAKE_RATE_LIMIT)),
+            control_budget: Budget::new(CONTROL_DATAGRAM_RATE),
             local: NodeKey::from_bytes(public.to_bytes()),
             secret,
             public,
@@ -259,7 +303,9 @@ impl Engine {
             }
             // 经中继来的控制报文走什么路还没定（见接口契约的"还没定的"），先丢掉
             DatagramKind::Control => {
-                if let Link::Direct(from) = link {
+                if let Link::Direct(from) = link
+                    && self.control_budget.take(now)
+                {
                     actions.push(Action::Event(Event::ControlDatagram {
                         from,
                         datagram: datagram.to_vec(),
@@ -811,6 +857,32 @@ mod tests {
         assert_eq!(
             actions,
             [Action::Event(Event::ControlDatagram { from, datagram })]
+        );
+    }
+
+    #[test]
+    fn control_datagrams_are_capped_per_second() {
+        let mut a = node(1);
+        let mut datagram = CONTROL_MAGIC.to_vec();
+        datagram.extend_from_slice(b"flood");
+        let from = SocketAddr::from(([192, 0, 2, 9], 1234));
+        let now = Instant::now();
+        let mut handed_over = || {
+            (0..CONTROL_DATAGRAM_RATE + 10)
+                .filter(|_| {
+                    !a.engine
+                        .inbound(&datagram, Link::Direct(from), now)
+                        .is_empty()
+                })
+                .count()
+        };
+        assert_eq!(handed_over(), CONTROL_DATAGRAM_RATE as usize);
+        // 一秒之后又能交出去
+        let later = now + Duration::from_secs(1);
+        assert!(
+            !a.engine
+                .inbound(&datagram, Link::Direct(from), later)
+                .is_empty()
         );
     }
 

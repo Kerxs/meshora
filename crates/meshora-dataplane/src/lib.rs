@@ -25,7 +25,8 @@
 //! 3. **发送路径只能由 [`DataPlane::set_path`] 改变。** 数据面不做 WireGuard 式的漫游。
 //! 4. **控制报文和 WireGuard 共用同一个 UDP socket。** 打洞凿出来的 NAT 映射必须就是
 //!    WireGuard 用的那个。
-//! 5. **[`Event::ControlDatagram`] 里的数据未经认证。** 数据面只按魔数分流。
+//! 5. **[`Event::ControlDatagram`] 里的数据未经认证。** 数据面只按魔数分流，
+//!    并且可以在交出之前就丢掉一部分（比如限速），控制面不能指望每一条都收得到。
 //!
 //! 每一条的理由写在对应方法的文档里，设计文档里也有一份：
 //! <https://kerxs.github.io/meshora/guide/interfaces>
