@@ -16,7 +16,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
-# 不做缓存：依赖只有两个，从头编译也就几秒，不值得为它多引一个 action
+# 不做缓存：从头编译整轮也就一分钟左右，不值得为它多引一个 action
 
 jobs:
   lint:
@@ -46,3 +46,11 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install --no-self-update
       - run: cargo test --workspace --locked
+      # wintun 那部分代码只在 Windows 上才编译得到，lint 也只能在这里做
+      - if: runner.os == 'Windows'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # 真正创建虚拟网卡的测试需要 CAP_NET_ADMIN。编译仍用普通用户，只有运行测试时经 sudo
+      - if: runner.os == 'Linux'
+        run: cargo test -p meshora-tun --locked -- --ignored
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo

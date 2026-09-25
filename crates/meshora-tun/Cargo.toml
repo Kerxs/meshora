@@ -1,0 +1,21 @@
+[package]
+name = "meshora-tun"
+description = "Meshora 的虚拟网卡：Linux 用 /dev/net/tun，Windows 用 wintun。平台相关的 unsafe 集中在这里"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+wintun.workspace = true
+
+[lints]
+workspace = true
