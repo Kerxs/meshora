@@ -1,0 +1,18 @@
+[package]
+name = "meshora-coord"
+description = "Meshora 协调服务：节点注册、密钥分发、端点探测、打洞对时。可以自建"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+meshora-types.workspace = true
+meshora-proto.workspace = true
+ipnet.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

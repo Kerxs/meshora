@@ -17,6 +17,8 @@ meshora-dataplane = { path = "crates/meshora-dataplane" }
 meshora-proto = { path = "crates/meshora-proto" }
 meshora-wg = { path = "crates/meshora-wg" }
 meshora-tun = { path = "crates/meshora-tun" }
+meshora-coord = { path = "crates/meshora-coord" }
+meshora-control = { path = "crates/meshora-control" }
 
 # 和 boringtun 用同一个版本，免得依赖树里出现两份
 base64 = "0.22"

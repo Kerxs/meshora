@@ -1,0 +1,26 @@
+[package]
+name = "meshora-control"
+description = "Meshora 节点侧控制面：注册、发现、端点探测、打洞、链路探测、选路"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+meshora-types.workspace = true
+meshora-dataplane.workspace = true
+meshora-proto.workspace = true
+ipnet.workspace = true
+rand_core.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+# 只在测试里用：拿真的协调服务和数据面跑端到端。不影响运行时的依赖关系 ——
+# 控制面本身仍然只依赖契约，不依赖数据面的实现
+[dev-dependencies]
+meshora-coord.workspace = true
+meshora-wg.workspace = true
+
+[lints]
+workspace = true
