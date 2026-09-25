@@ -21,10 +21,14 @@ use meshora_proto::relay::{ClientFrame, ServerFrame};
 use meshora_types::{NodeKey, NodeSecret};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// 握手和第一帧的时限。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 第一帧（Hello，一个字节）的长度上限：还没说上一句话的连接，不按它自称的长度分配内存。
+const FIRST_MESSAGE_MAX: usize = 64;
+/// 接受连接出错（比如文件描述符用完）之后，等多久再接。
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// 多久没收到节点的任何帧就断开。节点每 30 秒发一次保活。
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// 发往一个节点的帧队列。满了就丢，和 UDP 一样。
@@ -66,8 +70,17 @@ pub async fn serve(config: Config, listener: TcpListener) -> io::Result<()> {
     });
     info!(key = %shared.secret.public_key(), "中继启动");
     loop {
-        let (tcp, from) = listener.accept().await?;
-        tokio::spawn(handle(Arc::clone(&shared), tcp, from));
+        match listener.accept().await {
+            Ok((tcp, from)) => {
+                tokio::spawn(handle(Arc::clone(&shared), tcp, from));
+            }
+            // 这类错误是暂时的（文件描述符用完之类），不能因此退出 ——
+            // 否则谁都能靠开一大堆连接把中继打挂。稍等再接，免得空转
+            Err(err) => {
+                warn!(%err, "接受连接失败");
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
+            }
+        }
     }
 }
 
@@ -93,10 +106,12 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     let (mut reader, mut writer) = stream.into_split();
 
     // R1：第一帧到了才登记，被重放的握手包走不到这一步
-    let hello = match tokio::time::timeout(HANDSHAKE_TIMEOUT, reader.recv()).await {
-        Ok(Ok(bytes)) => ClientFrame::decode(&bytes),
-        _ => return,
-    };
+    let hello =
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, reader.recv_at_most(FIRST_MESSAGE_MAX)).await
+        {
+            Ok(Ok(bytes)) => ClientFrame::decode(&bytes),
+            _ => return,
+        };
     if hello != Ok(ClientFrame::Hello) {
         return;
     }

@@ -30,6 +30,11 @@ pub const VERSION: u8 = 1;
 /// Noise 消息的上限。
 const MAX_FRAME: usize = u16::MAX as usize;
 const TAG_LEN: usize = 16;
+/// 握手消息的长度上限。IK 的两条握手消息都不到 100 字节（这里的载荷是空的），留些余量。
+///
+/// 握手完成之前对方是谁都不知道，不能按它自称的长度分配内存、干等它发完：
+/// 否则发 8 个字节（前导加一个 65535 的长度）就能让服务端分配 64 KiB 并等上好几秒
+const HANDSHAKE_FRAME_MAX: usize = 256;
 /// 一条消息的明文上限。
 pub const MAX_MESSAGE: usize = MAX_FRAME - TAG_LEN;
 
@@ -91,11 +96,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> NoiseStream<S> {
             .and_then(|b| b.build_initiator())?;
 
         stream.write_all(&prelude).await?;
-        let mut buf = vec![0u8; MAX_FRAME];
+        let mut buf = [0u8; HANDSHAKE_FRAME_MAX];
         let len = handshake.write_message(&[], &mut buf)?;
         write_frame(&mut stream, &buf[..len]).await?;
 
-        let frame = read_frame(&mut stream).await?;
+        let frame = read_frame(&mut stream, HANDSHAKE_FRAME_MAX).await?;
         handshake.read_message(&frame, &mut buf)?;
 
         Ok(Self {
@@ -123,8 +128,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> NoiseStream<S> {
         }
 
         let mut handshake = builder(&expected, local).build_responder()?;
-        let frame = read_frame(&mut stream).await?;
-        let mut buf = vec![0u8; MAX_FRAME];
+        let frame = read_frame(&mut stream, HANDSHAKE_FRAME_MAX).await?;
+        let mut buf = [0u8; HANDSHAKE_FRAME_MAX];
         handshake.read_message(&frame, &mut buf)?;
         let remote = handshake
             .get_remote_static()
@@ -162,7 +167,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> NoiseStream<S> {
 
     /// 收一条消息。对方正常关闭连接时返回 [`NoiseError::Closed`]。
     pub async fn recv(&mut self) -> Result<Vec<u8>, NoiseError> {
-        recv(&self.transport, &mut self.recv_nonce, &mut self.stream).await
+        recv(
+            &self.transport,
+            &mut self.recv_nonce,
+            &mut self.stream,
+            MAX_FRAME,
+        )
+        .await
     }
 
     /// 拆成读、写两半，可以在不同的任务里同时收发。
@@ -193,7 +204,27 @@ pub struct NoiseReader<S> {
 impl<S: AsyncRead + AsyncWrite> NoiseReader<S> {
     /// 收一条消息。
     pub async fn recv(&mut self) -> Result<Vec<u8>, NoiseError> {
-        recv(&self.transport, &mut self.nonce, &mut self.stream).await
+        recv(
+            &self.transport,
+            &mut self.nonce,
+            &mut self.stream,
+            MAX_FRAME,
+        )
+        .await
+    }
+
+    /// 收一条不超过 `max` 字节的消息。帧头里的长度一超过就报错，不去读、也不分配。
+    ///
+    /// 给还没确认身份的连接用：握手完成只说明对方持有某把私钥，谁都能现生成一把。
+    pub async fn recv_at_most(&mut self, max: usize) -> Result<Vec<u8>, NoiseError> {
+        let frame_max = max.saturating_add(TAG_LEN).min(MAX_FRAME);
+        recv(
+            &self.transport,
+            &mut self.nonce,
+            &mut self.stream,
+            frame_max,
+        )
+        .await
     }
 }
 
@@ -230,8 +261,9 @@ async fn recv(
     transport: &StatelessTransportState,
     nonce: &mut u64,
     stream: &mut (impl AsyncRead + Unpin),
+    frame_max: usize,
 ) -> Result<Vec<u8>, NoiseError> {
-    let frame = read_frame(stream).await?;
+    let frame = read_frame(stream, frame_max).await?;
     let mut buf = vec![0u8; frame.len()];
     let len = transport.read_message(*nonce, &frame, &mut buf)?;
     *nonce += 1;
@@ -251,14 +283,22 @@ async fn write_frame(
     Ok(())
 }
 
-async fn read_frame(stream: &mut (impl AsyncRead + Unpin)) -> Result<Vec<u8>, NoiseError> {
+/// 读一帧。长度超过 `max` 的直接报错：先看长度，再分配
+async fn read_frame(
+    stream: &mut (impl AsyncRead + Unpin),
+    max: usize,
+) -> Result<Vec<u8>, NoiseError> {
     let mut len = [0u8; 2];
     match stream.read_exact(&mut len).await {
         Ok(_) => {}
         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Err(NoiseError::Closed),
         Err(err) => return Err(err.into()),
     }
-    let mut frame = vec![0u8; usize::from(u16::from_be_bytes(len))];
+    let len = usize::from(u16::from_be_bytes(len));
+    if len > max {
+        return Err(NoiseError::TooLarge(len));
+    }
+    let mut frame = vec![0u8; len];
     stream.read_exact(&mut frame).await?;
     Ok(frame)
 }
@@ -436,7 +476,7 @@ mod tests {
         a.write_all(&prelude).await.unwrap();
         let len = handshake.write_message(&[], &mut buf).unwrap();
         write_frame(&mut a, &buf[..len]).await.unwrap();
-        let frame = read_frame(&mut a).await.unwrap();
+        let frame = read_frame(&mut a, MAX_FRAME).await.unwrap();
         handshake.read_message(&frame, &mut buf).unwrap();
         let transport = handshake.into_stateless_transport_mode().unwrap();
 
@@ -450,6 +490,38 @@ mod tests {
         let (first, second) = server_task.await.unwrap();
         assert_eq!(first, b"ok");
         assert!(matches!(second, Err(NoiseError::Noise(_))));
+    }
+
+    /// 握手阶段自称的长度超过上限：不等它发完、不分配，马上报错
+    #[tokio::test]
+    async fn oversized_handshake_frame_is_refused_without_waiting() {
+        let server = NodeSecret::generate();
+        let (mut a, b) = duplex(1 << 16);
+        a.write_all(&Channel::Control.prelude()).await.unwrap();
+        a.write_all(&u16::MAX.to_be_bytes()).await.unwrap();
+        let accepted = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            NoiseStream::accept(b, Channel::Control, &server),
+        )
+        .await
+        .expect("应该马上报错，而不是等 65535 个字节");
+        assert!(matches!(accepted, Err(NoiseError::TooLarge(65535))));
+    }
+
+    #[tokio::test]
+    async fn recv_at_most_refuses_longer_messages() {
+        let client = NodeSecret::generate();
+        let server = NodeSecret::generate();
+        let (c, s) = pair(Channel::Control, Channel::Control, &client, &server).await;
+        let (_c_reader, mut c_writer) = c.unwrap().into_split();
+        let (mut s_reader, _s_writer) = s.unwrap().into_split();
+        c_writer.send(b"hello").await.unwrap();
+        assert_eq!(s_reader.recv_at_most(5).await.unwrap(), b"hello");
+        c_writer.send(&[0u8; 100]).await.unwrap();
+        assert!(matches!(
+            s_reader.recv_at_most(64).await,
+            Err(NoiseError::TooLarge(len)) if len == 100 + TAG_LEN
+        ));
     }
 
     #[tokio::test]

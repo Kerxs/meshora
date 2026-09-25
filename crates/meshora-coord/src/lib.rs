@@ -30,6 +30,11 @@ use tracing::{debug, info, warn};
 
 /// 握手和第一条消息的时限：慢吞吞的连接不许一直占着。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 第一条消息（Hello，一个字节）的长度上限。这时还不知道对方在不在名单里 ——
+/// 谁都能现生成一把密钥完成握手 —— 不能按它自称的长度分配内存
+const FIRST_MESSAGE_MAX: usize = 64;
+/// 接受连接出错（比如文件描述符用完）之后，等多久再接。
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// 多久没收到节点的任何消息就断开。节点每 30 秒发一次保活。
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// 一个节点最多上报多少个端点。端点会被别的节点拿去发探测报文，不设上限就成了放大器。
@@ -182,8 +187,17 @@ pub async fn serve(
     }
 
     loop {
-        let (tcp, from) = listener.accept().await?;
-        tokio::spawn(handle(Arc::clone(&shared), tcp, from));
+        match listener.accept().await {
+            Ok((tcp, from)) => {
+                tokio::spawn(handle(Arc::clone(&shared), tcp, from));
+            }
+            // 这类错误是暂时的（文件描述符用完之类），不能因此退出 ——
+            // 否则谁都能靠开一大堆连接把协调服务打挂。稍等再接，免得空转
+            Err(err) => {
+                warn!(%err, "接受连接失败");
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
+            }
+        }
     }
 }
 
@@ -209,13 +223,15 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     let (mut reader, mut writer) = stream.into_split();
 
     // R1：第一条加密消息到了，才说明对面真在线，而不是一个被重放的握手包
-    let hello = match tokio::time::timeout(HANDSHAKE_TIMEOUT, reader.recv()).await {
-        Ok(Ok(bytes)) => ClientMessage::decode(&bytes),
-        _ => {
-            debug!(%from, node = %key, "握手后没等到第一条消息");
-            return;
-        }
-    };
+    let hello =
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, reader.recv_at_most(FIRST_MESSAGE_MAX)).await
+        {
+            Ok(Ok(bytes)) => ClientMessage::decode(&bytes),
+            _ => {
+                debug!(%from, node = %key, "握手后没等到第一条消息");
+                return;
+            }
+        };
     if hello != Ok(ClientMessage::Hello) {
         debug!(%from, node = %key, "握手后第一条不是 Hello");
         return;
