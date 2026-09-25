@@ -25,7 +25,9 @@
 #   2. 同一网段，--relay-only：全程经中继
 #   3. 两边都是普通 NAT（外部端口不随目标变）：打洞成功，走直连。
 #      然后掐断两个 NAT 之间的 UDP：回落中继；恢复之后切回直连
-#   4. B 在对称 NAT 后面（每个目标换一个外部端口）：打洞打不通，经中继照样通
+#   4. 同样的两边，A 的路由器换了公网地址（运营商重新分配）：A 的连接全断，
+#      重连、重新探测到新的公网端点、重新打洞，回到直连
+#   5. B 在对称 NAT 后面（每个目标换一个外部端口）：打洞打不通，经中继照样通
 #
 # 需要 root（建命名空间和虚拟网卡）、iproute2、iptables、ping。先编译：
 #   cargo build -p meshorad -p meshora-coord
@@ -236,6 +238,22 @@ ping_both() {
   ip netns exec msh-e2e-b ping -c 3 -W 2 100.64.0.1 || fail "$SCENARIO：B → A 丢包"
 }
 
+# 等到某台机器最后选定的路径里出现某个地址
+wait_for_path_to() {
+  local side=$1 addr=$2 timeout=$3 started=$SECONDS path
+  while :; do
+    path=$(last_path_detail "$side")
+    case $path in
+      "Direct($addr:"*) break ;;
+    esac
+    if [ $((SECONDS - started)) -ge "$timeout" ]; then
+      fail "$SCENARIO：$timeout 秒内 $side 没走到直连 $addr，现在是 ${path:-无}"
+    fi
+    sleep 1
+  done
+  echo "用了约 $((SECONDS - started)) 秒，$side 直连到 $addr"
+}
+
 # 在 B 的 NAT 路由器上掐断（或恢复）两边公网地址之间的 UDP：直连断了，
 # 到协调服务和中继的连接不受影响
 direct_link() {
@@ -295,6 +313,25 @@ direct_link restore
 wait_for_path Direct 40
 ping_both
 assert_path Direct
+pass
+
+del_namespaces
+setup_nat cone
+
+begin "A 的路由器换了公网地址：重连、重新探测、重新打洞，回到直连"
+start_nodes
+wait_for_path Direct 30
+ping_both
+# 地址一删，MASQUERADE 按旧地址做的映射（conntrack）随之清掉：A 经这个路由器的
+# 连接全断了，就像运营商重新分配地址
+echo "把 A 的路由器的公网地址从 192.0.2.2 换成 192.0.2.12"
+ip -n msh-e2e-nat-a addr del 192.0.2.2/24 dev wan
+ip -n msh-e2e-nat-a addr add 192.0.2.12/24 dev wan
+wait_for_path_to b 192.0.2.12 60
+wait_for_path Direct 30
+ping_both
+assert_path Direct
+grep -q "已重新连上协调服务" "$WORK/a.log" || fail "$SCENARIO：A 应该重连过协调服务"
 pass
 
 del_namespaces
