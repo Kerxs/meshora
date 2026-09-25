@@ -34,7 +34,7 @@ up 的选项：
   --key <文件>          私钥文件（必需）
   --coord <地址:端口>   协调服务的地址（必需）
   --coord-key <公钥>    协调服务的公钥（必需）
-  --port <端口>         WireGuard 和控制报文共用的 UDP 端口，默认 41641
+  --port <端口>         WireGuard 和控制报文共用的 UDP 端口，默认 41641，0 表示让系统挑
   --tun <名字>          虚拟网卡的名字，默认 meshora0
   --mtu <字节>          虚拟网卡的 MTU，默认 1280
   --keepalive <秒>      persistent keepalive，默认 25，0 表示关闭
@@ -189,12 +189,17 @@ async fn run(up: Up) -> Result<(), String> {
 
     let socket = UdpSocket::bind(("0.0.0.0", up.port))
         .map_err(|err| format!("绑定 UDP 端口 {} 失败：{err}", up.port))?;
+    // --port 0 时由系统挑端口，上报给协调服务的得是实际绑上的那个
+    let local_port = socket
+        .local_addr()
+        .map_err(|err| format!("读取 UDP 端口失败：{err}"))?
+        .port();
 
     let session = Session::connect(Config {
         secret: secret.clone(),
         coord: up.coord,
         coord_key: up.coord_key,
-        local_port: up.port,
+        local_port,
         keepalive: up.keepalive,
         relay_only: up.relay_only,
     })

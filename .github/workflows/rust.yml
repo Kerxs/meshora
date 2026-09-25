@@ -50,7 +50,7 @@ jobs:
       - if: runner.os == 'Windows'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Windows 上真的创建网卡要 wintun.dll。从官网下载，核对压缩包的哈希和 DLL 的签名，
-      # 放到测试程序旁边 —— 代码只从可执行文件所在的目录加载它，不走系统搜索路径
+      # 放到测试程序和 meshorad.exe 旁边 —— 代码只从可执行文件所在的目录加载它，不走系统搜索路径
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -70,9 +70,11 @@ jobs:
             throw 'wintun.dll is not validly signed by WireGuard LLC'
           }
           Copy-Item $dll target\debug\deps\
-      # 真正创建虚拟网卡的测试需要管理员权限。Linux 上编译仍用普通用户，只有运行测试时经 sudo；
+          Copy-Item $dll target\debug\
+      # 真正创建虚拟网卡的测试需要管理员权限：虚拟网卡本身，以及真的 meshorad 和测试进程里的
+      # 节点之间经隧道收发。Linux 上编译仍用普通用户，只有运行测试时经 sudo；
       # Windows 的 runner 本来就以管理员身份运行
-      - run: cargo test -p meshora-tun --locked -- --ignored
+      - run: cargo test -p meshora-tun -p meshorad --locked -- --ignored
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo
 

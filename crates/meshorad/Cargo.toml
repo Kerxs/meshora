@@ -18,5 +18,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 lexopt.workspace = true
 
+[dev-dependencies]
+# 真机测试在测试进程里跑协调服务和另一个节点
+meshora-coord.workspace = true
+
 [lints]
 workspace = true
