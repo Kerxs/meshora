@@ -1,18 +1,18 @@
 //! meshorad：Meshora 的节点守护进程。
 //!
 //! ```text
-//! meshorad genkey                     生成私钥，打到标准输出
-//! meshorad pubkey                     从标准输入读私钥，打出公钥
+//! meshorad genkey [文件]              生成私钥：写进文件并打出公钥；不给文件就把私钥打到标准输出
+//! meshorad pubkey [文件]              读私钥（从文件，不给就从标准输入），打出公钥
 //! meshorad up --key <文件> --coord <地址:端口> --coord-key <公钥> [选项]
 //! ```
 //!
 //! `up` 的顺序：向协调服务注册拿到 overlay 地址 → 按这个地址建虚拟网卡 → 起数据面 → 跑控制面。
 //! 需要管理员权限（建虚拟网卡）。
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::{SocketAddr, UdpSocket};
 use std::num::NonZeroU16;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -23,11 +23,13 @@ use meshora_types::{NodeKey, NodeSecret};
 use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::sync::mpsc;
 use tracing::info;
+use zeroize::Zeroizing;
 
 const USAGE: &str = "\
 用法：
-  meshorad genkey                     生成一把私钥，打到标准输出
-  meshorad pubkey                     从标准输入读私钥，打出对应的公钥
+  meshorad genkey [文件]              生成一把私钥。给了文件就写进去（不覆盖已有的文件），
+                                      标准输出打出对应的公钥；不给文件就把私钥打到标准输出
+  meshorad pubkey [文件]              读私钥，打出对应的公钥。不给文件就从标准输入读
   meshorad up [选项]                  启动节点（需要管理员权限）
 
 up 的选项：
@@ -55,9 +57,22 @@ struct Up {
 }
 
 enum Command {
-    GenKey,
-    PubKey,
+    GenKey(Option<PathBuf>),
+    PubKey(Option<PathBuf>),
     Up(Up),
+}
+
+/// genkey、pubkey 可以带一个文件名
+fn path_argument(parser: &mut lexopt::Parser) -> Result<Option<PathBuf>, lexopt::Error> {
+    let mut path = None;
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Value(value) if path.is_none() => path = Some(PathBuf::from(value)),
+            Long("help") | Short('h') => return Err(USAGE.into()),
+            _ => return Err(arg.unexpected()),
+        }
+    }
+    Ok(path)
 }
 
 fn parse() -> Result<Command, lexopt::Error> {
@@ -68,8 +83,8 @@ fn parse() -> Result<Command, lexopt::Error> {
         Some(other) => return Err(other.unexpected()),
     };
     match command.as_str() {
-        "genkey" => Ok(Command::GenKey),
-        "pubkey" => Ok(Command::PubKey),
+        "genkey" => Ok(Command::GenKey(path_argument(&mut parser)?)),
+        "pubkey" => Ok(Command::PubKey(path_argument(&mut parser)?)),
         "up" => {
             let (mut key, mut coord, mut coord_key) = (None, None, None);
             let mut up = Up {
@@ -116,11 +131,8 @@ fn main() -> ExitCode {
         }
     };
     let result = match command {
-        Command::GenKey => {
-            println!("{}", *NodeSecret::generate().to_base64());
-            Ok(())
-        }
-        Command::PubKey => pubkey(),
+        Command::GenKey(path) => genkey(path.as_deref()),
+        Command::PubKey(path) => pubkey(path.as_deref()),
         Command::Up(up) => {
             let level = if up.verbose {
                 tracing::Level::DEBUG
@@ -147,28 +159,73 @@ fn main() -> ExitCode {
     }
 }
 
-fn pubkey() -> Result<(), String> {
-    let mut text = String::new();
-    io::stdin()
-        .read_to_string(&mut text)
-        .map_err(|err| format!("读标准输入失败：{err}"))?;
-    let secret: NodeSecret = text.trim().parse().map_err(|err| format!("{err}"))?;
+fn genkey(path: Option<&Path>) -> Result<(), String> {
+    let secret = NodeSecret::generate();
+    match path {
+        None => println!("{}", *secret.to_base64()),
+        Some(path) => {
+            write_key_file(path, &secret)?;
+            eprintln!("私钥已写入 {}，下面是对应的公钥：", path.display());
+            println!("{}", secret.public_key());
+        }
+    }
+    Ok(())
+}
+
+/// 新建私钥文件。同名文件已经存在就报错：覆盖私钥等于换了一个身份。
+/// Unix 上建成只有自己能读写；Windows 上沿用所在目录的权限
+fn write_key_file(path: &Path, secret: &NodeSecret) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|err| match err.kind() {
+        io::ErrorKind::AlreadyExists => format!(
+            "{} 已经存在，不覆盖：覆盖私钥等于换了一个身份。确实要换，先删掉它",
+            path.display()
+        ),
+        _ => format!("创建 {} 失败：{err}", path.display()),
+    })?;
+    file.write_all(secret.to_base64().as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|err| format!("写 {} 失败：{err}", path.display()))
+}
+
+fn pubkey(path: Option<&Path>) -> Result<(), String> {
+    let secret = match path {
+        Some(path) => load_key(path)?,
+        None => {
+            let mut contents = Zeroizing::new(Vec::new());
+            io::stdin()
+                .read_to_end(&mut contents)
+                .map_err(|err| format!("读标准输入失败：{err}"))?;
+            NodeSecret::from_key_file(&contents)
+                .map_err(|_| "标准输入里不是合法的私钥：应为 44 个字符的标准 base64".to_string())?
+        }
+    };
     println!("{}", secret.public_key());
     Ok(())
 }
 
-fn load_key(path: &PathBuf) -> Result<NodeSecret, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|err| format!("读私钥文件 {} 失败：{err}", path.display()))?;
+fn load_key(path: &Path) -> Result<NodeSecret, String> {
+    let contents = Zeroizing::new(
+        std::fs::read(path).map_err(|err| format!("读私钥文件 {} 失败：{err}", path.display()))?,
+    );
     warn_if_readable_by_others(path);
-    text.trim()
-        .parse()
-        .map_err(|err| format!("私钥文件 {}：{err}", path.display()))
+    NodeSecret::from_key_file(&contents).map_err(|_| {
+        format!(
+            "私钥文件 {} 的内容不是合法的私钥：应为 44 个字符的标准 base64（meshorad genkey 生成的那种）",
+            path.display()
+        )
+    })
 }
 
 /// 私钥文件别人也能读就提醒一句（R7）。只提醒不拒绝：M1 还不管安装，权限由部署方负责
 #[cfg(unix)]
-fn warn_if_readable_by_others(path: &PathBuf) {
+fn warn_if_readable_by_others(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(meta) = std::fs::metadata(path)
         && meta.permissions().mode() & 0o077 != 0
@@ -181,7 +238,7 @@ fn warn_if_readable_by_others(path: &PathBuf) {
 }
 
 #[cfg(not(unix))]
-fn warn_if_readable_by_others(_path: &PathBuf) {}
+fn warn_if_readable_by_others(_path: &Path) {}
 
 async fn run(up: Up) -> Result<(), String> {
     let secret = load_key(&up.key)?;

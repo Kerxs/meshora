@@ -139,11 +139,10 @@ nat_side() {
   done
 }
 
-for name in coord a b; do "$BIN/meshorad" genkey > "$WORK/$name.key"; done
-chmod 600 "$WORK"/*.key
-COORD=$("$BIN/meshorad" pubkey < "$WORK/coord.key")
-A=$("$BIN/meshorad" pubkey < "$WORK/a.key")
-B=$("$BIN/meshorad" pubkey < "$WORK/b.key")
+# genkey 带文件名：私钥写进文件（只有自己能读写），标准输出打出公钥
+COORD=$("$BIN/meshorad" genkey "$WORK/coord.key" 2>/dev/null)
+A=$("$BIN/meshorad" genkey "$WORK/a.key" 2>/dev/null)
+B=$("$BIN/meshorad" genkey "$WORK/b.key" 2>/dev/null)
 
 # 等某个命名空间里的 TCP 端口能连上
 wait_for_port() {

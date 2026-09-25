@@ -51,6 +51,30 @@ impl NodeSecret {
     pub fn to_base64(&self) -> Zeroizing<String> {
         Zeroizing::new(STANDARD.encode(self.0.as_bytes()))
     }
+
+    /// 从密钥文件的内容读私钥：去掉首尾空白，也认文件开头的 BOM。
+    ///
+    /// Windows PowerShell 5.1 的 `>` 重定向会把输出写成带 BOM 的 UTF-16LE，记事本存盘时
+    /// 可能加上 UTF-8 的 BOM。文件里装的还是那 44 个字符，照样认；私钥本身照旧严格解析。
+    pub fn from_key_file(contents: &[u8]) -> Result<Self, ParseNodeKeyError> {
+        match contents {
+            [0xFF, 0xFE, rest @ ..] => {
+                let (pairs, odd) = rest.as_chunks::<2>();
+                if !odd.is_empty() {
+                    return Err(ParseNodeKeyError);
+                }
+                let units: Zeroizing<Vec<u16>> =
+                    Zeroizing::new(pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect());
+                let text =
+                    Zeroizing::new(String::from_utf16(&units).map_err(|_| ParseNodeKeyError)?);
+                text.trim().parse()
+            }
+            [0xEF, 0xBB, 0xBF, rest @ ..] | rest => std::str::from_utf8(rest)
+                .map_err(|_| ParseNodeKeyError)?
+                .trim()
+                .parse(),
+        }
+    }
 }
 
 impl fmt::Debug for NodeSecret {
@@ -114,6 +138,38 @@ mod tests {
         let text = NodeSecret::generate().to_base64();
         assert!(format!("{}\n", *text).parse::<NodeSecret>().is_err());
         assert!(text[..43].parse::<NodeSecret>().is_err());
+    }
+
+    #[test]
+    fn key_files_in_the_encodings_windows_produces() {
+        let secret = NodeSecret::generate();
+        let text = format!("{}\r\n", *secret.to_base64());
+        let read = |contents: &[u8]| NodeSecret::from_key_file(contents).map(|s| s.public_key());
+
+        assert_eq!(
+            read(text.as_bytes()),
+            Ok(secret.public_key()),
+            "UTF-8，带换行"
+        );
+        let with_bom = [&[0xEF, 0xBB, 0xBF][..], text.as_bytes()].concat();
+        assert_eq!(
+            read(&with_bom),
+            Ok(secret.public_key()),
+            "UTF-8 BOM（记事本）"
+        );
+        // Windows PowerShell 5.1 的 `meshorad genkey > node.key` 写出来的就是这样
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        assert_eq!(read(&utf16), Ok(secret.public_key()), "UTF-16LE BOM");
+
+        assert!(
+            read(&utf16[..utf16.len() - 1]).is_err(),
+            "UTF-16 截断了半个字符"
+        );
+        assert!(read(b"\xFF\x00garbage").is_err());
+        assert!(read(b"").is_err());
     }
 
     #[test]

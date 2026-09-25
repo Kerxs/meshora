@@ -9,7 +9,7 @@
 
 use std::io::{self, Read};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ipnet::Ipv4Net;
@@ -19,6 +19,7 @@ use meshora_proto::control::RelayInfo;
 use meshora_types::{NodeKey, NodeSecret};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::info;
+use zeroize::Zeroizing;
 
 const USAGE: &str = "\
 用法：meshora-coord [选项]
@@ -35,7 +36,7 @@ const USAGE: &str = "\
                             （有 --relay-listen 时就是同一进程里的中继）
   -v, --verbose             打出调试日志
 
-  meshora-coord pubkey      从标准输入读私钥，打出公钥（告诉节点用）
+  meshora-coord pubkey [文件] 读私钥（从文件，不给就从标准输入），打出公钥（告诉节点用）
 ";
 
 struct Args {
@@ -65,7 +66,12 @@ fn parse_relay(value: &str) -> Result<RelayInfo, String> {
     })
 }
 
-fn parse() -> Result<Option<Args>, lexopt::Error> {
+enum Command {
+    Serve(Box<Args>),
+    PubKey(Option<PathBuf>),
+}
+
+fn parse() -> Result<Command, lexopt::Error> {
     let mut parser = lexopt::Parser::from_env();
     let (mut key, mut listen) = (None, None);
     let mut args = Args {
@@ -82,7 +88,17 @@ fn parse() -> Result<Option<Args>, lexopt::Error> {
     };
     while let Some(arg) = parser.next()? {
         match arg {
-            Value(value) if value == "pubkey" => return Ok(None),
+            Value(value) if value == "pubkey" => {
+                let mut path = None;
+                while let Some(arg) = parser.next()? {
+                    match arg {
+                        Value(value) if path.is_none() => path = Some(PathBuf::from(value)),
+                        Long("help") | Short('h') => return Err(USAGE.into()),
+                        _ => return Err(arg.unexpected()),
+                    }
+                }
+                return Ok(Command::PubKey(path));
+            }
             Long("key") => key = Some(PathBuf::from(parser.value()?)),
             Long("listen") => listen = Some(parser.value()?.parse()?),
             Long("node") => args.nodes.push(parser.value()?.parse()?),
@@ -102,7 +118,7 @@ fn parse() -> Result<Option<Args>, lexopt::Error> {
     if args.nodes.is_empty() {
         return Err("至少要有一个 --node".into());
     }
-    Ok(Some(args))
+    Ok(Command::Serve(Box::new(args)))
 }
 
 /// 告诉节点的地址必须是节点访问得到的具体地址，不能是 0.0.0.0 这种监听用的地址
@@ -122,8 +138,8 @@ fn advertised(
 
 fn main() -> ExitCode {
     let args = match parse() {
-        Ok(Some(args)) => args,
-        Ok(None) => return pubkey(),
+        Ok(Command::Serve(args)) => *args,
+        Ok(Command::PubKey(path)) => return pubkey(path.as_deref()),
         Err(err) => {
             eprintln!("{err}");
             return ExitCode::from(2);
@@ -152,13 +168,20 @@ fn main() -> ExitCode {
     }
 }
 
-fn pubkey() -> ExitCode {
-    let mut text = String::new();
-    if let Err(err) = io::stdin().read_to_string(&mut text) {
-        eprintln!("读标准输入失败：{err}");
-        return ExitCode::FAILURE;
-    }
-    match text.trim().parse::<NodeSecret>() {
+fn pubkey(path: Option<&Path>) -> ExitCode {
+    let secret = match path {
+        Some(path) => load_key(path),
+        None => {
+            let mut contents = Zeroizing::new(Vec::new());
+            match io::stdin().read_to_end(&mut contents) {
+                Ok(_) => NodeSecret::from_key_file(&contents).map_err(|_| {
+                    "标准输入里不是合法的私钥：应为 44 个字符的标准 base64".to_string()
+                }),
+                Err(err) => Err(format!("读标准输入失败：{err}")),
+            }
+        }
+    };
+    match secret {
         Ok(secret) => {
             println!("{}", secret.public_key());
             ExitCode::SUCCESS
@@ -170,13 +193,21 @@ fn pubkey() -> ExitCode {
     }
 }
 
+/// 读私钥文件。和 meshorad 一样认 BOM 和 UTF-16LE（Windows PowerShell 的 > 写出来的）
+fn load_key(path: &Path) -> Result<NodeSecret, String> {
+    let contents = Zeroizing::new(
+        std::fs::read(path).map_err(|err| format!("读私钥文件 {} 失败：{err}", path.display()))?,
+    );
+    NodeSecret::from_key_file(&contents).map_err(|_| {
+        format!(
+            "私钥文件 {} 的内容不是合法的私钥：应为 44 个字符的标准 base64（meshorad genkey 生成的那种）",
+            path.display()
+        )
+    })
+}
+
 async fn run(args: Args) -> Result<(), String> {
-    let text = std::fs::read_to_string(&args.key)
-        .map_err(|err| format!("读私钥文件 {} 失败：{err}", args.key.display()))?;
-    let secret: NodeSecret = text
-        .trim()
-        .parse()
-        .map_err(|err| format!("私钥文件 {}：{err}", args.key.display()))?;
+    let secret = load_key(&args.key)?;
 
     let listener = TcpListener::bind(args.listen)
         .await

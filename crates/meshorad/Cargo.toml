@@ -17,6 +17,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 lexopt.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 # 真机测试在测试进程里跑协调服务、中继和另一个节点

@@ -17,6 +17,7 @@ tracing.workspace = true
 meshora-relay.workspace = true
 lexopt.workspace = true
 tracing-subscriber.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
