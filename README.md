@@ -13,14 +13,16 @@
 
 **没有可运行的网络引擎，也没有可下载的二进制。** 项目处于设计阶段。
 
-这个仓库目前只有两样东西：
+这个仓库目前有三样东西：
 
 - **`docs/`** —— 官网和设计文档的源码（VitePress）。这是现阶段的主要产出。
+- **`crates/`** —— M0 的 Rust workspace，里面是控制面与数据面之间的[接口契约](https://kerxs.github.io/meshora/guide/interfaces)，
+  写成了 trait 和类型，带单元测试。**它只定义接口，不收发任何一个报文。**
 - **仓库元文件** —— 许可证、贡献指南、安全策略。
 
-Rust Core、boringtun 集成、wintun 虚拟网卡，这些**一行都还没写**。
-[路线图](https://kerxs.github.io/meshora/guide/roadmap)里每一项的状态都是真实的，
-截至目前没有任何一项达到「开发中」。
+boringtun 集成、wintun 虚拟网卡、控制面的实现，这些**一行都还没写**。
+[路线图](https://kerxs.github.io/meshora/guide/roadmap)里每一项的状态都是真实的：
+目前只有 M0 地基里的几项离开了「设计中」，功能项全都还在「设计中」。
 
 先做官网是因为这个阶段最需要的是把设计讲清楚并收到反馈 —— 方向错了，代码写得再多也是白写。
 
@@ -103,6 +105,18 @@ npm run docs:build    # 构建，必须零警告通过
 > 系统开启「减少动态效果」时会自动降为静止渲染，且完全停掉渲染循环。
 > WebGL 不可用时回落到一层 CSS 渐变，页面不会开天窗。
 
+## 本地构建 Rust 部分
+
+需要 [rustup](https://rustup.rs)。工具链版本固定在 `rust-toolchain.toml` 里，第一次跑 cargo 时会自动装上。
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings   # 和 CI 一样，零警告
+cargo test --workspace
+```
+
+CI 在 Linux 和 Windows 上都跑测试，见 [`.github/workflows/rust.yml`](.github/workflows/rust.yml)。
+
 ## 部署
 
 站点托管在 GitHub Pages 的项目子路径下：<https://kerxs.github.io/meshora>。
@@ -125,7 +139,7 @@ Markdown 里的 `](/guide/x)` 会被 VitePress 自动加前缀，组件里的不
 
 ## 参与
 
-现阶段最需要的是**设计反馈，不是代码** —— 接口还没定，提功能 PR 容易白写。
+现阶段最需要的是**设计反馈，不是代码** —— 接口契约刚有初版，M1 实现时还会改，提功能 PR 容易白写。
 挑毛病、讲你的真实场景、指出"这个做不到"，都比 PR 有用。见
 [参与进来](https://kerxs.github.io/meshora/guide/contributing)。
 
