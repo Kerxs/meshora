@@ -149,6 +149,65 @@ async fn endpoint_list_is_capped() {
 }
 
 #[tokio::test]
+async fn endpoints_nobody_should_probe_are_dropped() {
+    let a = NodeSecret::generate();
+    let b = NodeSecret::generate();
+    let coord = start(&[&a, &b]).await;
+    let (mut client_a, ..) = join(&coord, &a).await;
+    let (mut client_b, ..) = join(&coord, &b).await;
+
+    let good: SocketAddr = "198.51.100.4:41641".parse().unwrap();
+    let reported: Vec<SocketAddr> = [
+        "0.0.0.0:41641",
+        "[::]:41641",
+        "224.0.0.251:5353",
+        "[ff02::1]:41641",
+        "255.255.255.255:41641",
+        "198.51.100.5:0",
+    ]
+    .iter()
+    .map(|addr| addr.parse().unwrap())
+    .chain([good])
+    .collect();
+    send(&mut client_a, ClientMessage::Endpoints(reported)).await;
+    let ServerMessage::NetMap { peers } = recv(&mut client_b).await else {
+        panic!("应该收到 NetMap");
+    };
+    assert_eq!(peers[0].endpoints, [good]);
+}
+
+/// 端点变化得很快时，NetMap 合并着发，但最后一份一定是最新的
+#[tokio::test]
+async fn a_burst_of_updates_ends_with_the_latest_net_map() {
+    let a = NodeSecret::generate();
+    let b = NodeSecret::generate();
+    let coord = start(&[&a, &b]).await;
+    let (mut client_a, ..) = join(&coord, &a).await;
+    let (mut client_b, ..) = join(&coord, &b).await;
+
+    let endpoint = |port: u16| SocketAddr::from(([198, 51, 100, 4], port));
+    for port in 40000..40200 {
+        send(
+            &mut client_a,
+            ClientMessage::Endpoints(vec![endpoint(port)]),
+        )
+        .await;
+    }
+    let mut received = 0;
+    loop {
+        let ServerMessage::NetMap { peers } = recv(&mut client_b).await else {
+            panic!("应该收到 NetMap");
+        };
+        received += 1;
+        if peers[0].endpoints == [endpoint(40199)] {
+            break;
+        }
+    }
+    // 200 次变化，每秒最多一份：这里只可能收到寥寥几份
+    assert!(received <= 3, "收到了 {received} 份 NetMap");
+}
+
+#[tokio::test]
 async fn call_me_maybe_is_forwarded_with_the_callers_endpoints() {
     let a = NodeSecret::generate();
     let b = NodeSecret::generate();

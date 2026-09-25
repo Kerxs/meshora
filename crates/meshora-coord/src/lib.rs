@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -25,7 +25,7 @@ use meshora_proto::disco::{self, DiscoMessage};
 use meshora_proto::noise::{Channel, NoiseStream};
 use meshora_types::{NodeKey, NodeSecret};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tracing::{debug, info, warn};
 
 /// 握手和第一条消息的时限：慢吞吞的连接不许一直占着。
@@ -35,7 +35,12 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// 一个节点最多上报多少个端点。端点会被别的节点拿去发探测报文，不设上限就成了放大器。
 const MAX_ENDPOINTS: usize = 16;
 /// 发往一个连接的消息队列长度。满了说明对方根本不读，丢掉就是。
+///
+/// NetMap 不走这个队列：它是全量的，只需要把最新的一份送到，见 [`Conn::net_map`]。
 const QUEUE: usize = 64;
+/// 给同一个节点发 NetMap 的最小间隔，期间的变化合并成一份。有人频繁上报端点，
+/// 别的节点也只是每秒多收一份 NetMap，协调服务不必为每次上报给每个节点都生成一份。
+const NET_MAP_INTERVAL: Duration = Duration::from_secs(1);
 /// 探测端点每秒最多回应多少条。
 const PROBE_RATE: u32 = 200;
 
@@ -55,7 +60,12 @@ pub struct Config {
 
 struct Conn {
     id: u64,
+    /// Welcome、转发的打洞请求、Pong
     tx: mpsc::Sender<ServerMessage>,
+    /// "有新的 NetMap 了"。连接的写任务被唤醒时按当时的状态现生成一份，所以多次变化
+    /// 自然合并，最新的一份也绝不会丢 —— 此前用队列发，队列满了就跳过，
+    /// 跳过的偏偏是最后一份的话，这个节点就一直拿着过时的 NetMap
+    net_map: Arc<Notify>,
 }
 
 #[derive(Default)]
@@ -106,17 +116,21 @@ impl Shared {
         ServerMessage::NetMap { peers }
     }
 
-    /// 网里有变化：给每个在线节点发一份新的 NetMap
+    /// 网里有变化：通知每个在线节点的连接，发一份新的 NetMap
     fn broadcast_net_maps(&self, state: &State, except: Option<&NodeKey>) {
         for (key, conn) in &state.online {
-            if Some(key) == except {
-                continue;
-            }
-            if conn.tx.try_send(self.net_map_for(state, key)).is_err() {
-                debug!(node = %key, "发送队列满了，跳过这一份 NetMap");
+            if Some(key) != except {
+                conn.net_map.notify_one();
             }
         }
     }
+}
+
+/// 能不能当端点。别的节点会往端点发探测报文，一眼就知道不对的不收：
+/// 未指定地址（Linux 上发往 0.0.0.0 就是发给本机）、组播、广播、端口 0
+fn usable_endpoint(addr: &SocketAddr) -> bool {
+    let broadcast = matches!(addr.ip(), IpAddr::V4(ip) if ip.is_broadcast());
+    addr.port() != 0 && !addr.ip().is_unspecified() && !addr.ip().is_multicast() && !broadcast
 }
 
 /// 按名单分配地址：第 n 个节点拿网段里第 n 个可用地址（从 .1 开始）
@@ -216,6 +230,7 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     };
 
     let (tx, mut rx) = mpsc::channel(QUEUE);
+    let net_map = Arc::new(Notify::new());
     let id = shared.next_conn.fetch_add(1, Ordering::Relaxed);
     {
         let mut state = shared.state();
@@ -226,15 +241,41 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
             relays: shared.relays.clone(),
         };
         let _ = tx.try_send(welcome);
-        let _ = tx.try_send(shared.net_map_for(&state, &key));
-        state.online.insert(key, Conn { id, tx: tx.clone() });
+        // 第一份 NetMap 紧跟在 Welcome 后面：写任务优先发队列里的
+        net_map.notify_one();
+        state.online.insert(
+            key,
+            Conn {
+                id,
+                tx: tx.clone(),
+                net_map: Arc::clone(&net_map),
+            },
+        );
     }
     info!(%from, node = %key, ip = %overlay_ip, "节点上线");
 
+    let writer_shared = Arc::clone(&shared);
     let writer_task = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            if writer.send(&message.encode()).await.is_err() {
-                break;
+        let mut pending = false;
+        let mut earliest = tokio::time::Instant::now();
+        loop {
+            tokio::select! {
+                biased;
+                message = rx.recv() => {
+                    let Some(message) = message else { break };
+                    if writer.send(&message.encode()).await.is_err() {
+                        break;
+                    }
+                }
+                () = net_map.notified(), if !pending => pending = true,
+                () = tokio::time::sleep_until(earliest), if pending => {
+                    let message = writer_shared.net_map_for(&writer_shared.state(), &key);
+                    if writer.send(&message.encode()).await.is_err() {
+                        break;
+                    }
+                    pending = false;
+                    earliest = tokio::time::Instant::now() + NET_MAP_INTERVAL;
+                }
             }
         }
     });
@@ -253,6 +294,7 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
         };
         match ClientMessage::decode(&bytes) {
             Ok(ClientMessage::Endpoints(mut endpoints)) => {
+                endpoints.retain(usable_endpoint);
                 endpoints.truncate(MAX_ENDPOINTS);
                 let state = &mut *shared.state();
                 if state.endpoints.get(&key) != Some(&endpoints) {
