@@ -1,0 +1,14 @@
+[package]
+name = "meshora-types"
+description = "Meshora 各 crate 共用的词汇：节点身份与路径"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+
+[lints]
+workspace = true

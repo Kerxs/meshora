@@ -1,0 +1,24 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Kerxs/meshora"
+# 还没有任何东西值得发到 crates.io，防止手滑
+publish = false
+
+# 依赖版本在这里统一管。每加一个都要说得出理由 —— 供应链是威胁模型里的一项。
+[workspace.dependencies]
+meshora-types = { path = "crates/meshora-types" }
+
+base64 = "0.23"
+ipnet = "2.12"
+
+[workspace.lints.rust]
+# M1 接 wintun 时免不了 FFI：届时在具体模块上 allow，并写清 SAFETY
+unsafe_code = "deny"
+# 契约本身就是文档。CI 开着 -D warnings，所以这条等于强制
+missing_docs = "warn"
