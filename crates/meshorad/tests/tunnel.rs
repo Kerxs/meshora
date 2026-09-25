@@ -1,6 +1,6 @@
 //! 守护进程的真机测试：一边是真的 meshorad（真的虚拟网卡），另一边是跑在测试进程里的节点
 //! （虚拟网卡用 channel 代替，收到 UDP 报文就原样弹回去）。系统往对端的 overlay 地址发 UDP，
-//! 要能经加密隧道收到回应。
+//! 要能经加密隧道收到回应。直连和经中继各测一遍。
 //!
 //! 不用网络命名空间，所以 Linux 和 Windows 都能跑。需要管理员权限：Linux 上是 root；
 //! Windows 上是管理员，并且 wintun.dll 放在 meshorad.exe 旁边（`target/debug/`）。
@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use meshora_control::{Config, Session};
+use meshora_proto::control::RelayInfo;
 use meshora_types::{NodeKey, NodeSecret};
 use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::net::{TcpListener, UdpSocket};
@@ -21,17 +22,47 @@ use tokio::sync::mpsc;
 
 /// 注册、建网卡、探测、握手，一路下来要的时间
 const WAIT: Duration = Duration::from_secs(30);
-/// 测试用网段：RFC 2544 保留给网络测试的 198.18.0.0/15。名单里 meshorad 排第一，拿 .1
-const OVERLAY: &str = "198.18.99.0/24";
-const DAEMON_IP: Ipv4Addr = Ipv4Addr::new(198, 18, 99, 1);
-const ECHO: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(198, 18, 99, 2), 7777);
+const ECHO_PORT: u16 = 7777;
+
+/// 一次测试的参数。两个测试并行跑，网段和网卡名都得错开
+struct Case {
+    /// 只走中继：两个节点都带 relay_only，协调服务告诉它们一个中继
+    relay_only: bool,
+    /// overlay 网段的第三个字节。网段取自 RFC 2544 保留给网络测试的 198.18.0.0/15
+    subnet: u8,
+    /// 网卡名的后缀
+    suffix: char,
+}
+
+impl Case {
+    /// 名单里 meshorad 排第一，拿 .1；测试进程里的节点拿 .2
+    fn daemon_ip(&self) -> Ipv4Addr {
+        Ipv4Addr::new(198, 18, self.subnet, 1)
+    }
+
+    fn echo(&self) -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(198, 18, self.subnet, 2), ECHO_PORT)
+    }
+}
 
 struct Coord {
     addr: SocketAddr,
     key: NodeKey,
 }
 
-async fn start_coord(nodes: Vec<NodeKey>) -> Coord {
+async fn start_relay(nodes: Vec<NodeKey>) -> RelayInfo {
+    let secret = NodeSecret::generate();
+    let key = secret.public_key();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(meshora_relay::serve(
+        meshora_relay::Config { secret, nodes },
+        listener,
+    ));
+    RelayInfo { key, addr }
+}
+
+async fn start_coord(case: &Case, nodes: Vec<NodeKey>, relays: Vec<RelayInfo>) -> Coord {
     let secret = NodeSecret::generate();
     let key = secret.public_key();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -40,9 +71,9 @@ async fn start_coord(nodes: Vec<NodeKey>) -> Coord {
     let config = meshora_coord::Config {
         secret,
         nodes,
-        overlay: OVERLAY.parse().unwrap(),
+        overlay: format!("198.18.{}.0/24", case.subnet).parse().unwrap(),
         probe: Some(probe.local_addr().unwrap()),
-        relays: Vec::new(),
+        relays,
     };
     tokio::spawn(meshora_coord::serve(config, listener, Some(probe)));
     Coord { addr, key }
@@ -64,7 +95,7 @@ fn bounce(packet: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// 测试进程里的节点：数据面是真的，虚拟网卡换成 channel，收到的 UDP 报文都弹回去
-async fn start_echo_node(secret: &NodeSecret, coord: &Coord) {
+async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let local_port = socket.local_addr().unwrap().port();
     let session = Session::connect(Config {
@@ -73,11 +104,11 @@ async fn start_echo_node(secret: &NodeSecret, coord: &Coord) {
         coord_key: coord.key,
         local_port,
         keepalive: NonZeroU16::new(25),
-        relay_only: false,
+        relay_only: case.relay_only,
     })
     .await
     .unwrap();
-    assert_eq!(session.welcome().overlay_ip, *ECHO.ip());
+    assert_eq!(session.welcome().overlay_ip, *case.echo().ip());
 
     let (tun_in, from_tun) = mpsc::channel(64);
     let (to_tun, mut tun_out) = mpsc::channel::<Vec<u8>>(64);
@@ -109,8 +140,9 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn start(secret: &NodeSecret, coord: &Coord) -> Self {
-        let dir = std::env::temp_dir().join(format!("meshorad-test-{}", std::process::id()));
+    fn start(case: &Case, secret: &NodeSecret, coord: &Coord) -> Self {
+        let id = std::process::id();
+        let dir = std::env::temp_dir().join(format!("meshorad-test-{id}-{}", case.suffix));
         std::fs::create_dir_all(&dir).unwrap();
         let key = dir.join("node.key");
         std::fs::write(&key, secret.to_base64().as_bytes()).unwrap();
@@ -120,21 +152,34 @@ impl Daemon {
             std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
         let log = File::create(dir.join("meshorad.log")).unwrap();
-        let child = Command::new(env!("CARGO_BIN_EXE_meshorad"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_meshorad"));
+        command
             .arg("up")
             .arg("--key")
             .arg(&key)
             .args(["--coord", &coord.addr.to_string()])
             .args(["--coord-key", &coord.key.to_string()])
             .args(["--port", "0"])
-            .args(["--tun", &format!("mshd{}", std::process::id() % 100_000)])
-            .arg("--verbose")
+            .args(["--tun", &format!("mshd{}{}", id % 100_000, case.suffix)])
+            .arg("--verbose");
+        if case.relay_only {
+            command.arg("--relay-only");
+        }
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log)
             .spawn()
             .unwrap();
         Daemon { child, dir }
+    }
+
+    /// 日志里最后一次"切换路径"选的是哪种：Direct 或 Relay
+    fn last_path(&self) -> Option<String> {
+        let log = std::fs::read_to_string(self.dir.join("meshorad.log")).ok()?;
+        let line = log.lines().rfind(|line| line.contains("切换路径"))?;
+        let path = line.rsplit("path=").next()?;
+        Some(path.chars().take_while(char::is_ascii_alphabetic).collect())
     }
 
     /// 进程要是已经退出了，就直接判失败 —— 不用干等到超时
@@ -158,16 +203,16 @@ impl Drop for Daemon {
 }
 
 /// 绑定到 meshorad 的虚拟网卡的地址上：网卡建好、地址设好之前绑不上
-async fn bind_overlay(daemon: &mut Daemon) -> UdpSocket {
+async fn bind_overlay(ip: Ipv4Addr, daemon: &mut Daemon) -> UdpSocket {
     tokio::time::timeout(WAIT, async {
         loop {
-            match UdpSocket::bind(SocketAddrV4::new(DAEMON_IP, 0)).await {
+            match UdpSocket::bind(SocketAddrV4::new(ip, 0)).await {
                 Ok(socket) => return socket,
                 Err(err) if err.kind() == std::io::ErrorKind::AddrNotAvailable => {
                     daemon.assert_running();
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
-                Err(err) => panic!("绑定 {DAEMON_IP} 失败：{err}"),
+                Err(err) => panic!("绑定 {ip} 失败：{err}"),
             }
         }
     })
@@ -175,22 +220,27 @@ async fn bind_overlay(daemon: &mut Daemon) -> UdpSocket {
     .expect("meshorad 的虚拟网卡一直没就绪")
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "需要管理员权限，Windows 上还要 wintun.dll。用 cargo test -p meshorad -- --ignored 跑"]
-async fn udp_round_trip_through_the_daemon() {
+async fn round_trip(case: Case) {
     let daemon_secret = NodeSecret::generate();
     let echo_secret = NodeSecret::generate();
-    let coord = start_coord(vec![daemon_secret.public_key(), echo_secret.public_key()]).await;
-    start_echo_node(&echo_secret, &coord).await;
-    let mut daemon = Daemon::start(&daemon_secret, &coord);
+    let nodes = vec![daemon_secret.public_key(), echo_secret.public_key()];
+    let relays = if case.relay_only {
+        vec![start_relay(nodes.clone()).await]
+    } else {
+        Vec::new()
+    };
+    let coord = start_coord(&case, nodes, relays).await;
+    start_echo_node(&case, &echo_secret, &coord).await;
+    let mut daemon = Daemon::start(&case, &daemon_secret, &coord);
 
-    let socket = bind_overlay(&mut daemon).await;
+    let socket = bind_overlay(case.daemon_ip(), &mut daemon).await;
+    let echo = case.echo();
     let mut buf = [0u8; 64];
     // 路径收敛之前报文会被丢掉，所以反复发，直到收到回应
     let (len, from) = tokio::time::timeout(WAIT, async {
         loop {
             daemon.assert_running();
-            socket.send_to(b"through the tunnel", ECHO).await.unwrap();
+            socket.send_to(b"through the tunnel", echo).await.unwrap();
             let wait = Duration::from_millis(500);
             if let Ok(received) = tokio::time::timeout(wait, socket.recv_from(&mut buf)).await {
                 return received.unwrap();
@@ -199,6 +249,31 @@ async fn udp_round_trip_through_the_daemon() {
     })
     .await
     .expect("经隧道等回应超时");
-    assert_eq!(from, SocketAddr::V4(ECHO));
+    assert_eq!(from, SocketAddr::V4(echo));
     assert_eq!(&buf[..len], b"through the tunnel");
+
+    let expected = if case.relay_only { "Relay" } else { "Direct" };
+    assert_eq!(daemon.last_path().as_deref(), Some(expected));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "需要管理员权限，Windows 上还要 wintun.dll。用 cargo test -p meshorad -- --ignored 跑"]
+async fn udp_round_trip_directly() {
+    round_trip(Case {
+        relay_only: false,
+        subnet: 99,
+        suffix: 'd',
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "需要管理员权限，Windows 上还要 wintun.dll。用 cargo test -p meshorad -- --ignored 跑"]
+async fn udp_round_trip_via_relay() {
+    round_trip(Case {
+        relay_only: true,
+        subnet: 98,
+        suffix: 'r',
+    })
+    .await;
 }

@@ -457,6 +457,8 @@ dependencies = [
  "meshora-control",
  "meshora-coord",
  "meshora-dataplane",
+ "meshora-proto",
+ "meshora-relay",
  "meshora-tun",
  "meshora-types",
  "meshora-wg",
