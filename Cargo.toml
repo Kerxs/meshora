@@ -26,6 +26,10 @@ x25519-dalek = { version = "2", features = ["static_secrets", "getrandom"] }
 zeroize = "1"
 # 分配 WireGuard 会话索引用的随机数。boringtun 本来就依赖同一个版本
 rand_core = { version = "0.6", features = ["getrandom"] }
+# 异步 I/O。数据面、控制面、协调服务、中继都跑在它上面。只开用得到的 feature
+tokio = { version = "1.53", default-features = false, features = ["rt", "net", "time", "sync", "macros"] }
+# 只用它的宏打日志，输出到哪由 meshorad 决定。boringtun 本来就依赖它
+tracing = "0.1"
 
 [workspace.lints.rust]
 # M1 接 wintun 时免不了 FFI：届时在具体模块上 allow，并写清 SAFETY

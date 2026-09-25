@@ -5,7 +5,9 @@
 //! - **契约**（M0）：[`DataPlane`] trait、它收发的类型，以及共享 socket 上的分流规则 [`classify`]
 //! - **核心**（M1）：[`engine::Engine`]，基于 boringtun 的、不做 I/O 的状态机。
 //!   契约的不变量在这一层落地，所以不需要真的网络就能完整测试
-//! - **还没有**：把核心接到真实 socket 和虚拟网卡上的驱动，M1 正在做
+//! - **驱动**（M1）：[`userspace::UserspaceDataPlane`]，把核心接到 tokio 的 UDP socket 上，
+//!   虚拟网卡那一侧只是一对 channel
+//! - **还没有**：真正的虚拟网卡（meshora-tun）和中继客户端，M1 正在做
 //!
 //! # 边界
 //!
@@ -34,6 +36,9 @@
 mod config;
 mod datagram;
 pub mod engine;
+#[cfg(test)]
+mod testutil;
+pub mod userspace;
 
 use std::error::Error;
 use std::fmt;

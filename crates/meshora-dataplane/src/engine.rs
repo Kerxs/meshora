@@ -449,6 +449,7 @@ mod tests {
     use std::num::NonZeroU16;
 
     use super::*;
+    use crate::testutil::ipv4;
     use crate::{CONTROL_MAGIC, PeerConfig};
 
     /// 一个节点：引擎、它的 overlay 地址、它在测试网络里的 UDP 地址
@@ -475,23 +476,6 @@ mod tests {
             allowed_ips: vec![ipnet::IpNet::from(peer.ip)],
             keepalive: None,
         }
-    }
-
-    /// 一个最小的 IPv4 报文：20 字节头 + 载荷。boringtun 只看版本、长度和地址
-    fn ipv4(src: IpAddr, dst: IpAddr, payload: &[u8]) -> Vec<u8> {
-        let (IpAddr::V4(src), IpAddr::V4(dst)) = (src, dst) else {
-            panic!("只造 IPv4 报文");
-        };
-        let total = 20 + payload.len();
-        let mut packet = vec![0u8; total];
-        packet[0] = 0x45;
-        packet[2..4].copy_from_slice(&(total as u16).to_be_bytes());
-        packet[8] = 64;
-        packet[9] = 1; // ICMP
-        packet[12..16].copy_from_slice(&src.octets());
-        packet[16..20].copy_from_slice(&dst.octets());
-        packet[20..].copy_from_slice(payload);
-        packet
     }
 
     fn transmits(actions: &[Action]) -> Vec<Transmit> {
