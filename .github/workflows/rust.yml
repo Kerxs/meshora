@@ -49,9 +49,30 @@ jobs:
       # wintun 那部分代码只在 Windows 上才编译得到，lint 也只能在这里做
       - if: runner.os == 'Windows'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # 真正创建虚拟网卡的测试需要 CAP_NET_ADMIN。编译仍用普通用户，只有运行测试时经 sudo
-      - if: runner.os == 'Linux'
-        run: cargo test -p meshora-tun --locked -- --ignored
+      # Windows 上真的创建网卡要 wintun.dll。从官网下载，核对压缩包的哈希和 DLL 的签名，
+      # 放到测试程序旁边 —— 代码只从可执行文件所在的目录加载它，不走系统搜索路径
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'wintun.zip'
+          Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $zip
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          Write-Output "wintun-0.14.1.zip SHA256: $hash"
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP -Force
+          $dll = Join-Path $env:RUNNER_TEMP 'wintun\bin\amd64\wintun.dll'
+          $sig = Get-AuthenticodeSignature $dll
+          Write-Output "wintun.dll signature: $($sig.Status) / $($sig.SignerCertificate.Subject)"
+          if ($hash -ne '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51') {
+            throw 'wintun-0.14.1.zip SHA256 mismatch'
+          }
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=WireGuard LLC') {
+            throw 'wintun.dll is not validly signed by WireGuard LLC'
+          }
+          Copy-Item $dll target\debug\deps\
+      # 真正创建虚拟网卡的测试需要管理员权限。Linux 上编译仍用普通用户，只有运行测试时经 sudo；
+      # Windows 的 runner 本来就以管理员身份运行
+      - run: cargo test -p meshora-tun --locked -- --ignored
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo
 
