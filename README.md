@@ -11,18 +11,18 @@
 
 ## 先说清楚仓库里现在有什么
 
-**没有可运行的网络引擎，也没有可下载的二进制。** 项目处于设计阶段。
+**还没有能运行的程序，也没有可下载的二进制。** 项目正在做 M1。
 
 这个仓库目前有三样东西：
 
-- **`docs/`** —— 官网和设计文档的源码（VitePress）。这是现阶段的主要产出。
-- **`crates/`** —— M0 的 Rust workspace，里面是控制面与数据面之间的[接口契约](https://kerxs.github.io/meshora/guide/interfaces)，
-  写成了 trait 和类型，带单元测试。**它只定义接口，不收发任何一个报文。**
+- **`docs/`** —— 官网和设计文档的源码（VitePress）。
+- **`crates/`** —— Rust 代码：控制面与数据面之间的[接口契约](https://kerxs.github.io/meshora/guide/interfaces)，
+  以及 M1 正在写的部分 —— 基于 boringtun 的数据面、Linux 和 Windows 的虚拟网卡。
+  它们有测试覆盖，**但还没有组装成能用的程序**。
 - **仓库元文件** —— 许可证、贡献指南、安全策略。
 
-boringtun 集成、wintun 虚拟网卡、控制面的实现，这些**一行都还没写**。
-[路线图](https://kerxs.github.io/meshora/guide/roadmap)里每一项的状态都是真实的：
-目前只有 M0 地基里的几项离开了「设计中」，功能项全都还在「设计中」。
+控制面、中继、守护进程**一行都还没写**；Windows 的虚拟网卡只做过编译检查，没在 Windows 上跑过。
+[路线图](https://kerxs.github.io/meshora/guide/roadmap)里每一项的状态都是真实的。
 
 先做官网是因为这个阶段最需要的是把设计讲清楚并收到反馈 —— 方向错了，代码写得再多也是白写。
 

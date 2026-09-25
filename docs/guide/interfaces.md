@@ -1,9 +1,9 @@
 # 接口契约：控制面与数据面
 
 ::: warning 当前状态
-M0 初版。契约已经写成 Rust trait 和类型，放在
-[`crates/meshora-dataplane`](https://github.com/Kerxs/meshora/tree/main/crates/meshora-dataplane)，带单元测试，
-但**还没有任何实现**。boringtun 数据面是 M1 的事，到时这份契约还会改。
+契约已经写成 Rust trait 和类型，放在
+[`crates/meshora-dataplane`](https://github.com/Kerxs/meshora/tree/main/crates/meshora-dataplane)，
+并且有了第一个实现：M1 正在写的 boringtun 数据面。控制面那一侧还没写，契约还会改。
 :::
 
 [架构](/guide/architecture)一页把系统分成了控制面和数据面两层。这一页把两层之间的那条缝写死：
@@ -133,9 +133,9 @@ WireGuard 部分的判定和 boringtun 自己解析报文的规则一致。有�
 
 | crate | 职责 | 现在 |
 | --- | --- | --- |
-| `meshora-types` | 共享词汇：节点身份 `NodeKey`、路径 `Path`。纯数据，不做 I/O | 已建 |
-| `meshora-dataplane` | 这份契约；M1 起在这里实现 boringtun 数据面 | 已建，只有契约 |
-| `meshora-tun` | 虚拟网卡：Windows 用 wintun，Linux 用 tun，macOS 用 utun。平台相关的 unsafe 代码集中在这里 | M1 |
+| `meshora-types` | 共享词汇：节点身份 `NodeKey` 和它的私钥、路径 `Path`。不做网络 I/O | 已建 |
+| `meshora-dataplane` | 这份契约，以及基于 boringtun 的实现：不做 I/O 的核心引擎、跑在 tokio 上的 UDP 驱动 | 已建 |
+| `meshora-tun` | 虚拟网卡：Windows 用 wintun，Linux 用 tun，macOS 用 utun。平台相关的 unsafe 代码集中在这里 | 已建：Linux 实测过，Windows 只编译过，macOS 还没有 |
 | `meshora-control` | 节点侧控制面：注册与认证、发现、端点探测、穿透、链路探测、选路 | M1 |
 | `meshora-proto` | 节点、协调服务、中继之间的线协议 | M1 |
 | `meshora-coord` | 协调服务（可自建）：注册、密钥分发、打洞对时 | M1 |
@@ -149,7 +149,7 @@ WireGuard 部分的判定和 boringtun 自己解析报文的规则一致。有�
 - **协调服务和中继不依赖数据面，也不依赖虚拟网卡**：服务端既不需要 WireGuard，也不需要虚拟网卡
 - **`meshora-types` 不依赖任何 Meshora crate**，它在依赖图的最底层
 
-workspace 里现在只有前两个 crate。其余的等各自有代码可写时再建 —— 空壳 crate 只会让仓库看起来比实际进度多。
+workspace 里现在有前三个 crate。其余的等各自有代码可写时再建 —— 空壳 crate 只会让仓库看起来比实际进度多。
 
 ## 还没定的
 

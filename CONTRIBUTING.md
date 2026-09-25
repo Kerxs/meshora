@@ -33,7 +33,7 @@ npm run docs:build    # 必须零警告通过（VitePress 会检查死链）
 
 ## 关于代码
 
-M0 的接口契约在 `crates/` 下。需要 [rustup](https://rustup.rs)，工具链版本固定在 `rust-toolchain.toml` 里，
+Rust 代码在 `crates/` 下。需要 [rustup](https://rustup.rs)，工具链版本固定在 `rust-toolchain.toml` 里，
 第一次跑 cargo 时会自动装上。提交前跑一遍，CI 也会跑它们（另外还检查文档）：
 
 ```bash
@@ -42,5 +42,5 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-wintun、交叉编译这些平台相关的说明，等 [M1](https://kerxs.github.io/meshora/guide/roadmap) 开始写数据面时再补。
-在那之前，讨论契约比写新代码有用。
+真正创建虚拟网卡的测试需要 root（Linux 上是 `CAP_NET_ADMIN`），默认跳过：`cargo test -p meshora-tun -- --ignored`。
+Windows 上的安装说明等 [M1](https://kerxs.github.io/meshora/guide/roadmap) 能跑起来再补。

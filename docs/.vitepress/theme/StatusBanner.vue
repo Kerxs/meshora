@@ -1,7 +1,7 @@
 <template>
   <p class="status-chip">
     <span class="pulse" />
-    Pre-alpha · 设计阶段，暂无可用版本
+    Pre-alpha · 开发中，暂无可用版本
   </p>
 </template>
 

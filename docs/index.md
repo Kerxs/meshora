@@ -91,7 +91,7 @@ Meshora 和 Tailscale 架构上高度相似，这没必要遮掩 —— 同样�
 <HomeSection title="常见问题" more="/guide/faq" moreText="更多问题">
 
 **现在能用吗？**
-不能。没有可运行的网络引擎，也没有可下载的二进制。仓库里除了官网和设计文档，只有定义接口的 Rust 代码，它不收发任何报文。
+不能。还没有能运行的程序，也没有可下载的二进制。M1 正在做：数据面和虚拟网卡已经有了能通过测试的代码，控制面还没开始写。
 
 **中继能看到我的数据吗？**
 看不到内容 —— 转发的是已经用 WireGuard 加密的报文，改了也会在对端被丢弃。
@@ -107,12 +107,12 @@ Meshora 和 Tailscale 架构上高度相似，这没必要遮掩 —— 同样�
 
 <HomeSection eyebrow="Pre-alpha" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
 
-**项目处于设计阶段，还没有可运行的网络引擎，也没有可下载的二进制。**
+**M1 开发中，还没有能运行的程序，也没有可下载的二进制。**
 
-现在这个仓库里有三样东西：这个站点、它承载的设计文档，以及控制面与数据面之间的[接口契约](/guide/interfaces) ——
-一份只定义接口、不收发任何报文的 Rust 代码。核心引擎计划用 Rust 实现，
-数据面采用 WireGuard 协议（[boringtun](https://github.com/cloudflare/boringtun) 用户态实现），
-控制面自研，首个目标平台是 Windows。
+核心引擎用 Rust 写，数据面采用 WireGuard 协议（[boringtun](https://github.com/cloudflare/boringtun) 用户态实现），
+控制面自研，首个目标平台是 Windows。已经有的：控制面与数据面之间的[接口契约](/guide/interfaces)、
+在测试里能完成真实握手和加解密的数据面、在 Linux 上实测过的虚拟网卡。
+还没有的：控制面、中继、把它们接起来的守护进程。
 
 先做官网是因为这个阶段最需要的是把设计讲清楚并收到反馈 —— 方向错了，代码写得再多也是白写。
 
