@@ -166,7 +166,8 @@ sudo meshorad up --key node.key --coord <服务器地址>:7443 --coord-key <协�
 只在 CI 的 Windows 虚拟机里跑过，还没在真机上试过。节点的步骤和上面一样，另外：
 
 - 从 [wintun.net](https://www.wintun.net) 下载 wintun 0.14.1，把压缩包里对应 CPU 架构的 `wintun.dll`
-  （一般是 `bin/amd64/`）放到 `meshorad.exe` 旁边。meshorad 只从自己所在的目录加载它，不走系统搜索路径
+  （一般是 `bin/amd64/`）放到 `meshorad.exe` 旁边。meshorad 只从自己所在的目录加载它，不走系统搜索路径。
+  所以这个目录要只有管理员能写，否则别人放一个假的 `wintun.dll` 进去就能拿到管理员权限
 - 在"以管理员身份运行"的终端里启动 `meshorad up`（不用 `sudo`）
 - Windows 上不检查私钥文件的权限，自己把它放在别人读不到的地方
 - Windows 防火墙默认挡进来的 ping：从别的节点 ping 这台 Windows，要先在防火墙里放行 ICMPv4 回显请求。

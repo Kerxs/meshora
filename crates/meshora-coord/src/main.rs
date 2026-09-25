@@ -31,7 +31,8 @@ const USAGE: &str = "\
   --probe-public <地址:端口> 节点从外面访问探测端点用的地址，默认同 --probe
   --relay-listen <地址:端口> 在同一个进程里跑一个中继，监听这个 TCP 地址
   --relay-public <地址:端口> 节点访问这个中继用的地址，默认同 --relay-listen
-  --relay <公钥>@<地址:端口> 告诉节点的外部中继，可以写多次
+  --relay <公钥>@<地址:端口> 告诉节点的外部中继，可以写多次。目前节点只用排第一的那个
+                            （有 --relay-listen 时就是同一进程里的中继）
   -v, --verbose             打出调试日志
 
   meshora-coord pubkey      从标准输入读私钥，打出公钥（告诉节点用）

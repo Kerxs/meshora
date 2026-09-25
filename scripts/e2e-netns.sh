@@ -23,7 +23,8 @@
 # 场景（overlay 地址按名单顺序分配：A 是 100.64.0.1，B 是 100.64.0.2）：
 #   1. 同一网段：走直连
 #   2. 同一网段，--relay-only：全程经中继
-#   3. 两边都是普通 NAT（外部端口不随目标变）：打洞成功，走直连
+#   3. 两边都是普通 NAT（外部端口不随目标变）：打洞成功，走直连。
+#      然后掐断两个 NAT 之间的 UDP：回落中继；恢复之后切回直连
 #   4. B 在对称 NAT 后面（每个目标换一个外部端口）：打洞打不通，经中继照样通
 #
 # 需要 root（建命名空间和虚拟网卡）、iproute2、iptables、ping。先编译：
@@ -164,15 +165,9 @@ last_path_detail() {
   grep "切换路径" "$WORK/$1.log" | tail -n 1 | sed 's/.*path=//' || true
 }
 
-# run_scenario <名字> <期望的路径：Direct 或 Relay> <观察多少秒> [meshorad 的额外参数...]
-#
-# 中继先行，所以隧道总是很快就通。之后的观察期里：期望直连的，要在期限内等到两边都切到直连；
-# 期望中继的，要整个观察期都没切走 —— 观察期得长过一轮打洞，否则"没切走"说明不了什么。
-run_scenario() {
-  local name=$1 expected=$2 window=$3
-  shift 3
-  echo "== $name"
-
+# 启动协调服务（顺带跑中继）和两边的 meshorad，等隧道通。中继先行，所以不管最后走哪条路，
+# 隧道都应该很快就通。参数原样传给两边的 meshorad
+start_nodes() {
   ip netns exec "$COORD_NS" "$BIN/meshora-coord" --key "$WORK/coord.key" \
     --listen "$COORD_IP:7443" --probe "$COORD_IP:7443" --relay-listen "$COORD_IP:7444" \
     --node "$A" --node "$B" > "$WORK/coord.log" 2>&1 &
@@ -185,58 +180,128 @@ run_scenario() {
     PIDS+=($!)
   done
 
-  local up=no
   for _ in $(seq 1 20); do
     if ip netns exec msh-e2e-a ping -c 1 -W 1 100.64.0.2 > /dev/null 2>&1; then
-      up=yes
-      break
+      return 0
     fi
     sleep 1
   done
-  [ "$up" = yes ] || fail "$name：20 秒内没 ping 通"
+  fail "$SCENARIO：20 秒内没 ping 通"
+}
 
-  local deadline=$((SECONDS + window)) path_a path_b
+show_paths() {
+  echo "A 选的路径：$(last_path_detail a)"
+  echo "B 选的路径：$(last_path_detail b)"
+}
+
+# wait_for_path <Direct 或 Relay> <最多等几秒>：等到两边最后选定的路径都是这种
+wait_for_path() {
+  local expected=$1 timeout=$2 started=$SECONDS path_a path_b
   while :; do
     path_a=$(last_path a)
     path_b=$(last_path b)
-    if [ "$expected" = Direct ] && [ "$path_a" = Direct ] && [ "$path_b" = Direct ]; then
+    if [ "$path_a" = "$expected" ] && [ "$path_b" = "$expected" ]; then
       break
     fi
-    if [ "$expected" = Relay ] && { [ "$path_a" != Relay ] || [ "$path_b" != Relay ]; }; then
-      fail "$name：应该一直走中继，A 选了 ${path_a:-无}，B 选了 ${path_b:-无}"
-    fi
-    if [ "$SECONDS" -ge "$deadline" ]; then
-      [ "$expected" = Relay ] && break
-      fail "$name：$window 秒内没都切到直连，A 选了 ${path_a:-无}，B 选了 ${path_b:-无}"
+    if [ $((SECONDS - started)) -ge "$timeout" ]; then
+      fail "$SCENARIO：$timeout 秒内两边没都切到 $expected，A 选了 ${path_a:-无}，B 选了 ${path_b:-无}"
     fi
     sleep 1
   done
-  echo "A 选的路径：$(last_path_detail a)"
-  echo "B 选的路径：$(last_path_detail b)"
+  echo "用了约 $((SECONDS - started)) 秒，两边都是 $expected"
+  show_paths
+}
 
-  ip netns exec msh-e2e-a ping -c 3 -W 2 100.64.0.2 || fail "$name：A → B 丢包"
-  ip netns exec msh-e2e-b ping -c 3 -W 2 100.64.0.1 || fail "$name：B → A 丢包"
-
-  # ping 的这几秒里也没换路径
-  for side in a b; do
-    [ "$(last_path "$side")" = "$expected" ] \
-      || fail "$name：$side 最后选定的路径不是 $expected"
+# hold_path <Direct 或 Relay> <几秒>：这段时间里两边一直是这种路径。
+# 用来确认"没切走"，所以时长得长过一轮打洞（探测 5 秒一轮，打洞请求 10 秒一次）
+hold_path() {
+  local expected=$1 duration=$2 started=$SECONDS
+  while [ $((SECONDS - started)) -lt "$duration" ]; do
+    assert_path "$expected"
+    sleep 1
   done
-  echo "== $name：通了，路径是 $expected"
+  show_paths
+}
+
+assert_path() {
+  local side path
+  for side in a b; do
+    path=$(last_path "$side")
+    [ "$path" = "$1" ] || fail "$SCENARIO：$side 应该走 $1，实际是 ${path:-无}"
+  done
+}
+
+ping_both() {
+  ip netns exec msh-e2e-a ping -c 3 -W 2 100.64.0.2 || fail "$SCENARIO：A → B 丢包"
+  ip netns exec msh-e2e-b ping -c 3 -W 2 100.64.0.1 || fail "$SCENARIO：B → A 丢包"
+}
+
+# 在 B 的 NAT 路由器上掐断（或恢复）两边公网地址之间的 UDP：直连断了，
+# 到协调服务和中继的连接不受影响
+direct_link() {
+  local op
+  case $1 in
+    cut) op=-I ;;
+    restore) op=-D ;;
+  esac
+  for match in -s -d; do
+    ip netns exec msh-e2e-nat-b iptables "$op" FORWARD -p udp "$match" 192.0.2.2 -j DROP
+  done
+}
+
+begin() {
+  SCENARIO=$1
+  echo "== $SCENARIO"
+}
+
+pass() {
+  echo "== $SCENARIO：通过"
   stop_all
 }
 
 setup_lan
-run_scenario "同一网段，直连" Direct 20
-run_scenario "同一网段，只走中继" Relay 0 --relay-only
-del_namespaces
 
+begin "同一网段：走直连"
+start_nodes
+wait_for_path Direct 20
+ping_both
+assert_path Direct
+pass
+
+begin "同一网段，--relay-only：全程经中继"
+start_nodes --relay-only
+wait_for_path Relay 5
+ping_both
+assert_path Relay
+pass
+
+del_namespaces
 setup_nat cone
-run_scenario "两边都是普通 NAT，打洞" Direct 30
-del_namespaces
 
+begin "两边都是普通 NAT：打洞成功走直连；直连断了回落中继，恢复后切回直连"
+start_nodes
+wait_for_path Direct 30
+ping_both
+echo "掐断两个 NAT 之间的 UDP"
+direct_link cut
+wait_for_path Relay 40
+ping_both
+echo "恢复两个 NAT 之间的 UDP"
+direct_link restore
+wait_for_path Direct 40
+ping_both
+assert_path Direct
+pass
+
+del_namespaces
 setup_nat symmetric
-run_scenario "B 在对称 NAT 后面，回退中继" Relay 20
-del_namespaces
 
+begin "B 在对称 NAT 后面：打洞打不通，经中继照样通"
+start_nodes
+hold_path Relay 20
+ping_both
+assert_path Relay
+pass
+
+del_namespaces
 echo "全部通过"
