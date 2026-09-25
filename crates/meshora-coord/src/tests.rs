@@ -235,6 +235,36 @@ async fn call_me_maybe_is_forwarded_with_the_callers_endpoints() {
     );
 }
 
+/// 同一个来源开一堆连接、光连不握手，占不走别人的名额，只占它自己的
+#[tokio::test]
+async fn one_source_can_only_hold_a_few_handshakes() {
+    let a = NodeSecret::generate();
+    let coord = start(&[&a]).await;
+
+    let mut idle = Vec::new();
+    for _ in 0..PENDING_PER_SOURCE {
+        idle.push(TcpStream::connect(coord.addr).await.unwrap());
+    }
+    // 等服务端把它们都接下来、占上名额
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // 同一个来源再来一条：连上就被断开，握手失败
+    let tcp = TcpStream::connect(coord.addr).await.unwrap();
+    let refused = tokio::time::timeout(
+        WAIT,
+        NoiseStream::connect(tcp, Channel::Control, &a, &coord.key),
+    )
+    .await
+    .expect("应该马上被断开");
+    assert!(refused.is_err());
+
+    // 占着的连接一放，名额就回来了
+    drop(idle);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_client, welcome, _) = join(&coord, &a).await;
+    assert!(matches!(welcome, ServerMessage::Welcome { .. }));
+}
+
 #[tokio::test]
 async fn nothing_happens_before_the_first_encrypted_message() {
     // A 完成了握手但不发 Hello（就像一个被重放的握手包）：它不算上线，

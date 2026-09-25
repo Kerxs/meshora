@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use meshora_proto::admission::Admission;
 use meshora_proto::noise::{Channel, NoiseStream};
 use meshora_proto::relay::{ClientFrame, ServerFrame};
 use meshora_types::{NodeKey, NodeSecret};
@@ -29,6 +30,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_MESSAGE_MAX: usize = 64;
 /// 接受连接出错（比如文件描述符用完）之后，等多久再接。
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+/// 同一个来源同时最多几条连接在握手，见 [`Admission`]。
+const PENDING_PER_SOURCE: usize = 16;
 /// 多久没收到节点的任何帧就断开。节点每 30 秒发一次保活。
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// 发往一个节点的帧队列。满了就丢，和 UDP 一样。
@@ -52,6 +55,7 @@ struct Shared {
     nodes: Vec<NodeKey>,
     clients: Mutex<HashMap<NodeKey, Client>>,
     next_id: AtomicU64,
+    admission: Arc<Admission>,
 }
 
 impl Shared {
@@ -67,6 +71,7 @@ pub async fn serve(config: Config, listener: TcpListener) -> io::Result<()> {
         nodes: config.nodes,
         clients: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(0),
+        admission: Admission::new(PENDING_PER_SOURCE),
     });
     info!(key = %shared.secret.public_key(), "中继启动");
     loop {
@@ -85,6 +90,11 @@ pub async fn serve(config: Config, listener: TcpListener) -> io::Result<()> {
 }
 
 async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
+    // 名额一直占到确认对方在名单里、打过招呼为止
+    let Some(pending) = shared.admission.admit(from.ip()) else {
+        debug!(%from, "这个来源同时在握手的连接太多，断开");
+        return;
+    };
     let _ = tcp.set_nodelay(true);
     let stream = match tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -115,6 +125,8 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     if hello != Ok(ClientFrame::Hello) {
         return;
     }
+
+    drop(pending);
 
     let (tx, mut rx) = mpsc::channel(QUEUE);
     let id = shared.next_id.fetch_add(1, Ordering::Relaxed);

@@ -11,7 +11,10 @@
 //! 做域分离：一种协议里的消息，拿到另一种协议里解不开。
 //!
 //! 编解码是手写的（[`codec`]）：进来的都是不可信输入，每一次读都查边界。
+//!
+//! 接受 Noise 连接的服务端（协调服务、中继）另外用 [`admission`] 限制同一个来源同时在握手的连接数。
 
+pub mod admission;
 pub mod codec;
 pub mod control;
 pub mod disco;

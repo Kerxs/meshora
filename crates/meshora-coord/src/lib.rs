@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use ipnet::Ipv4Net;
+use meshora_proto::admission::Admission;
 use meshora_proto::control::{ClientMessage, PeerInfo, RelayInfo, ServerMessage};
 use meshora_proto::disco::{self, DiscoMessage};
 use meshora_proto::noise::{Channel, NoiseStream};
@@ -35,6 +36,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_MESSAGE_MAX: usize = 64;
 /// 接受连接出错（比如文件描述符用完）之后，等多久再接。
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+/// 同一个来源同时最多几条连接在握手，见 [`Admission`]。
+const PENDING_PER_SOURCE: usize = 16;
 /// 多久没收到节点的任何消息就断开。节点每 30 秒发一次保活。
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// 一个节点最多上报多少个端点。端点会被别的节点拿去发探测报文，不设上限就成了放大器。
@@ -88,6 +91,7 @@ struct Shared {
     relays: Vec<RelayInfo>,
     state: Mutex<State>,
     next_conn: AtomicU64,
+    admission: Arc<Admission>,
 }
 
 impl Shared {
@@ -175,6 +179,7 @@ pub async fn serve(
         relays: config.relays,
         state: Mutex::new(State::default()),
         next_conn: AtomicU64::new(0),
+        admission: Admission::new(PENDING_PER_SOURCE),
     });
     info!(
         key = %shared.secret.public_key(),
@@ -202,6 +207,11 @@ pub async fn serve(
 }
 
 async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
+    // 名额一直占到确认对方在名单里、打过招呼为止
+    let Some(pending) = shared.admission.admit(from.ip()) else {
+        debug!(%from, "这个来源同时在握手的连接太多，断开");
+        return;
+    };
     let _ = tcp.set_nodelay(true);
     let stream = match tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -244,6 +254,8 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
             .await;
         return;
     };
+
+    drop(pending);
 
     let (tx, mut rx) = mpsc::channel(QUEUE);
     let net_map = Arc::new(Notify::new());
