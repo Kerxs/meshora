@@ -14,9 +14,12 @@ use std::time::{Duration, Instant};
 use meshora_types::Path;
 
 /// 每个候选多久探测一次。
-pub const PING_INTERVAL: Duration = Duration::from_secs(5);
-/// 多久之内收到过 Pong 才算通：三次探测的窗口。
-pub const FRESH: Duration = Duration::from_secs(15);
+pub const PING_INTERVAL: Duration = Duration::from_secs(3);
+/// 多久之内收到过 Pong 才算通。比两轮探测稍长：丢一个 Pong 不至于切走，连丢两个就算断 ——
+/// 直连断了，最多这么久就回落中继，这段时间里的报文会丢。
+///
+/// 取值参考 Tailscale（心跳 3 秒，信任 6.5 秒）。再短就容易在丢包的链路上来回切
+pub const FRESH: Duration = Duration::from_millis(6500);
 /// 学来的候选多久没通就忘掉。
 pub const LEARNED_TTL: Duration = Duration::from_secs(60);
 

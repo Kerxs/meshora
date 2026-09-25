@@ -213,7 +213,7 @@ wait_for_path() {
 }
 
 # hold_path <Direct 或 Relay> <几秒>：这段时间里两边一直是这种路径。
-# 用来确认"没切走"，所以时长得长过一轮打洞（探测 5 秒一轮，打洞请求 10 秒一次）
+# 用来确认"没切走"，所以时长得长过一轮打洞（探测 3 秒一轮，打洞请求 10 秒一次）
 hold_path() {
   local expected=$1 duration=$2 started=$SECONDS
   while [ $((SECONDS - started)) -lt "$duration" ]; do
@@ -254,8 +254,12 @@ begin() {
   echo "== $SCENARIO"
 }
 
+# 顺带报一下两边各切换了几次路径：来回抖动的话这个数会变大
 pass() {
-  echo "== $SCENARIO：通过"
+  local a b
+  a=$(grep -c "切换路径" "$WORK/a.log" || true)
+  b=$(grep -c "切换路径" "$WORK/b.log" || true)
+  echo "== $SCENARIO：通过（切换路径 A $a 次，B $b 次）"
   stop_all
 }
 
