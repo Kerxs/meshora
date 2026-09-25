@@ -1,6 +1,6 @@
 [package]
 name = "meshora-dataplane"
-description = "Meshora 数据面：控制面与数据面之间的接口契约（M0），M1 起在这里实现 boringtun 数据面"
+description = "控制面与数据面之间的接口契约：DataPlane trait、它收发的类型、共享 socket 上的分流规则"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,11 +10,6 @@ publish.workspace = true
 [dependencies]
 meshora-types.workspace = true
 ipnet.workspace = true
-boringtun.workspace = true
-x25519-dalek.workspace = true
-rand_core.workspace = true
-tokio.workspace = true
-tracing.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "meshora-wg"
+description = "Meshora 的 WireGuard 数据面：基于 boringtun 实现 meshora-dataplane 的契约"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+meshora-types.workspace = true
+meshora-dataplane.workspace = true
+boringtun.workspace = true
+x25519-dalek.workspace = true
+rand_core.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+ipnet.workspace = true
+
+[lints]
+workspace = true

@@ -16,7 +16,9 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::engine::{Action, Engine, Link, Transmit};
-use crate::{DataPlane, DataPlaneError, DatagramKind, EventSink, PeerSet, PeerStatus, classify};
+use meshora_dataplane::{
+    DataPlane, DataPlaneError, DatagramKind, EventSink, PeerSet, PeerStatus, classify,
+};
 
 /// 定时器的间隔。boringtun 的计时精度是秒级，250 毫秒足够。
 const TICK: Duration = Duration::from_millis(250);
@@ -220,7 +222,7 @@ mod tests {
 
     use super::*;
     use crate::testutil::ipv4;
-    use crate::{CONTROL_MAGIC, Event, PeerConfig};
+    use meshora_dataplane::{CONTROL_MAGIC, Event, PeerConfig};
 
     const WAIT: Duration = Duration::from_secs(5);
 

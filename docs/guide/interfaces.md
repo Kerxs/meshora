@@ -3,7 +3,7 @@
 ::: warning 当前状态
 契约已经写成 Rust trait 和类型，放在
 [`crates/meshora-dataplane`](https://github.com/Kerxs/meshora/tree/main/crates/meshora-dataplane)，
-并且有了第一个实现：M1 正在写的 boringtun 数据面。控制面那一侧还没写，契约还会改。
+并且有了第一个实现：M1 正在写的 boringtun 数据面（`crates/meshora-wg`）。控制面那一侧还没写，契约还会改。
 :::
 
 [架构](/guide/architecture)一页把系统分成了控制面和数据面两层。这一页把两层之间的那条缝写死：
@@ -133,23 +133,25 @@ WireGuard 部分的判定和 boringtun 自己解析报文的规则一致。有�
 
 | crate | 职责 | 现在 |
 | --- | --- | --- |
-| `meshora-types` | 共享词汇：节点身份 `NodeKey` 和它的私钥、路径 `Path`。不做网络 I/O | 已建 |
-| `meshora-dataplane` | 这份契约，以及基于 boringtun 的实现：不做 I/O 的核心引擎、跑在 tokio 上的 UDP 驱动 | 已建 |
+| `meshora-types` | 共享词汇：节点身份 `NodeKey` 和它的私钥、路径 `Path`、控制报文的魔数。不做网络 I/O | 已建 |
+| `meshora-dataplane` | 这份契约：`DataPlane` trait、它收发的类型、共享 socket 上的分流规则。不依赖 boringtun | 已建 |
+| `meshora-wg` | 数据面的实现：基于 boringtun 的、不做 I/O 的核心引擎，加上跑在 tokio 上的 UDP 驱动 | 已建 |
 | `meshora-tun` | 虚拟网卡：Windows 用 wintun，Linux 用 tun，macOS 用 utun。平台相关的 unsafe 代码集中在这里 | 已建：Linux 实测过，Windows 只编译过，macOS 还没有 |
+| `meshora-proto` | 节点、协调服务、中继之间的线协议：编解码、Noise 连接、节点间控制报文 | 已建 |
 | `meshora-control` | 节点侧控制面：注册与认证、发现、端点探测、穿透、链路探测、选路 | M1 |
-| `meshora-proto` | 节点、协调服务、中继之间的线协议 | M1 |
 | `meshora-coord` | 协调服务（可自建）：注册、密钥分发、打洞对时 | M1 |
 | `meshora-relay` | 中继服务（可自建）：转发密文 | M1 |
 | `meshorad` | 节点守护进程：把控制面、数据面、虚拟网卡接起来 | M1 |
 
 依赖关系有三条规矩：
 
-- **`meshora-dataplane` 和 `meshora-control` 互不依赖**，只有 `meshorad` 把两边接起来。
-  这份契约是它们唯一的接触面
+- **控制面（`meshora-control`）和数据面的实现（`meshora-wg`）互不依赖**，两边都只依赖契约
+  `meshora-dataplane`，由 `meshorad` 接起来。契约单独成一个 crate 正是为了这个：
+  放在实现里的话，控制面为了用上 trait，得把整个 WireGuard 实现都拖进来
 - **协调服务和中继不依赖数据面，也不依赖虚拟网卡**：服务端既不需要 WireGuard，也不需要虚拟网卡
 - **`meshora-types` 不依赖任何 Meshora crate**，它在依赖图的最底层
 
-workspace 里现在有前三个 crate。其余的等各自有代码可写时再建 —— 空壳 crate 只会让仓库看起来比实际进度多。
+表里标"已建"的 crate 都在 workspace 里了。其余的等各自有代码可写时再建 —— 空壳 crate 只会让仓库看起来比实际进度多。
 
 ## 还没定的
 

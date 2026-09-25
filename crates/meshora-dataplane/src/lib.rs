@@ -1,13 +1,10 @@
-//! 数据面，以及控制面与数据面之间的接口契约。
+//! 控制面与数据面之间的接口契约。
 //!
-//! # 现在有什么
+//! 这里只有契约：[`DataPlane`] trait、它收发的类型，以及共享 socket 上的分流规则 [`classify`]。
+//! 不依赖 boringtun，也不做 I/O。实现在 meshora-wg（基于 boringtun）。
 //!
-//! - **契约**（M0）：[`DataPlane`] trait、它收发的类型，以及共享 socket 上的分流规则 [`classify`]
-//! - **核心**（M1）：[`engine::Engine`]，基于 boringtun 的、不做 I/O 的状态机。
-//!   契约的不变量在这一层落地，所以不需要真的网络就能完整测试
-//! - **驱动**（M1）：[`userspace::UserspaceDataPlane`]，把核心接到 tokio 的 UDP socket 上，
-//!   虚拟网卡那一侧只是一对 channel
-//! - **还没有**：真正的虚拟网卡（meshora-tun）和中继客户端，M1 正在做
+//! 为什么单独一个 crate：控制面和数据面的实现互不依赖，只依赖这份契约 ——
+//! 否则控制面为了用上 trait，得把整个 WireGuard 实现都拖进来。
 //!
 //! # 边界
 //!
@@ -35,10 +32,6 @@
 
 mod config;
 mod datagram;
-pub mod engine;
-#[cfg(test)]
-mod testutil;
-pub mod userspace;
 
 use std::error::Error;
 use std::fmt;

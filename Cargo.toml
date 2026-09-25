@@ -13,6 +13,10 @@ publish = false
 # 依赖版本在这里统一管。每加一个都要说得出理由 —— 供应链是威胁模型里的一项。
 [workspace.dependencies]
 meshora-types = { path = "crates/meshora-types" }
+meshora-dataplane = { path = "crates/meshora-dataplane" }
+meshora-proto = { path = "crates/meshora-proto" }
+meshora-wg = { path = "crates/meshora-wg" }
+meshora-tun = { path = "crates/meshora-tun" }
 
 # 和 boringtun 用同一个版本，免得依赖树里出现两份
 base64 = "0.22"

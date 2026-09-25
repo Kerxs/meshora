@@ -339,13 +339,8 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 name = "meshora-dataplane"
 version = "0.0.0"
 dependencies = [
- "boringtun",
  "ipnet",
  "meshora-types",
- "rand_core",
- "tokio",
- "tracing",
- "x25519-dalek",
 ]
 
 [[package]]
@@ -374,6 +369,20 @@ dependencies = [
  "base64",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "meshora-wg"
+version = "0.0.0"
+dependencies = [
+ "boringtun",
+ "ipnet",
+ "meshora-dataplane",
+ "meshora-types",
+ "rand_core",
+ "tokio",
+ "tracing",
+ "x25519-dalek",
 ]
 
 [[package]]

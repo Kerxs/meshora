@@ -16,7 +16,9 @@ use meshora_types::{NodeKey, NodeSecret, Path};
 use rand_core::{OsRng, RngCore};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::{DataPlaneError, DatagramKind, Event, PeerSet, PeerStatus, WgMessage, classify};
+use meshora_dataplane::{
+    DataPlaneError, DatagramKind, Event, PeerConfig, PeerSet, PeerStatus, WgMessage, classify,
+};
 
 /// 每秒最多处理多少个握手报文，超过就要求对端先用 cookie 证明自己的地址。
 ///
@@ -154,7 +156,7 @@ impl Engine {
         self.local
     }
 
-    /// 见 [`DataPlane::apply`](crate::DataPlane::apply)：声明式、原子，保留仍在集合里的 peer 的路径和会话。
+    /// 见 [`DataPlane::apply`](meshora_dataplane::DataPlane::apply)：声明式、原子，保留仍在集合里的 peer 的路径和会话。
     pub fn apply(&mut self, peers: &PeerSet) -> Result<(), DataPlaneError> {
         if peers.get(&self.local).is_some() {
             return Err(DataPlaneError::SelfPeer);
@@ -203,7 +205,7 @@ impl Engine {
         Ok(())
     }
 
-    /// 见 [`DataPlane::set_path`](crate::DataPlane::set_path)。
+    /// 见 [`DataPlane::set_path`](meshora_dataplane::DataPlane::set_path)。
     ///
     /// peer 第一次有了路径、又还没有会话时，立刻发起握手，不必等 WireGuard 5 秒一次的重传 ——
     /// "中继先行"要的就是马上能通。
@@ -366,7 +368,7 @@ impl Engine {
     }
 
     /// 解密出来的 IP 报文，源地址必须落在这个 peer 的网段里（cryptokey routing 的另一半）
-    fn deliver(config: &crate::PeerConfig, packet: &[u8], src: IpAddr, actions: &mut Vec<Action>) {
+    fn deliver(config: &PeerConfig, packet: &[u8], src: IpAddr, actions: &mut Vec<Action>) {
         if config.allowed_ips.iter().any(|net| net.contains(&src)) {
             actions.push(Action::WriteTun(packet.to_vec()));
         }
@@ -450,7 +452,7 @@ mod tests {
 
     use super::*;
     use crate::testutil::ipv4;
-    use crate::{CONTROL_MAGIC, PeerConfig};
+    use meshora_dataplane::CONTROL_MAGIC;
 
     /// 一个节点：引擎、它的 overlay 地址、它在测试网络里的 UDP 地址
     struct Node {
