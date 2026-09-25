@@ -71,6 +71,14 @@ jobs:
           }
           Copy-Item $dll target\debug\deps\
           Copy-Item $dll target\debug\
+      # 真机测试里另一个节点会主动 ping 过来。Windows 防火墙默认挡进来的 ping：
+      # 这条就是 README 让用户执行的命令，只是网段换成测试用的 198.18.0.0/15。
+      # 先打出防火墙各配置文件的开关状态，看得出这条规则是不是真起了作用
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-NetFirewallProfile | Format-Table Name, Enabled
+          New-NetFirewallRule -DisplayName 'Meshora: allow ping' -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -RemoteAddress 198.18.0.0/15 -Action Allow | Out-Null
       # 真正创建虚拟网卡的测试需要管理员权限：虚拟网卡本身，以及真的 meshorad 和测试进程里的
       # 节点之间经隧道收发。Linux 上编译仍用普通用户，只有运行测试时经 sudo；
       # Windows 的 runner 本来就以管理员身份运行

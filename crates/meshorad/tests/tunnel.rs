@@ -1,9 +1,14 @@
 //! 守护进程的真机测试：一边是真的 meshorad（真的虚拟网卡），另一边是跑在测试进程里的节点
-//! （虚拟网卡用 channel 代替，收到 UDP 报文就原样弹回去）。系统往对端的 overlay 地址发 UDP，
-//! 要能经加密隧道收到回应。直连和经中继各测一遍。
+//! （虚拟网卡用 channel 代替，收到 UDP 报文就原样弹回去）。两个方向各走一遍：
+//!
+//! - 系统往对端的 overlay 地址发 UDP，要能经加密隧道收到回应
+//! - 对端主动 ping 过来（系统的 overlay 地址），系统要能回应 —— 两台机器互相 ping 就是这样
+//!
+//! 直连和经中继各测一遍。
 //!
 //! 不用网络命名空间，所以 Linux 和 Windows 都能跑。需要管理员权限：Linux 上是 root；
-//! Windows 上是管理员，并且 wintun.dll 放在 meshorad.exe 旁边（`target/debug/`）。
+//! Windows 上是管理员，wintun.dll 放在 meshorad.exe 旁边（`target/debug/`），并且防火墙
+//! 放行来自 198.18.0.0/15 的 ping（Windows 默认挡进来的 ping，放行的命令见 CI 配置）。
 
 use std::fs::File;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -79,6 +84,47 @@ async fn start_coord(case: &Case, nodes: Vec<NodeKey>, relays: Vec<RelayInfo>) -
     Coord { addr, key }
 }
 
+fn checksum(data: &[u8]) -> u16 {
+    let mut sum: u32 = data
+        .chunks(2)
+        .map(|pair| u32::from(u16::from_be_bytes([pair[0], *pair.get(1).unwrap_or(&0)])))
+        .sum();
+    while sum > 0xffff {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+/// 从 src 到 dst 的 ping（ICMP echo request），校验和都算好 —— 系统会检查
+fn ping_packet(src: Ipv4Addr, dst: Ipv4Addr) -> Vec<u8> {
+    let mut icmp = vec![8, 0, 0, 0, 0x4d, 0x53, 0, 1];
+    icmp.extend_from_slice(b"meshora");
+    let sum = checksum(&icmp);
+    icmp[2..4].copy_from_slice(&sum.to_be_bytes());
+
+    let mut packet = vec![0u8; 20];
+    packet[0] = 0x45;
+    packet[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+    packet[8] = 64;
+    packet[9] = 1;
+    packet[12..16].copy_from_slice(&src.octets());
+    packet[16..20].copy_from_slice(&dst.octets());
+    let sum = checksum(&packet);
+    packet[10..12].copy_from_slice(&sum.to_be_bytes());
+    packet.extend_from_slice(&icmp);
+    packet
+}
+
+/// 是不是从 from 回给 to 的 ping 回应（ICMP echo reply）
+fn is_ping_reply(packet: &[u8], from: Ipv4Addr, to: Ipv4Addr) -> bool {
+    packet.len() >= 28
+        && packet[0] == 0x45
+        && packet[9] == 1
+        && packet[20] == 0
+        && packet[12..16] == from.octets()
+        && packet[16..20] == to.octets()
+}
+
 /// 把 UDP 报文原样弹回去：两端的地址和端口对调。
 ///
 /// 校验和不用重算：IP 首部和 UDP 的校验和都是按 16 位求和，对调两个加数不改变和
@@ -94,8 +140,16 @@ fn bounce(packet: &[u8]) -> Option<Vec<u8>> {
     Some(reply)
 }
 
+/// 测试进程里的节点。
+struct EchoNode {
+    /// 往它的"虚拟网卡"里写报文：它会经隧道发出去
+    tun_in: mpsc::Sender<Vec<u8>>,
+    /// 它收到的、不是 UDP 的报文（UDP 已经被弹回去了）
+    others: mpsc::Receiver<Vec<u8>>,
+}
+
 /// 测试进程里的节点：数据面是真的，虚拟网卡换成 channel，收到的 UDP 报文都弹回去
-async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) {
+async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) -> EchoNode {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let local_port = socket.local_addr().unwrap().port();
     let session = Session::connect(Config {
@@ -124,13 +178,21 @@ async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) {
     )
     .unwrap();
     tokio::spawn(session.run(Arc::new(dataplane), events_rx));
+    let (others_tx, others) = mpsc::channel(64);
+    let bounce_in = tun_in.clone();
     tokio::spawn(async move {
         while let Some(packet) = tun_out.recv().await {
-            if let Some(reply) = bounce(&packet) {
-                let _ = tun_in.send(reply).await;
+            match bounce(&packet) {
+                Some(reply) => {
+                    let _ = bounce_in.send(reply).await;
+                }
+                None => {
+                    let _ = others_tx.try_send(packet);
+                }
             }
         }
     });
+    EchoNode { tun_in, others }
 }
 
 /// 跑着的 meshorad。测试结束时杀掉；测试失败的话，顺带把它的日志打出来
@@ -230,7 +292,7 @@ async fn round_trip(case: Case) {
         Vec::new()
     };
     let coord = start_coord(&case, nodes, relays).await;
-    start_echo_node(&case, &echo_secret, &coord).await;
+    let mut echo_node = start_echo_node(&case, &echo_secret, &coord).await;
     let mut daemon = Daemon::start(&case, &daemon_secret, &coord);
 
     let socket = bind_overlay(case.daemon_ip(), &mut daemon).await;
@@ -251,6 +313,23 @@ async fn round_trip(case: Case) {
     .expect("经隧道等回应超时");
     assert_eq!(from, SocketAddr::V4(echo));
     assert_eq!(&buf[..len], b"through the tunnel");
+
+    // 反过来：对端主动 ping 这台机器的 overlay 地址，系统要回应
+    let ping = ping_packet(*echo.ip(), case.daemon_ip());
+    tokio::time::timeout(WAIT, async {
+        loop {
+            daemon.assert_running();
+            echo_node.tun_in.send(ping.clone()).await.unwrap();
+            let wait = Duration::from_millis(500);
+            while let Ok(Some(packet)) = tokio::time::timeout(wait, echo_node.others.recv()).await {
+                if is_ping_reply(&packet, case.daemon_ip(), *echo.ip()) {
+                    return;
+                }
+            }
+        }
+    })
+    .await
+    .expect("对端 ping 过来，一直没等到回应（Windows 上检查防火墙是否放行了 ping）");
 
     let expected = if case.relay_only { "Relay" } else { "Direct" };
     assert_eq!(daemon.last_path().as_deref(), Some(expected));
