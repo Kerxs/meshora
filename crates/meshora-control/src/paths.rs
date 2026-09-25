@@ -20,8 +20,15 @@ pub const PING_INTERVAL: Duration = Duration::from_secs(3);
 ///
 /// 取值参考 Tailscale（心跳 3 秒，信任 6.5 秒）。再短就容易在丢包的链路上来回切
 pub const FRESH: Duration = Duration::from_millis(6500);
-/// 学来的候选多久没通就忘掉。
+/// 学来的候选多久没通就忘掉 —— 前提是它回应过。
 pub const LEARNED_TTL: Duration = Duration::from_secs(60);
+/// 学来、但从没回应过的候选，多久就忘掉：只够探测两次（学到时一次，[`PING_INTERVAL`] 后一次，
+/// 控制面按秒检查，第二次最多晚一秒）。
+///
+/// 学来的地址可能是伪造的：Ping 可以被录下来，换一个伪造的来源地址重放（它没有防重放）。
+/// 要是每学到一个就在 [`LEARNED_TTL`] 里一直探测，一个重放的报文就能换来我们向任意地址
+/// 发二十来个探测报文。真的对端会每一轮都再发 Ping 过来，学到的时刻随之刷新，不受影响
+pub const UNVERIFIED_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Default)]
 struct Candidate {
@@ -38,6 +45,17 @@ impl Candidate {
     fn fresh(&self, now: Instant) -> bool {
         self.last_pong
             .is_some_and(|pong| now.duration_since(pong) < FRESH)
+    }
+
+    /// 学来的候选还记不记得
+    fn remembered(&self, now: Instant) -> bool {
+        let ttl = if self.last_pong.is_some() {
+            LEARNED_TTL
+        } else {
+            UNVERIFIED_TTL
+        };
+        self.learned
+            .is_some_and(|learned| now.duration_since(learned) < ttl)
     }
 }
 
@@ -80,11 +98,7 @@ impl PeerPaths {
     /// 到时候该探测的候选，同时把它们记为"刚探测过"。顺带忘掉过期的学来候选。
     pub fn due_pings(&mut self, now: Instant) -> Vec<SocketAddr> {
         self.candidates.retain(|_, candidate| {
-            candidate.advertised
-                || candidate.fresh(now)
-                || candidate
-                    .learned
-                    .is_some_and(|learned| now.duration_since(learned) < LEARNED_TTL)
+            candidate.advertised || candidate.fresh(now) || candidate.remembered(now)
         });
         let mut due = Vec::new();
         for (addr, candidate) in &mut self.candidates {
@@ -213,18 +227,38 @@ mod tests {
     }
 
     #[test]
-    fn learned_candidates_are_probed_at_once_and_forgotten_later() {
+    fn an_unanswered_learned_candidate_gets_just_two_pings() {
         let now = Instant::now();
         let mut paths = PeerPaths::default();
         assert!(paths.learn(addr(5), now), "第一次学到");
         assert_eq!(paths.due_pings(now), [addr(5)]);
         assert!(!paths.learn(addr(5), now + MS), "探测过了就不算新");
 
-        // 一直没通，从最后一次学到它（now + 1ms）起 TTL 之后被忘掉
-        let later = now + MS + LEARNED_TTL;
-        assert_eq!(paths.due_pings(later - MS), [addr(5)], "还没到 TTL");
-        assert!(paths.due_pings(later).is_empty());
-        assert!(paths.learn(addr(5), later), "忘掉之后再学到又是新的");
+        // 从最后一次学到它（now + 1ms）起算：再探测一次，然后忘掉
+        assert_eq!(paths.due_pings(now + PING_INTERVAL), [addr(5)]);
+        let forgotten = now + MS + UNVERIFIED_TTL;
+        assert!(paths.due_pings(forgotten - MS).is_empty(), "两次探测之间");
+        assert!(paths.due_pings(forgotten).is_empty());
+        assert!(paths.learn(addr(5), forgotten), "忘掉之后再学到又是新的");
+    }
+
+    #[test]
+    fn a_learned_candidate_that_answered_is_kept_longer() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.learn(addr(5), now);
+        paths.due_pings(now);
+        paths.on_pong(addr(5), 10 * MS, now);
+
+        // 早就不"通"了，但回应过，所以按 LEARNED_TTL 记着，照常探测
+        let later = now + LEARNED_TTL - MS;
+        assert!(!paths.has_fresh(later));
+        assert_eq!(paths.due_pings(later), [addr(5)]);
+        assert!(
+            paths
+                .due_pings(now + LEARNED_TTL + PING_INTERVAL)
+                .is_empty()
+        );
     }
 
     #[test]
