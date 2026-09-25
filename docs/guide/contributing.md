@@ -71,6 +71,7 @@ cargo test --workspace
 
 - 真的创建虚拟网卡，真的 meshorad 和测试进程里的另一个节点经隧道收发：
   `cargo test -p meshora-tun -p meshorad -- --ignored`。Windows 上要先把 wintun.dll 放到
-  `target/debug/deps/` 和 `target/debug/`，CI 里怎么下载、核对见 `.github/workflows/rust.yml`
+  `target/debug/deps/` 和 `target/debug/`，并且防火墙放行来自 198.18.0.0/15 的 ping（测试里另一个节点会主动
+  ping 过来）。CI 里怎么下载、核对 wintun.dll，放行 ping 用的什么命令，都在 `.github/workflows/rust.yml`
 - 只在 Linux 上：用网络命名空间模拟几台机器和 NAT 路由器，真的 ping 一遍。先 `cargo build -p meshorad -p meshora-coord`，
   再 `sudo scripts/e2e-netns.sh target/debug`（需要 iproute2、iptables、ping）

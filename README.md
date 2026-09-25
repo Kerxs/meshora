@@ -132,46 +132,89 @@ cargo build -p meshorad -p meshora-coord
 sudo scripts/e2e-netns.sh target/debug
 ```
 
-真的用两台机器的话，先在每台机器上生成密钥，把公钥记下来：
+### 两台机器
 
-```bash
-meshorad genkey > node.key && chmod 600 node.key
-meshorad pubkey < node.key
-```
+两台要连起来的机器 A、B，外加一台两边都连得上的服务器跑协调服务（顺带跑一个中继）。
 
-再找一台两边都连得上的服务器跑协调服务（顺带跑一个中继）。它也要一把密钥，公钥要告诉节点：
+1. A、B 上各生成一把私钥。`genkey` 把私钥写进文件（已有的文件不覆盖），打出对应的公钥，记下来：
 
-```bash
-meshorad genkey > coord.key && chmod 600 coord.key
-meshora-coord pubkey < coord.key
-```
+   ```bash
+   meshorad genkey node.key
+   ```
 
-把节点的公钥写进名单，启动：
+2. 服务器上也生成一把，打出的公钥要告诉 A、B：
 
-```bash
-meshora-coord --key coord.key --listen 0.0.0.0:7443 \
-    --probe 0.0.0.0:7443 --probe-public <服务器地址>:7443 \
-    --relay-listen 0.0.0.0:7444 --relay-public <服务器地址>:7444 \
-    --node <节点A的公钥> --node <节点B的公钥>
-```
+   ```bash
+   meshorad genkey coord.key
+   ```
 
-每台机器上以 root 启动节点。overlay 地址按名单顺序分配：A 是 `100.64.0.1`，B 是 `100.64.0.2`：
+3. 服务器上启动协调服务，把 A、B 的公钥写进名单。它要对外开放 TCP 7443、UDP 7443、TCP 7444：
 
-```bash
-sudo meshorad up --key node.key --coord <服务器地址>:7443 --coord-key <协调服务的公钥>
-```
+   ```bash
+   meshora-coord --key coord.key --listen 0.0.0.0:7443 \
+       --probe 0.0.0.0:7443 --probe-public <服务器地址>:7443 \
+       --relay-listen 0.0.0.0:7444 --relay-public <服务器地址>:7444 \
+       --node <A 的公钥> --node <B 的公钥>
+   ```
 
-### Windows 上
+4. A、B 上以 root 启动节点。overlay 地址按名单顺序分配：A 是 `100.64.0.1`，B 是 `100.64.0.2`：
 
-只在 CI 的 Windows 虚拟机里跑过，还没在真机上试过。节点的步骤和上面一样，另外：
+   ```bash
+   sudo meshorad up --key node.key --coord <服务器地址>:7443 --coord-key <协调服务的公钥>
+   ```
 
-- 从 [wintun.net](https://www.wintun.net) 下载 wintun 0.14.1，把压缩包里对应 CPU 架构的 `wintun.dll`
-  （一般是 `bin/amd64/`）放到 `meshorad.exe` 旁边。meshorad 只从自己所在的目录加载它，不走系统搜索路径。
-  所以这个目录要只有管理员能写，否则别人放一个假的 `wintun.dll` 进去就能拿到管理员权限
-- 在"以管理员身份运行"的终端里启动 `meshorad up`（不用 `sudo`）
-- Windows 上不检查私钥文件的权限，自己把它放在别人读不到的地方
-- Windows 防火墙默认挡进来的 ping：从别的节点 ping 这台 Windows，要先在防火墙里放行 ICMPv4 回显请求。
-  从 Windows 往外 ping 不受影响
+然后 A 上 `ping 100.64.0.2`，B 上 `ping 100.64.0.1`。节点日志里的 `切换路径` 说明走的是哪条路：
+`path=Direct(...)` 是直连，`path=Relay {...}` 是经中继。
+
+### 两台 Windows 机器：M1 的验收
+
+M1 的目标是两台 Windows 机器经 Meshora 互通。**还没有人在真机上做过这一步** —— CI 的 Windows 虚拟机上
+跑通的是"一台机器，加上同一台机器里的另一个节点"。照下面做一遍、把结果告诉我们（开个 Issue 就行），
+M1 才算有了结论。协调服务照上一节在服务器上跑，下面是每台 Windows 机器上要做的：
+
+1. 编译。装 [rustup](https://rustup.rs) 和 Visual Studio 生成工具（勾选"使用 C++ 的桌面开发"），在仓库里：
+
+   ```powershell
+   cargo build --release -p meshorad
+   ```
+
+   程序在 `target\release\meshorad.exe`。
+
+2. 从 [wintun.net](https://www.wintun.net) 下载 wintun 0.14.1，核对哈希（CI 核对的也是这个值）：
+
+   ```powershell
+   (Get-FileHash .\wintun-0.14.1.zip).Hash
+   # 应为 07C256185D6EE3652E09FA55C0B673E2624B565E02C4B9091C79CA7D2F24EF51
+   ```
+
+   把压缩包里的 `wintun\bin\amd64\wintun.dll` 放到 `meshorad.exe` 旁边。meshorad 只从自己所在的目录加载它，
+   不走系统搜索路径 —— 所以这个目录要只有管理员能写，否则别人放一个假的 `wintun.dll` 进去就能拿到管理员权限。
+
+3. 打开"以管理员身份运行"的 PowerShell，进到 `meshorad.exe` 所在的目录。生成私钥（打出的公钥交给
+   跑协调服务的人），再放行别的节点 ping 过来 —— Windows 防火墙默认挡进来的 ping，从这台往外 ping 不受影响：
+
+   ```powershell
+   .\meshorad.exe genkey node.key
+   New-NetFirewallRule -DisplayName 'Meshora: allow ping' -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -RemoteAddress 100.64.0.0/10 -Action Allow
+   ```
+
+   Windows 上不检查私钥文件的权限，它得在别人读不到的地方：仓库放在自己的用户目录里就行。
+
+4. 启动节点。第一次运行时 Windows 可能弹窗问要不要允许 meshorad 访问网络，允许：
+
+   ```powershell
+   .\meshorad.exe up --key node.key --coord <服务器地址>:7443 --coord-key <协调服务的公钥>
+   ```
+
+算通过的标准：
+
+- 两边的日志里都有 `已注册到协调服务` 和 `虚拟网卡已就绪`
+- A 上 `ping 100.64.0.2`、B 上 `ping 100.64.0.1` 都通
+- 两台在同一个局域网，或者都在普通的家用路由器后面时，最后一次 `切换路径` 应该是 `path=Direct(...)`；
+  洞打不通时是 `path=Relay {...}`，ping 照样通
+
+请告诉我们：两台机器的 Windows 版本、网络情况（同一个局域网？各自在什么样的路由器后面？）、
+最后走的路径、ping 的延迟。出了问题的话，加 `-v` 重跑，附上两边的日志。
 
 ## 部署
 
