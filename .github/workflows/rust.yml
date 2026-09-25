@@ -55,8 +55,9 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo
 
-  # 两个网络命名空间模拟两台机器，各跑一个 meshorad，用真的 ping 验证加密隧道：
-  # 能直连时走直连，--relay-only 时全程经中继。需要 root，脚本经 sudo 跑
+  # 网络命名空间模拟几台机器和 NAT 路由器，各跑一个 meshorad，用真的 ping 验证加密隧道：
+  # 同一网段直连、--relay-only 全程经中继、普通 NAT 后面打洞直连、对称 NAT 后面回退中继。
+  # 需要 root，脚本经 sudo 跑
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15

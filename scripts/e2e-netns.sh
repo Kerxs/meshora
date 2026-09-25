@@ -1,23 +1,40 @@
 #!/usr/bin/env bash
-# 端到端测试：两个网络命名空间模拟两台机器，各跑一个 meshorad，用真的 ping 验证加密隧道。
+# 端到端测试：用网络命名空间模拟几台机器，各跑一个 meshorad，用真的 ping 验证加密隧道。
 #
-#   机器 A（命名空间 msh-e2e-a）         机器 B（命名空间 msh-e2e-b）
+# 拓扑一：两台机器在同一个网段
+#
+#   机器 A（msh-e2e-a）                   机器 B（msh-e2e-b）
 #   10.99.0.1 ──────── 一根网线（veth）──────── 10.99.0.2
-#   协调服务 + 中继 + meshorad            meshorad
-#   overlay 100.64.0.1                    overlay 100.64.0.2
+#   协调服务 + 中继 + meshorad             meshorad
 #
-# 跑两个场景：能直连时走直连；--relay-only 时全程经中继。
+# 拓扑二：两台机器各自在一个 NAT 路由器后面，协调服务和中继在"公网"上
 #
-# 需要 root（建命名空间和虚拟网卡）、iproute2、ping。先编译：
+#                    服务器（msh-e2e-srv）192.0.2.1
+#                    协调服务 + 中继；它的网桥就是"公网"
+#               ┌──────────────┴──────────────┐
+#     NAT 路由器（msh-e2e-nat-a）       NAT 路由器（msh-e2e-nat-b）
+#     公网 192.0.2.2，内网 10.1.0.1      公网 192.0.2.3，内网 10.2.0.1
+#               │                             │
+#     机器 A（msh-e2e-a）10.1.0.2       机器 B（msh-e2e-b）10.2.0.2
+#
+# NAT 路由器按家用路由器的典型配置：出去的做 MASQUERADE，进来的只放行已经建立的连接。
+# "公网"不路由内网地址，所以两边上报的局域网端点互相够不着，想直连只能靠打洞。
+#
+# 场景（overlay 地址按名单顺序分配：A 是 100.64.0.1，B 是 100.64.0.2）：
+#   1. 同一网段：走直连
+#   2. 同一网段，--relay-only：全程经中继
+#   3. 两边都是普通 NAT（外部端口不随目标变）：打洞成功，走直连
+#   4. B 在对称 NAT 后面（每个目标换一个外部端口）：打洞打不通，经中继照样通
+#
+# 需要 root（建命名空间和虚拟网卡）、iproute2、iptables、ping。先编译：
 #   cargo build -p meshorad -p meshora-coord
 #   sudo scripts/e2e-netns.sh [可执行文件所在目录，默认 target/debug]
 set -euo pipefail
 
 BIN=$(cd "${1:-target/debug}" && pwd)
 WORK=$(mktemp -d)
-NS_A=msh-e2e-a
-NS_B=msh-e2e-b
 PIDS=()
+NAMESPACES=()
 
 stop_all() {
   for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
@@ -25,10 +42,14 @@ stop_all() {
   PIDS=()
 }
 
+del_namespaces() {
+  for ns in "${NAMESPACES[@]}"; do ip netns del "$ns" 2>/dev/null || true; done
+  NAMESPACES=()
+}
+
 cleanup() {
   stop_all
-  ip netns del "$NS_A" 2>/dev/null || true
-  ip netns del "$NS_B" 2>/dev/null || true
+  del_namespaces
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -46,15 +67,74 @@ fail() {
   exit 1
 }
 
-# 两台"机器"之间一根网线
-ip netns add "$NS_A"
-ip netns add "$NS_B"
-ip link add veth-a netns "$NS_A" type veth peer name veth-b netns "$NS_B"
-ip -n "$NS_A" addr add 10.99.0.1/24 dev veth-a
-ip -n "$NS_B" addr add 10.99.0.2/24 dev veth-b
-for ns in "$NS_A" "$NS_B"; do ip -n "$ns" link set lo up; done
-ip -n "$NS_A" link set veth-a up
-ip -n "$NS_B" link set veth-b up
+new_ns() {
+  ip netns add "$1"
+  NAMESPACES+=("$1")
+  ip -n "$1" link set lo up
+}
+
+# 拓扑一。协调服务跑在机器 A 上
+setup_lan() {
+  new_ns msh-e2e-a
+  new_ns msh-e2e-b
+  ip link add veth-a netns msh-e2e-a type veth peer name veth-b netns msh-e2e-b
+  ip -n msh-e2e-a addr add 10.99.0.1/24 dev veth-a
+  ip -n msh-e2e-b addr add 10.99.0.2/24 dev veth-b
+  ip -n msh-e2e-a link set veth-a up
+  ip -n msh-e2e-b link set veth-b up
+  COORD_NS=msh-e2e-a
+  COORD_IP=10.99.0.1
+}
+
+# 拓扑二。参数是 B 那边的 NAT 类型：cone（普通）或 symmetric（对称）。A 那边总是普通的
+setup_nat() {
+  new_ns msh-e2e-srv
+  ip -n msh-e2e-srv link add br0 type bridge
+  ip -n msh-e2e-srv addr add 192.0.2.1/24 dev br0
+  ip -n msh-e2e-srv link set br0 up
+  nat_side a 192.0.2.2 10.1.0 cone
+  nat_side b 192.0.2.3 10.2.0 "$1"
+  COORD_NS=msh-e2e-srv
+  COORD_IP=192.0.2.1
+}
+
+# nat_side <a 或 b> <路由器的公网地址> <内网前缀> <cone 或 symmetric>
+nat_side() {
+  local side=$1 public=$2 lan=$3 kind=$4
+  local router=msh-e2e-nat-$side host=msh-e2e-$side
+  new_ns "$router"
+  new_ns "$host"
+
+  # 路由器的公网口接到服务器的网桥上
+  ip link add wan netns "$router" type veth peer name "to-$side" netns msh-e2e-srv
+  ip -n msh-e2e-srv link set "to-$side" master br0
+  ip -n msh-e2e-srv link set "to-$side" up
+  ip -n "$router" addr add "$public/24" dev wan
+  ip -n "$router" link set wan up
+
+  # 路由器和它后面的机器
+  ip link add lan netns "$router" type veth peer name eth0 netns "$host"
+  ip -n "$router" addr add "$lan.1/24" dev lan
+  ip -n "$host" addr add "$lan.2/24" dev eth0
+  ip -n "$router" link set lan up
+  ip -n "$host" link set eth0 up
+  ip -n "$host" route add default via "$lan.1"
+
+  ip netns exec "$router" sysctl -qw net.ipv4.ip_forward=1
+  # --random-fully：每条新连接随机挑外部端口，也就是对称 NAT
+  local masquerade=(-t nat -A POSTROUTING -o wan -j MASQUERADE)
+  if [ "$kind" = symmetric ]; then
+    masquerade+=(--random-fully)
+  fi
+  ip netns exec "$router" iptables "${masquerade[@]}"
+  # 进来的只放行已经建立的连接。没被放行的报文在 conntrack 登记之前就丢了，
+  # 不会占住对面打洞要用的那个端口映射
+  for chain in INPUT FORWARD; do
+    ip netns exec "$router" iptables -A "$chain" -i wan \
+      -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    ip netns exec "$router" iptables -A "$chain" -i wan -j DROP
+  done
+}
 
 for name in coord a b; do "$BIN/meshorad" genkey > "$WORK/$name.key"; done
 chmod 600 "$WORK"/*.key
@@ -74,29 +154,40 @@ wait_for_port() {
   fail "$host:$port 一直没起来"
 }
 
-# run_scenario <名字> <期望的路径：Direct 或 Relay> [meshorad 的额外参数...]
+# 某台机器最后选定的路径：Direct、Relay，还没选过就是空的
+last_path() {
+  grep "切换路径" "$WORK/$1.log" | grep -o "path=[A-Za-z]*" | tail -n 1 | cut -d= -f2 || true
+}
+
+# 最后选定的路径的完整写法，带地址
+last_path_detail() {
+  grep "切换路径" "$WORK/$1.log" | tail -n 1 | sed 's/.*path=//' || true
+}
+
+# run_scenario <名字> <期望的路径：Direct 或 Relay> <观察多少秒> [meshorad 的额外参数...]
+#
+# 中继先行，所以隧道总是很快就通。之后的观察期里：期望直连的，要在期限内等到两边都切到直连；
+# 期望中继的，要整个观察期都没切走 —— 观察期得长过一轮打洞，否则"没切走"说明不了什么。
 run_scenario() {
-  local name=$1 expected=$2
-  shift 2
+  local name=$1 expected=$2 window=$3
+  shift 3
   echo "== $name"
 
-  ip netns exec "$NS_A" "$BIN/meshora-coord" --key "$WORK/coord.key" \
-    --listen 10.99.0.1:7443 --probe 10.99.0.1:7443 --relay-listen 10.99.0.1:7444 \
+  ip netns exec "$COORD_NS" "$BIN/meshora-coord" --key "$WORK/coord.key" \
+    --listen "$COORD_IP:7443" --probe "$COORD_IP:7443" --relay-listen "$COORD_IP:7444" \
     --node "$A" --node "$B" > "$WORK/coord.log" 2>&1 &
   PIDS+=($!)
-  wait_for_port "$NS_A" 10.99.0.1 7443
+  wait_for_port "$COORD_NS" "$COORD_IP" 7443
 
-  ip netns exec "$NS_A" "$BIN/meshorad" up --key "$WORK/a.key" --coord 10.99.0.1:7443 \
-    --coord-key "$COORD" --tun msh0 "$@" > "$WORK/a.log" 2>&1 &
-  PIDS+=($!)
-  ip netns exec "$NS_B" "$BIN/meshorad" up --key "$WORK/b.key" --coord 10.99.0.1:7443 \
-    --coord-key "$COORD" --tun msh0 "$@" > "$WORK/b.log" 2>&1 &
-  PIDS+=($!)
+  for side in a b; do
+    ip netns exec "msh-e2e-$side" "$BIN/meshorad" up --key "$WORK/$side.key" \
+      --coord "$COORD_IP:7443" --coord-key "$COORD" --tun msh0 "$@" > "$WORK/$side.log" 2>&1 &
+    PIDS+=($!)
+  done
 
-  # 等隧道通，最多 20 秒
   local up=no
   for _ in $(seq 1 20); do
-    if ip netns exec "$NS_A" ping -c 1 -W 1 100.64.0.2 > /dev/null 2>&1; then
+    if ip netns exec msh-e2e-a ping -c 1 -W 1 100.64.0.2 > /dev/null 2>&1; then
       up=yes
       break
     fi
@@ -104,18 +195,48 @@ run_scenario() {
   done
   [ "$up" = yes ] || fail "$name：20 秒内没 ping 通"
 
-  ip netns exec "$NS_A" ping -c 3 -W 2 100.64.0.2 || fail "$name：A → B 丢包"
-  ip netns exec "$NS_B" ping -c 3 -W 2 100.64.0.1 || fail "$name：B → A 丢包"
+  local deadline=$((SECONDS + window)) path_a path_b
+  while :; do
+    path_a=$(last_path a)
+    path_b=$(last_path b)
+    if [ "$expected" = Direct ] && [ "$path_a" = Direct ] && [ "$path_b" = Direct ]; then
+      break
+    fi
+    if [ "$expected" = Relay ] && { [ "$path_a" != Relay ] || [ "$path_b" != Relay ]; }; then
+      fail "$name：应该一直走中继，A 选了 ${path_a:-无}，B 选了 ${path_b:-无}"
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      [ "$expected" = Relay ] && break
+      fail "$name：$window 秒内没都切到直连，A 选了 ${path_a:-无}，B 选了 ${path_b:-无}"
+    fi
+    sleep 1
+  done
+  echo "A 选的路径：$(last_path_detail a)"
+  echo "B 选的路径：$(last_path_detail b)"
 
-  # 两边最后选定的路径都得是期望的那种
-  for log in "$WORK/a.log" "$WORK/b.log"; do
-    grep "切换路径" "$log" | tail -n 1 | grep -q "path=$expected" \
-      || fail "$name：$(basename "$log") 最后选定的路径不是 $expected"
+  ip netns exec msh-e2e-a ping -c 3 -W 2 100.64.0.2 || fail "$name：A → B 丢包"
+  ip netns exec msh-e2e-b ping -c 3 -W 2 100.64.0.1 || fail "$name：B → A 丢包"
+
+  # ping 的这几秒里也没换路径
+  for side in a b; do
+    [ "$(last_path "$side")" = "$expected" ] \
+      || fail "$name：$side 最后选定的路径不是 $expected"
   done
   echo "== $name：通了，路径是 $expected"
   stop_all
 }
 
-run_scenario "直连" Direct
-run_scenario "只走中继" Relay --relay-only
+setup_lan
+run_scenario "同一网段，直连" Direct 20
+run_scenario "同一网段，只走中继" Relay 0 --relay-only
+del_namespaces
+
+setup_nat cone
+run_scenario "两边都是普通 NAT，打洞" Direct 30
+del_namespaces
+
+setup_nat symmetric
+run_scenario "B 在对称 NAT 后面，回退中继" Relay 20
+del_namespaces
+
 echo "全部通过"

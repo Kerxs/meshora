@@ -70,7 +70,7 @@ cargo test --workspace
 有两类测试需要 root，默认不跑：
 
 - 真正创建虚拟网卡的测试：`cargo test -p meshora-tun -- --ignored`
-- 两个网络命名空间里真的 ping 一遍：先 `cargo build -p meshorad -p meshora-coord`，
-  再 `sudo scripts/e2e-netns.sh target/debug`（需要 iproute2 和 ping）
+- 用网络命名空间模拟几台机器和 NAT 路由器，真的 ping 一遍：先 `cargo build -p meshorad -p meshora-coord`，
+  再 `sudo scripts/e2e-netns.sh target/debug`（需要 iproute2、iptables、ping）
 
 Windows 上的安装说明（wintun.dll 放在哪）等在 Windows 上实测过再补。
