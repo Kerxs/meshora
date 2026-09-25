@@ -30,6 +30,9 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 tokio = { version = "1.53", default-features = false, features = ["rt", "net", "time", "sync", "macros"] }
 # 只用它的宏打日志，输出到哪由 meshorad 决定。boringtun 本来就依赖它
 tracing = "0.1"
+# Noise 协议框架：节点与协调服务、中继之间的 IK 握手，节点之间控制报文的 K 封装。
+# 只开 ChaChaPoly、BLAKE2s、Curve25519 —— 和 WireGuard 同一套原语，不要 AES、SHA2
+snow = { version = "0.10", default-features = false, features = ["std", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
 # Linux 虚拟网卡的 ioctl。tokio、boringtun 本来就依赖它
 libc = "0.2"
 # Windows 的虚拟网卡驱动 wintun 的绑定。运行时要求 wintun.dll 在 meshorad.exe 旁边

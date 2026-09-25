@@ -15,3 +15,10 @@ mod secret;
 pub use key::{NodeKey, ParseNodeKeyError};
 pub use path::Path;
 pub use secret::NodeSecret;
+
+/// Meshora 控制报文开头的魔数。
+///
+/// 数据面靠它把控制报文和 WireGuard 报文分开（见 meshora-dataplane 的 `classify`），
+/// 控制面按它封装报文（见 meshora-proto 的 `disco`），连接前导也以它开头。
+/// 放在这里是为了只有一个来源：两边各写一份，迟早会有一边改漏。
+pub const CONTROL_MAGIC: [u8; 4] = *b"MSHR";
