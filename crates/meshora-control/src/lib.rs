@@ -66,6 +66,11 @@ pub struct Config {
     pub local_port: u16,
     /// 给每个 peer 的 persistent keepalive，NAT 后面的节点靠它维持映射。
     pub keepalive: Option<NonZeroU16>,
+    /// 只走中继：不探测、不上报直连端点，也不选直连。
+    ///
+    /// UDP 整个被封的网络里用得上（反正打不通，省得白探测），排查问题时也用得上。
+    /// 别人的 Ping 照样回应。
+    pub relay_only: bool,
 }
 
 /// 协调服务在注册时告诉本机的东西。
@@ -289,6 +294,7 @@ struct Node {
     coord_key: NodeKey,
     local_port: u16,
     keepalive: Option<NonZeroU16>,
+    relay_only: bool,
     dataplane: Arc<dyn DataPlane>,
     relay: Option<Path>,
     probe: Option<SocketAddr>,
@@ -309,6 +315,7 @@ impl Node {
             coord_key: config.coord_key,
             local_port: config.local_port,
             keepalive: config.keepalive,
+            relay_only: config.relay_only,
             dataplane,
             relay: None,
             probe: None,
@@ -426,7 +433,7 @@ impl Node {
                     debug!(%from, %err, "发 Pong 失败");
                 }
                 // 对方能从这个地址找到我们，反过来也值得一试
-                if state.paths.learn(from, now) {
+                if !self.relay_only && state.paths.learn(from, now) {
                     self.ping_due(now);
                 }
             }
@@ -474,7 +481,7 @@ impl Node {
             let waited = state
                 .last_call_me_maybe
                 .is_none_or(|last| now.duration_since(last) >= CALL_ME_MAYBE_INTERVAL);
-            if !state.paths.has_fresh(now) && waited {
+            if !self.relay_only && !state.paths.has_fresh(now) && waited {
                 outgoing.push(ClientMessage::CallMeMaybe { peer: *key });
                 state.last_call_me_maybe = Some(now);
             }
@@ -491,6 +498,9 @@ impl Node {
     /// 本机的候选端点：局域网地址，加上探测到的公网地址
     fn endpoints(&self) -> Vec<SocketAddr> {
         let mut endpoints = Vec::new();
+        if self.relay_only {
+            return endpoints;
+        }
         if let Some(local) = local_endpoint(self.coord, self.local_port) {
             endpoints.push(local);
         }
@@ -504,6 +514,9 @@ impl Node {
 
     /// 探测所有到时候的候选
     fn ping_due(&mut self, now: Instant) {
+        if self.relay_only {
+            return;
+        }
         let due: Vec<(NodeKey, SocketAddr)> = self
             .peers
             .iter_mut()
@@ -541,7 +554,12 @@ impl Node {
     /// 按选路规则算出每个 peer 该走的路，变了就告诉数据面
     fn update_paths(&mut self, now: Instant) {
         for (key, state) in &mut self.peers {
-            let Some(desired) = state.paths.choose(state.current, self.relay, now) else {
+            let desired = if self.relay_only {
+                self.relay
+            } else {
+                state.paths.choose(state.current, self.relay, now)
+            };
+            let Some(desired) = desired else {
                 continue;
             };
             if state.current == Some(desired) {

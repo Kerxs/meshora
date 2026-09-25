@@ -3,7 +3,7 @@
 //! | 通道 | 两端 | 传输 | 认证 |
 //! | --- | --- | --- | --- |
 //! | 控制通道 | 节点 ↔ 协调服务 | TCP | Noise IK（[`noise`]），消息见 [`control`] |
-//! | 中继通道 | 节点 ↔ 中继 | TCP | Noise IK（[`noise`]） |
+//! | 中继通道 | 节点 ↔ 中继 | TCP | Noise IK（[`noise`]），帧见 [`relay`] |
 //! | 控制报文 | 节点 ↔ 节点、节点 ↔ 探测端点 | UDP，和 WireGuard 共用 socket | Noise K，每条一次（[`disco`]） |
 //!
 //! Noise 的原语和 WireGuard 同一套：Curve25519、ChaChaPoly、BLAKE2s。所有静态密钥都是节点的
@@ -16,3 +16,4 @@ pub mod codec;
 pub mod control;
 pub mod disco;
 pub mod noise;
+pub mod relay;

@@ -19,6 +19,7 @@ meshora-wg = { path = "crates/meshora-wg" }
 meshora-tun = { path = "crates/meshora-tun" }
 meshora-coord = { path = "crates/meshora-coord" }
 meshora-control = { path = "crates/meshora-control" }
+meshora-relay = { path = "crates/meshora-relay" }
 
 # 和 boringtun 用同一个版本，免得依赖树里出现两份
 base64 = "0.22"

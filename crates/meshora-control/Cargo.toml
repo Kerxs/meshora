@@ -20,6 +20,7 @@ tracing.workspace = true
 # 控制面本身仍然只依赖契约，不依赖数据面的实现
 [dev-dependencies]
 meshora-coord.workspace = true
+meshora-relay.workspace = true
 meshora-wg.workspace = true
 
 [lints]

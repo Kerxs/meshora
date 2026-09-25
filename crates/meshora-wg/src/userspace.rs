@@ -3,7 +3,12 @@
 //! 虚拟网卡在这里只是两个 channel —— 读到的报文从 [`TunChannels::from_tun`] 进来，
 //! 要写的报文从 [`TunChannels::to_tun`] 出去。真正的网卡由 meshora-tun 接上；
 //! 测试里直接拿 channel 当网卡，不需要 root。
+//!
+//! 经中继的报文走子模块 `relay` 里的客户端：每个中继一条长连接，第一次用到时建立。
 
+mod relay;
+
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -11,8 +16,9 @@ use std::time::{Duration, Instant};
 
 use meshora_types::{NodeKey, NodeSecret, Path};
 use tokio::net::UdpSocket;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{debug, warn};
 
 use crate::engine::{Action, Engine, Link, Transmit};
@@ -31,6 +37,11 @@ pub struct TunChannels {
     pub to_tun: mpsc::Sender<Vec<u8>>,
 }
 
+/// 发往一个中继的报文队列。满了就丢，和 UDP 一样
+const RELAY_QUEUE: usize = 256;
+
+type RelayOutbox = mpsc::Sender<(NodeKey, Vec<u8>)>;
+
 struct Shared {
     engine: Mutex<Engine>,
     socket: UdpSocket,
@@ -39,6 +50,12 @@ struct Shared {
     sync_socket: std::net::UdpSocket,
     to_tun: mpsc::Sender<Vec<u8>>,
     events: Arc<dyn EventSink>,
+    /// 连中继要用本机私钥认证自己（R6）。私钥仍然在数据面里，没出去
+    secret: NodeSecret,
+    runtime: Handle,
+    relays: Mutex<HashMap<(NodeKey, SocketAddr), RelayOutbox>>,
+    /// 中继连接任务，数据面停下时一并停掉
+    background: Mutex<Vec<AbortHandle>>,
 }
 
 impl Shared {
@@ -48,35 +65,56 @@ impl Shared {
     }
 
     /// 在异步任务里发：socket 暂时写不进去就等一等
-    async fn transmit(&self, t: Transmit) {
+    async fn transmit(self: &Arc<Self>, t: Transmit) {
         match t.link {
             Link::Direct(addr) => {
                 if let Err(err) = self.socket.send_to(&t.datagram, addr).await {
                     debug!(%addr, %err, "发往直连地址失败");
                 }
             }
-            Link::Relay { relay, .. } => {
-                // 中继客户端还没接上（M1 后续步骤），经中继的报文先丢掉
-                debug!(%relay, "中继还不可用，丢弃一个报文");
-            }
+            Link::Relay { relay, addr, peer } => self.relay_send(relay, addr, peer, t.datagram),
         }
     }
 
     /// 在同步方法里发：写不进去就丢，和 UDP 本身一样不保证送达
-    fn try_transmit(&self, t: Transmit) {
+    fn try_transmit(self: &Arc<Self>, t: Transmit) {
         match t.link {
             Link::Direct(addr) => {
                 if let Err(err) = self.sync_socket.send_to(&t.datagram, addr) {
                     debug!(%addr, %err, "发往直连地址失败");
                 }
             }
-            Link::Relay { relay, .. } => {
-                debug!(%relay, "中继还不可用，丢弃一个报文");
-            }
+            Link::Relay { relay, addr, peer } => self.relay_send(relay, addr, peer, t.datagram),
         }
     }
 
-    async fn act(&self, actions: Vec<Action>) {
+    /// 经中继把报文交给 `peer`。第一次用到这个中继时建立连接；连接还没建好、
+    /// 正在重连或者队列满了，报文就丢掉 —— WireGuard 自己会重传握手
+    fn relay_send(
+        self: &Arc<Self>,
+        relay: NodeKey,
+        addr: SocketAddr,
+        peer: NodeKey,
+        datagram: Vec<u8>,
+    ) {
+        let mut relays = self.relays.lock().expect("中继表在持锁时 panic 过");
+        let outbox = relays.entry((relay, addr)).or_insert_with(|| {
+            let (tx, rx) = mpsc::channel(RELAY_QUEUE);
+            let task = self
+                .runtime
+                .spawn(relay::run(Arc::clone(self), relay, addr, rx));
+            self.background
+                .lock()
+                .expect("后台任务表在持锁时 panic 过")
+                .push(task.abort_handle());
+            tx
+        });
+        if outbox.try_send((peer, datagram)).is_err() {
+            debug!(%relay, "中继队列满了，丢弃一个报文");
+        }
+    }
+
+    async fn act(self: &Arc<Self>, actions: Vec<Action>) {
         for action in actions {
             match action {
                 Action::Transmit(t) => self.transmit(t).await,
@@ -121,6 +159,10 @@ impl UserspaceDataPlane {
             sync_socket,
             to_tun: tun.to_tun,
             events,
+            secret: secret.clone(),
+            runtime: Handle::current(),
+            relays: Mutex::new(HashMap::new()),
+            background: Mutex::new(Vec::new()),
         });
         let tasks = vec![
             tokio::spawn(receive_loop(Arc::clone(&shared))),
@@ -145,6 +187,12 @@ impl Drop for UserspaceDataPlane {
     fn drop(&mut self) {
         for task in &self.tasks {
             task.abort();
+        }
+        // 中继连接任务各自持有共享状态，不停掉它们，状态就永远释放不了
+        if let Ok(background) = self.shared.background.lock() {
+            for task in background.iter() {
+                task.abort();
+            }
         }
     }
 }
@@ -322,6 +370,64 @@ mod tests {
         assert_eq!(status.len(), 1);
         assert!(status[0].last_handshake.is_some());
         assert!(status[0].tx_bytes > 0 && status[0].rx_bytes > 0);
+    }
+
+    /// 反复从 `from` 发，直到 `to` 收到：经中继时，头几个报文可能赶在中继连接建好之前被丢掉
+    async fn deliver(from: &Node, to: &mut Node, packet: Vec<u8>) -> Vec<u8> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                from.tun_in.send(packet.clone()).await.unwrap();
+                if let Ok(Some(received)) =
+                    tokio::time::timeout(Duration::from_millis(200), to.tun_out.recv()).await
+                {
+                    return received;
+                }
+            }
+        })
+        .await
+        .expect("经中继没能送达")
+    }
+
+    #[tokio::test]
+    async fn ping_and_pong_through_a_relay() {
+        let mut a = node(1).await;
+        let mut b = node(2).await;
+        let relay_secret = NodeSecret::generate();
+        let relay = relay_secret.public_key();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let relay_addr = listener.local_addr().unwrap();
+        tokio::spawn(meshora_relay::serve(
+            meshora_relay::Config {
+                secret: relay_secret,
+                nodes: vec![a.key, b.key],
+            },
+            listener,
+        ));
+
+        a.dataplane
+            .apply(&PeerSet::new([peer_of(&b)]).unwrap())
+            .unwrap();
+        b.dataplane
+            .apply(&PeerSet::new([peer_of(&a)]).unwrap())
+            .unwrap();
+        let via = Path::Relay {
+            relay,
+            addr: relay_addr,
+        };
+        a.dataplane.set_path(&b.key, via).unwrap();
+        b.dataplane.set_path(&a.key, via).unwrap();
+
+        let ping = ipv4(a.ip, b.ip, b"via relay");
+        assert_eq!(deliver(&a, &mut b, ping.clone()).await, ping);
+        let pong = ipv4(b.ip, a.ip, b"and back");
+        assert_eq!(deliver(&b, &mut a, pong.clone()).await, pong);
+
+        // 握手是经中继完成的
+        let event = next_event(&mut a).await;
+        assert!(
+            matches!(event, Event::HandshakeCompleted { peer, via: Path::Relay { .. } } if peer == b.key),
+            "{event:?}"
+        );
     }
 
     #[tokio::test]

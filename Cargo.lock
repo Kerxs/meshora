@@ -343,6 +343,7 @@ dependencies = [
  "meshora-coord",
  "meshora-dataplane",
  "meshora-proto",
+ "meshora-relay",
  "meshora-types",
  "meshora-wg",
  "rand_core",
@@ -379,6 +380,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshora-relay"
+version = "0.0.0"
+dependencies = [
+ "meshora-proto",
+ "meshora-types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "meshora-tun"
 version = "0.0.0"
 dependencies = [
@@ -404,6 +415,8 @@ dependencies = [
  "boringtun",
  "ipnet",
  "meshora-dataplane",
+ "meshora-proto",
+ "meshora-relay",
  "meshora-types",
  "rand_core",
  "tokio",

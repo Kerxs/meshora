@@ -7,7 +7,7 @@
 //! - [`userspace::UserspaceDataPlane`]：把引擎接到 tokio 的 UDP socket 上。虚拟网卡那一侧
 //!   只是一对 channel，真正的网卡由 meshora-tun 接上
 //!
-//! 还没有：中继客户端。经中继的报文目前被丢弃。
+//! 经中继的报文由驱动里的中继客户端收发：每个中继一条 Noise IK 加密的 TCP 长连接（见 meshora-relay）。
 
 pub mod engine;
 #[cfg(test)]

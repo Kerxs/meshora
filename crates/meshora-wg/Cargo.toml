@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 meshora-types.workspace = true
 meshora-dataplane.workspace = true
+meshora-proto.workspace = true
 boringtun.workspace = true
 x25519-dalek.workspace = true
 rand_core.workspace = true
@@ -18,6 +19,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 ipnet.workspace = true
+# 只在测试里用：拿真的中继服务验证经中继的收发
+meshora-relay.workspace = true
 
 [lints]
 workspace = true
