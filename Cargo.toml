@@ -40,6 +40,10 @@ tracing = "0.1"
 # Noise 协议框架：节点与协调服务、中继之间的 IK 握手，节点之间控制报文的 K 封装。
 # 只开 ChaChaPoly、BLAKE2s、Curve25519 —— 和 WireGuard 同一套原语，不要 AES、SHA2
 snow = { version = "0.10", default-features = false, features = ["std", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+# 命令行解析。没有任何依赖，功能刚好够用
+lexopt = "0.3"
+# 把 tracing 的日志打到标准错误。不开颜色、不开正则过滤，少拉依赖
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 # Linux 虚拟网卡的 ioctl。tokio、boringtun 本来就依赖它
 libc = "0.2"
 # Windows 的虚拟网卡驱动 wintun 的绑定。运行时要求 wintun.dll 在 meshorad.exe 旁边

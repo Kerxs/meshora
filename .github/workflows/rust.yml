@@ -54,3 +54,14 @@ jobs:
         run: cargo test -p meshora-tun --locked -- --ignored
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo
+
+  # 两个网络命名空间模拟两台机器，各跑一个 meshorad，用真的 ping 验证加密隧道：
+  # 能直连时走直连，--relay-only 时全程经中继。需要 root，脚本经 sudo 跑
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install --no-self-update
+      - run: cargo build -p meshorad -p meshora-coord --locked
+      - run: sudo scripts/e2e-netns.sh target/debug

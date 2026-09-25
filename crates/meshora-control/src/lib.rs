@@ -53,6 +53,8 @@ const CALL_ME_MAYBE_INTERVAL: Duration = Duration::from_secs(10);
 const PING_TIMEOUT: Duration = Duration::from_secs(10);
 /// 重连的等待时间上限。
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// 每秒最多处理多少条控制报文。每条要做两次 DH，被人灌满时必须能丢（R3）
+const DISCO_RATE: u32 = 200;
 
 /// 控制面的配置。
 pub struct Config {
@@ -279,6 +281,35 @@ struct PeerState {
     last_call_me_maybe: Option<Instant>,
 }
 
+/// 令牌桶：每秒补满
+struct TokenBucket {
+    capacity: u32,
+    tokens: u32,
+    refilled: Instant,
+}
+
+impl TokenBucket {
+    fn new(capacity: u32, now: Instant) -> Self {
+        Self {
+            capacity,
+            tokens: capacity,
+            refilled: now,
+        }
+    }
+
+    fn take(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.refilled) >= Duration::from_secs(1) {
+            self.tokens = self.capacity;
+            self.refilled = now;
+        }
+        if self.tokens == 0 {
+            return false;
+        }
+        self.tokens -= 1;
+        true
+    }
+}
+
 /// 发出去、还在等回应的 Ping
 struct Pending {
     to: NodeKey,
@@ -300,6 +331,7 @@ struct Node {
     probe: Option<SocketAddr>,
     peers: HashMap<NodeKey, PeerState>,
     pending: HashMap<TxId, Pending>,
+    disco_budget: TokenBucket,
     reflexive: Option<SocketAddr>,
     reported: Option<Vec<SocketAddr>>,
     next_probe: Instant,
@@ -321,6 +353,7 @@ impl Node {
             probe: None,
             peers: HashMap::new(),
             pending: HashMap::new(),
+            disco_budget: TokenBucket::new(DISCO_RATE, now),
             reflexive: None,
             reported: None,
             next_probe: now,
@@ -407,6 +440,10 @@ impl Node {
     }
 
     fn on_disco(&mut self, from: SocketAddr, datagram: &[u8], now: Instant) {
+        // 限速放在任何密码学运算之前
+        if !self.disco_budget.take(now) {
+            return;
+        }
         let coord_key = self.coord_key;
         let peers = &self.peers;
         let opened = disco::open(&self.secret, datagram, |key| {
@@ -648,5 +685,21 @@ impl std::error::Error for ControlError {
             Self::Io(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_bucket_refills_every_second() {
+        let now = Instant::now();
+        let mut bucket = TokenBucket::new(2, now);
+        assert!(bucket.take(now));
+        assert!(bucket.take(now));
+        assert!(!bucket.take(now), "用完了");
+        assert!(!bucket.take(now + Duration::from_millis(999)));
+        assert!(bucket.take(now + Duration::from_secs(1)), "一秒后补满");
     }
 }
