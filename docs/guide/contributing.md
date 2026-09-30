@@ -80,6 +80,7 @@ cargo test --workspace
 
 1. 改根目录 `Cargo.toml` 里的 `version`（各个 crate 都跟着它），`cargo check` 更新 `Cargo.lock`，提交推到 main
 2. 打同名标签推上去：`git tag v0.1.0 && git push origin v0.1.0`
-3. [`desktop.yml`](https://github.com/Kerxs/meshora/blob/main/.github/workflows/desktop.yml) 核对标签和版本号一致、
-   打安装包、算 SHA-256，建一个**草稿** Release，附上安装包和 `SHA256SUMS.txt`。`v0.*` 和带 `-` 的版本标成预发布
+3. [`package.yml`](https://github.com/Kerxs/meshora/blob/main/.github/workflows/package.yml) 核对标签和版本号一致，
+   打 Windows 安装包和 Linux 服务端（x86_64、aarch64，静态链接），算 SHA-256，建一个**草稿** Release，
+   附上这些和 `SHA256SUMS.txt`。`v0.*` 和带 `-` 的版本标成预发布
 4. 下载草稿里的安装包，在干净的 Windows 上装一遍、连一次，再手动点发布

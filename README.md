@@ -128,7 +128,7 @@ CI 在 Linux 和 Windows 上都跑测试，见 [`.github/workflows/rust.yml`](.g
 桌面客户端的界面部分（Tauri）只在 Windows 上编译；在别的平台上 `meshora-desktop` 只编出一个打一句话就退出的程序，
 所以 Linux 上的 `cargo build --workspace` 不需要 WebKit。它的可执行文件要求管理员权限，
 开发时设环境变量 `MESHORA_DESKTOP_AS_INVOKER=1` 再编译就不要求（这时连网络会停在建虚拟网卡那一步）。
-安装包由 [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml) 打。
+安装包和 Linux 服务端由 [`.github/workflows/package.yml`](.github/workflows/package.yml) 打。
 
 ## 自己试一试
 

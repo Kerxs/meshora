@@ -25,7 +25,8 @@
 Get-FileHash -Algorithm SHA256 .\Meshora_*_x64-setup.exe
 ```
 
-算出来的值要和 `SHA256SUMS.txt` 里的一致。只有 Windows x64 的安装包，没有免安装版（[为什么](#它是怎么做的)）。
+算出来的值要和 `SHA256SUMS.txt` 里的一致。客户端只有 Windows x64 的安装包，没有免安装版（[为什么](#它是怎么做的)）。
+建网络的人用的服务端另外打包，见[下一节](#给建网络的人-起一个协调服务)。
 
 ## 给玩家：加入一个网络
 
@@ -45,6 +46,10 @@ ID 只代表这台电脑，不是密码，可以放心发。
 
 网络需要一台大家都连得上的服务器（有公网 IP 的云主机就行），跑协调服务，顺带跑一个中继。
 它只负责介绍大家认识、在打不通直连时转发加密后的报文，看不到游戏内容。
+
+0. 从 [Releases](https://github.com/Kerxs/meshora/releases) 下载 `meshora-server-<版本>-linux-x86_64.tar.gz`
+   （ARM 的服务器用 `aarch64` 那个），核对 SHA-256 后解压。里面是 `meshora-coord` 和 `meshorad`，静态链接，
+   哪个 Linux 发行版都能跑。还没发布过版本之前，只能从源码编译：`cargo build --release -p meshora-coord -p meshorad`
 
 1. 生成服务器的私钥：
 
@@ -162,7 +167,7 @@ Windows 多半把 Meshora 的虚拟网卡归为"公用网络"。游戏第一次�
   所以客户端要以管理员身份运行：没有单独的后台服务，少一个要装、要保护的东西。代价见[威胁模型](/guide/threat-model#本机上的其他进程)
 - 私钥和设置存在 `%LOCALAPPDATA%\io.github.kerxs.meshora`。私钥第一次运行时生成；文件坏了会报错，不会悄悄换一个身份
 - 虚拟网卡叫 `Meshora`，客户端退出时删掉
-- 安装包由 CI 打（[`.github/workflows/desktop.yml`](https://github.com/Kerxs/meshora/blob/main/.github/workflows/desktop.yml)），
+- 安装包由 CI 打（[`.github/workflows/package.yml`](https://github.com/Kerxs/meshora/blob/main/.github/workflows/package.yml)），
   带着核对过哈希和 WireGuard LLC 签名的 `wintun.dll`，装到只有管理员能写的 `Program Files`。
   **不出免安装版**：解压到普通用户可写的目录里，谁都能换掉旁边的 `wintun.dll`，借客户端拿到管理员权限
 
