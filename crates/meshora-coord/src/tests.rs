@@ -708,3 +708,100 @@ async fn a_broken_state_file_changes_nothing() {
     let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(invite)).await;
     welcome_ip(&reply);
 }
+
+#[test]
+fn utc_times_round_trip() {
+    assert_eq!(format_utc(UNIX_EPOCH), "1970-01-01T00:00:00Z");
+    let leap = UNIX_EPOCH + Duration::from_secs(951_782_400);
+    assert_eq!(format_utc(leap), "2000-02-29T00:00:00Z");
+    assert_eq!(parse_utc("2000-02-29T00:00:00Z"), Some(leap));
+    let at = parse_utc("2026-10-01T12:34:56Z").unwrap();
+    assert_eq!(format_utc(at), "2026-10-01T12:34:56Z");
+    for bad in [
+        "2026-02-30T00:00:00Z",
+        "2026-10-01T12:00:00",
+        "2026-10-01 12:00:00Z",
+        "2026-13-01T00:00:00Z",
+        "2026-10-01T24:00:00Z",
+        "1969-12-31T23:59:59Z",
+    ] {
+        assert_eq!(parse_utc(bad), None, "{bad}");
+    }
+}
+
+/// 在状态文件里加一行带限制的邀请码（协调服务启动之前）
+fn add_limited(state: &TempState, line: &str) {
+    std::fs::create_dir_all(state.0.parent().unwrap()).unwrap();
+    let mut text = std::fs::read_to_string(&state.0).unwrap_or_default();
+    text.push_str(line);
+    text.push('\n');
+    std::fs::write(&state.0, text).unwrap();
+}
+
+#[tokio::test]
+async fn a_one_time_invite_works_once() {
+    let state = TempState::new("one-time");
+    let (code, line) = limited_invite(Some(1), None).unwrap();
+    add_limited(&state, &line);
+    let a = NodeSecret::generate();
+    let (coord, permanent) = start_with(NodeSecret::generate(), &[&a], &state).await;
+    assert_ne!(code, permanent);
+
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(code)).await;
+    assert_eq!(welcome_ip(&reply), Ipv4Addr::new(100, 64, 0, 2));
+    // 用掉了：从文件里清掉，第二个人进不来
+    assert!(!state.text().contains(&code.to_string()));
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(code)).await;
+    assert!(matches!(reply, ServerMessage::Rejected { .. }));
+    // 长期有效的那个不受影响
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(permanent)).await;
+    welcome_ip(&reply);
+}
+
+#[tokio::test]
+async fn uses_are_counted_down_in_the_state_file() {
+    let state = TempState::new("uses");
+    let (code, line) = limited_invite(Some(2), None).unwrap();
+    add_limited(&state, &line);
+    let (coord, _) = start_with(NodeSecret::generate(), &[&NodeSecret::generate()], &state).await;
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(code)).await;
+    welcome_ip(&reply);
+    assert!(state.text().contains(&format!("invite {code} uses=1")));
+}
+
+#[tokio::test]
+async fn an_expired_invite_is_refused_and_cleaned_up() {
+    let state = TempState::new("expired");
+    let code = Invite::generate();
+    add_limited(
+        &state,
+        &format!("invite {code} expires=2000-01-01T00:00:00Z"),
+    );
+    let (coord, _) = start_with(NodeSecret::generate(), &[&NodeSecret::generate()], &state).await;
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(code)).await;
+    let ServerMessage::Rejected { reason } = reply else {
+        panic!("应该被拒绝");
+    };
+    assert!(reason.contains("过期"), "{reason}");
+    assert!(
+        !state.text().contains(&code.to_string()),
+        "过期的从文件里清掉"
+    );
+}
+
+#[tokio::test]
+async fn an_invite_added_while_running_takes_effect() {
+    // meshora-coord invite 就是这么干的：协调服务开着，往状态文件里追加一行
+    let state = TempState::new("live-limited");
+    let (coord, _) = start_with(NodeSecret::generate(), &[&NodeSecret::generate()], &state).await;
+    let (code, line) = limited_invite(None, Some(Duration::from_secs(3600))).unwrap();
+    assert!(line.contains("expires="));
+    add_limited(&state, &line);
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(code)).await;
+    welcome_ip(&reply);
+}
+
+#[test]
+fn a_limited_invite_needs_a_limit() {
+    assert!(limited_invite(None, None).is_none());
+}

@@ -26,8 +26,11 @@
 //! member mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY= 100.64.0.3
 //! ```
 //!
-//! - `invite`：邀请码。删掉这一行，会生成一个新的写回去 —— 旧的网络码随之失效，
-//!   已经加入的成员不受影响
+//! - `invite`：邀请码。不带限制的那一行是长期有效的，删掉它会生成一个新的写回去 ——
+//!   旧的网络码随之失效，已经加入的成员不受影响
+//! - `invite <码> uses=1 expires=2026-10-01T12:00:00Z`：带限制的邀请码，可以有很多行。
+//!   `uses` 是还能用几次，`expires` 是 UTC 的过期时间，两个都可以只写一个。用完、过期的
+//!   自动从文件里清掉。`meshora-coord invite` 帮你生成这样一行
 //! - `member`：凭邀请码加入的成员和它的地址。删掉一行，这个成员就不在网里了
 
 use std::collections::HashMap;
@@ -37,7 +40,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ipnet::Ipv4Net;
 use meshora_proto::admission::Admission;
@@ -116,11 +119,41 @@ struct Member {
     joined: bool,
 }
 
+/// 一个带限制的邀请码：只能用几次，或者到时候就过期
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Limited {
+    code: Invite,
+    /// 还能用几次；`None` 是不限次数
+    uses_left: Option<u32>,
+    /// 过期时间；`None` 是不过期
+    expires: Option<SystemTime>,
+}
+
+impl Limited {
+    fn expired(&self, now: SystemTime) -> bool {
+        self.expires.is_some_and(|at| now >= at) || self.uses_left == Some(0)
+    }
+
+    /// 状态文件里的一行
+    fn line(&self) -> String {
+        let mut line = format!("invite {}", self.code);
+        if let Some(uses) = self.uses_left {
+            let _ = write!(line, " uses={uses}");
+        }
+        if let Some(at) = self.expires {
+            let _ = write!(line, " expires={}", format_utc(at));
+        }
+        line
+    }
+}
+
 struct State {
     /// 所有成员，同时是地址表
     members: Vec<Member>,
-    /// 邀请码。`None` 表示不接受邀请加入
+    /// 长期有效的邀请码。`None` 表示不接受邀请加入
     invite: Option<Invite>,
+    /// 带限制的邀请码
+    limited: Vec<Limited>,
     online: HashMap<NodeKey, Conn>,
     endpoints: HashMap<NodeKey, Vec<SocketAddr>>,
 }
@@ -195,14 +228,33 @@ impl Shared {
             (None, Some(_)) => return Err("这个网络不接受凭邀请码加入".into()),
             (_, None) => return Err("这把公钥不在协调服务的节点名单里".into()),
         };
-        if !ours.matches(&theirs) {
-            return Err("邀请码不对，可能已经换过了：向建网络的人要一个新的网络码".into());
-        }
+        // 长期有效的对上了，或者对上了一个还能用的带限制的
+        let now = SystemTime::now();
+        let limited = if ours.matches(&theirs) {
+            None
+        } else {
+            match state.limited.iter().position(|l| l.code.matches(&theirs)) {
+                Some(index) if !state.limited[index].expired(now) => Some(index),
+                Some(_) => {
+                    return Err("邀请码已经过期或者用完了：向建网络的人要一个新的网络码".into());
+                }
+                None => {
+                    return Err("邀请码不对，可能已经换过了：向建网络的人要一个新的网络码".into());
+                }
+            }
+        };
         if state.members.len() >= MAX_MEMBERS {
             return Err(format!("网络已满（最多 {MAX_MEMBERS} 个成员）"));
         }
         let ip = free_address(&state.members, self.overlay)
             .ok_or_else(|| format!("overlay 网段 {} 没有空闲地址了", self.overlay))?;
+        let before = state.limited.clone();
+        if let Some(index) = limited {
+            // 用掉一次；用完的在写文件时自然清掉
+            if let Some(uses) = &mut state.limited[index].uses_left {
+                *uses -= 1;
+            }
+        }
         state.members.push(Member {
             key: *key,
             ip,
@@ -210,13 +262,15 @@ impl Shared {
         });
         // 先写进文件再算加入：否则重启之后这个地址可能分给别人
         if let Some(path) = &self.state_file
-            && let Err(err) = self.save(path, &ours, &state.members)
+            && let Err(err) = self.save(path, &ours, &state.limited, &state.members)
         {
             state.members.pop();
+            state.limited = before;
             warn!(%err, path = %path.display(), "写状态文件失败，拒绝新成员");
             return Err("协调服务存不下新成员，请联系建网络的人".into());
         }
-        info!(node = %key, %ip, "新成员凭邀请码加入");
+        state.limited.retain(|l| !l.expired(now));
+        info!(node = %key, %ip, limited = limited.is_some(), "新成员凭邀请码加入");
         // 其他人的 NetMap 里要多出这个新成员
         self.broadcast_net_maps(&state, Some(key));
         Ok(ip)
@@ -229,8 +283,14 @@ impl Shared {
     }
 
     /// 写状态文件，记下写完之后它的样子 —— 自己写的不算"有人改过"
-    fn save(&self, path: &Path, invite: &Invite, members: &[Member]) -> io::Result<()> {
-        save_state(path, invite, members)?;
+    fn save(
+        &self,
+        path: &Path,
+        invite: &Invite,
+        limited: &[Limited],
+        members: &[Member],
+    ) -> io::Result<()> {
+        save_state(path, invite, limited, members)?;
         *self.stamp() = file_stamp(path);
         Ok(())
     }
@@ -284,6 +344,7 @@ impl Shared {
         let invite_changed = state.invite != Some(invite);
         state.members = members;
         state.invite = Some(invite);
+        state.limited = stored.limited;
         for key in &removed {
             state.endpoints.remove(key);
             if let Some(conn) = state.online.remove(key) {
@@ -297,7 +358,7 @@ impl Shared {
         if invite_changed {
             info!("邀请码换了，旧的网络码作废。新的网络码末尾是 #{invite}");
         }
-        if regenerated && let Err(err) = self.save(path, &invite, &state.members) {
+        if regenerated && let Err(err) = self.save(path, &invite, &state.limited, &state.members) {
             warn!(%err, path = %path.display(), "新邀请码写不进状态文件");
         }
     }
@@ -390,6 +451,7 @@ fn invalid_data(path: &Path, line: usize, what: &str) -> io::Error {
 #[derive(Default)]
 struct Stored {
     invite: Option<Invite>,
+    limited: Vec<Limited>,
     joined: Vec<(NodeKey, Ipv4Addr)>,
 }
 
@@ -401,6 +463,7 @@ fn load_state(path: &Path) -> io::Result<Stored> {
         Err(err) => return Err(err),
     };
     let mut invite = None;
+    let mut limited = Vec::new();
     let mut joined = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line_no = index + 1;
@@ -411,10 +474,42 @@ fn load_state(path: &Path) -> io::Result<Stored> {
         let fields: Vec<&str> = line.split_whitespace().collect();
         match fields.as_slice() {
             ["invite", code] => {
+                if invite.is_some() {
+                    return Err(invalid_data(path, line_no, "不带限制的 invite 只能有一行"));
+                }
                 invite = Some(
                     code.parse()
                         .map_err(|_| invalid_data(path, line_no, "邀请码格式不对"))?,
                 );
+            }
+            ["invite", code, options @ ..] => {
+                let mut entry = Limited {
+                    code: code
+                        .parse()
+                        .map_err(|_| invalid_data(path, line_no, "邀请码格式不对"))?,
+                    uses_left: None,
+                    expires: None,
+                };
+                for option in options {
+                    match option.split_once('=') {
+                        Some(("uses", n)) => {
+                            entry.uses_left = Some(n.parse().map_err(|_| {
+                                invalid_data(path, line_no, "uses= 后面应该是次数")
+                            })?);
+                        }
+                        Some(("expires", at)) => {
+                            entry.expires = Some(parse_utc(at).ok_or_else(|| {
+                                invalid_data(
+                                    path,
+                                    line_no,
+                                    "expires= 后面应该是 2026-10-01T12:00:00Z 这样的 UTC 时间",
+                                )
+                            })?);
+                        }
+                        _ => return Err(invalid_data(path, line_no, "认不出 invite 后面的选项")),
+                    }
+                }
+                limited.push(entry);
             }
             ["member", key, ip] => joined.push((
                 key.parse()
@@ -425,16 +520,30 @@ fn load_state(path: &Path) -> io::Result<Stored> {
             _ => return Err(invalid_data(path, line_no, "认不出这一行")),
         }
     }
-    Ok(Stored { invite, joined })
+    Ok(Stored {
+        invite,
+        limited,
+        joined,
+    })
 }
 
 /// 整个重写状态文件：先写临时文件再改名，写到一半断电也不会留下半个文件
-fn save_state(path: &Path, invite: &Invite, members: &[Member]) -> io::Result<()> {
-    let mut text = String::from("# Meshora 协调服务的状态文件。可以手改，改完重启协调服务。\n");
+fn save_state(
+    path: &Path,
+    invite: &Invite,
+    limited: &[Limited],
+    members: &[Member],
+) -> io::Result<()> {
+    let mut text =
+        String::from("# Meshora 协调服务的状态文件。可以手改，改完不用重启，几秒内生效。\n");
     text.push_str(
-        "# invite：邀请码，拿到它的人都能加入。删掉这一行再启动会换一个新的，旧的网络码随之失效\n",
+        "# invite：邀请码，拿到它的人都能加入。删掉不带限制的那一行会换一个新的，旧的网络码随之失效\n",
     );
     let _ = writeln!(text, "invite {invite}");
+    let now = SystemTime::now();
+    for entry in limited.iter().filter(|l| !l.expired(now)) {
+        let _ = writeln!(text, "{}", entry.line());
+    }
     text.push_str("# member：凭邀请码加入的成员（公钥 地址）。删掉一行，这个成员就不在网里了\n");
     for member in members.iter().filter(|member| member.joined) {
         let _ = writeln!(text, "member {} {}", member.key, member.ip);
@@ -445,6 +554,94 @@ fn save_state(path: &Path, invite: &Invite, members: &[Member]) -> io::Result<()
     let temp = path.with_extension("tmp");
     std::fs::write(&temp, text)?;
     std::fs::rename(&temp, path)
+}
+
+/// 生成一个带限制的邀请码，交出邀请码和写进状态文件的那一行。
+///
+/// `uses` 是能用几次，`valid_for` 是从现在起多久过期；两个都是 `None` 就和长期有效的没区别，
+/// 所以至少要给一个。
+pub fn limited_invite(uses: Option<u32>, valid_for: Option<Duration>) -> Option<(Invite, String)> {
+    if uses.is_none() && valid_for.is_none() {
+        return None;
+    }
+    let entry = Limited {
+        code: Invite::generate(),
+        uses_left: uses,
+        expires: valid_for.map(|d| SystemTime::now() + d),
+    };
+    Some((entry.code, entry.line()))
+}
+
+/// 公历日期到 1970-01-01 起的天数（Howard Hinnant 的算法）
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let month = i64::from(month);
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// 1970-01-01 起的天数到公历日期
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// 写成 `2026-10-01T12:00:00Z`
+fn format_utc(at: SystemTime) -> String {
+    let secs = at
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
+    let rest = secs.rem_euclid(86_400);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+/// 读 `2026-10-01T12:00:00Z`。只认 UTC、只认这一种写法
+fn parse_utc(text: &str) -> Option<SystemTime> {
+    let text = text.strip_suffix('Z')?;
+    let (date, time) = text.split_once('T')?;
+    let mut date = date.split('-');
+    let year: i64 = date.next()?.parse().ok()?;
+    let month: u32 = date.next()?.parse().ok()?;
+    let day: u32 = date.next()?.parse().ok()?;
+    let mut time = time.split(':');
+    let hour: u64 = time.next()?.parse().ok()?;
+    let minute: u64 = time.next()?.parse().ok()?;
+    let second: u64 = time.next()?.parse().ok()?;
+    if date.next().is_some()
+        || time.next().is_some()
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+        || year < 1970
+    {
+        return None;
+    }
+    let days = u64::try_from(days_from_civil(year, month, day)).ok()?;
+    let secs = days * 86_400 + hour * 3600 + minute * 60 + second;
+    // 2 月 30 日之类的：换算回去对不上
+    if format_utc(UNIX_EPOCH + Duration::from_secs(secs)) != format!("{text}Z") {
+        return None;
+    }
+    Some(UNIX_EPOCH + Duration::from_secs(secs))
 }
 
 /// 一个准备好的协调服务：成员表、邀请码都已经就位，还没开始接受连接。
@@ -466,12 +663,14 @@ impl Coordinator {
             .collect();
 
         let mut invite = None;
+        let mut limited = Vec::new();
         if let Some(path) = &config.state {
             let stored = load_state(path)?;
             members = merge_joined(members, stored.joined, config.overlay).map_err(invalid)?;
             let invite = *invite.insert(stored.invite.unwrap_or_else(Invite::generate));
-            // 写回去：新生成的邀请码要存下来；已经写进名单的成员也顺带从文件里去掉
-            save_state(path, &invite, &members)?;
+            limited = stored.limited;
+            // 写回去：新生成的邀请码要存下来；已经写进名单的成员、过期的邀请码也顺带清掉
+            save_state(path, &invite, &limited, &members)?;
         }
         if members.is_empty() && invite.is_none() {
             return Err(invalid(
@@ -493,6 +692,7 @@ impl Coordinator {
                 state: Mutex::new(State {
                     members,
                     invite,
+                    limited,
                     online: HashMap::new(),
                     endpoints: HashMap::new(),
                 }),

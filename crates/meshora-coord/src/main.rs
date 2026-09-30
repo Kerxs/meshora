@@ -40,6 +40,13 @@ const USAGE: &str = "\
   -v, --verbose             打出调试日志
 
   meshora-coord pubkey [文件] 读私钥（从文件，不给就从标准输入），打出公钥（告诉节点用）
+
+  meshora-coord invite --state <文件> [选项]
+                            生成一个带限制的邀请码，写进状态文件。协调服务开着的话几秒内生效
+    --uses <次数>           能用几次，默认 1（两个限制都不给时）
+    --hours <小时>          多少小时后过期
+    --key <文件>            协调服务的私钥文件。和 --public 一起给，就打出完整的网络码
+    --public <地址:端口>    朋友连协调服务用的地址
 ";
 
 struct Args {
@@ -70,9 +77,40 @@ fn parse_relay(value: &str) -> Result<RelayInfo, String> {
     })
 }
 
+struct InviteArgs {
+    state: PathBuf,
+    uses: Option<u32>,
+    hours: Option<u64>,
+    key: Option<PathBuf>,
+    public: Option<String>,
+}
+
 enum Command {
     Serve(Box<Args>),
     PubKey(Option<PathBuf>),
+    Invite(InviteArgs),
+}
+
+fn parse_invite(parser: &mut lexopt::Parser) -> Result<Command, lexopt::Error> {
+    let (mut state, mut uses, mut hours, mut key, mut public) = (None, None, None, None, None);
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Long("state") => state = Some(PathBuf::from(parser.value()?)),
+            Long("uses") => uses = Some(parser.value()?.parse()?),
+            Long("hours") => hours = Some(parser.value()?.parse()?),
+            Long("key") => key = Some(PathBuf::from(parser.value()?)),
+            Long("public") => public = Some(parser.value()?.string()?),
+            Long("help") | Short('h') => return Err(USAGE.into()),
+            _ => return Err(arg.unexpected()),
+        }
+    }
+    Ok(Command::Invite(InviteArgs {
+        state: state.ok_or("invite 要给 --state")?,
+        uses,
+        hours,
+        key,
+        public,
+    }))
 }
 
 fn parse() -> Result<Command, lexopt::Error> {
@@ -93,6 +131,7 @@ fn parse() -> Result<Command, lexopt::Error> {
     };
     while let Some(arg) = parser.next()? {
         match arg {
+            Value(value) if value == "invite" => return parse_invite(&mut parser),
             Value(value) if value == "pubkey" => {
                 let mut path = None;
                 while let Some(arg) = parser.next()? {
@@ -146,6 +185,15 @@ fn main() -> ExitCode {
     let args = match parse() {
         Ok(Command::Serve(args)) => *args,
         Ok(Command::PubKey(path)) => return pubkey(path.as_deref()),
+        Ok(Command::Invite(args)) => {
+            return match invite(&args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("{err}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Err(err) => {
             eprintln!("{err}");
             return ExitCode::from(2);
@@ -197,6 +245,46 @@ fn pubkey(path: Option<&Path>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// 生成一个带限制的邀请码，追加到状态文件里
+fn invite(args: &InviteArgs) -> Result<(), String> {
+    // 两个限制都不给：默认只能用一次
+    let uses = args.uses.or(args.hours.is_none().then_some(1));
+    let valid_for = args
+        .hours
+        .map(|hours| std::time::Duration::from_secs(hours * 3600));
+    let (code, line) =
+        meshora_coord::limited_invite(uses, valid_for).ok_or("要么给 --uses，要么给 --hours")?;
+
+    let mut text = std::fs::read_to_string(&args.state).map_err(|err| {
+        format!(
+            "读状态文件 {} 失败：{err}。先带着 --state 启动一次协调服务",
+            args.state.display()
+        )
+    })?;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&line);
+    text.push('\n');
+    let temp = args.state.with_extension("tmp");
+    std::fs::write(&temp, text)
+        .and_then(|()| std::fs::rename(&temp, &args.state))
+        .map_err(|err| format!("写状态文件 {} 失败：{err}", args.state.display()))?;
+
+    eprintln!("已写进 {}：{line}", args.state.display());
+    match (&args.key, &args.public) {
+        (Some(key), Some(public)) => {
+            let key = load_key(key)?.public_key();
+            println!("{key}@{public}#{code}");
+        }
+        _ => {
+            eprintln!("网络码是启动日志里那个网络码 # 前面的部分，后面接上这个：");
+            println!("#{code}");
+        }
+    }
+    Ok(())
 }
 
 /// 读私钥文件。和 meshorad 一样认 BOM 和 UTF-16LE（Windows PowerShell 的 > 写出来的）

@@ -88,3 +88,64 @@ fn starts_up_with_logging_on() {
         "启动前应该打出带邀请码的网络码：{seen:#?}"
     );
 }
+
+#[test]
+fn invite_appends_a_limited_invite_to_the_state_file() {
+    let dir = std::env::temp_dir().join(format!("meshora-coord-invite-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("coord.state");
+    fs::write(&state, "invite 3q2-7wEYkQ6n0Cf8Hs5VYA").unwrap(); // 故意不带换行
+    let key = dir.join("coord.key");
+    let secret = NodeSecret::generate();
+    fs::write(&key, format!("{}\n", *secret.to_base64())).unwrap();
+
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_meshora-coord"))
+            .arg("invite")
+            .arg("--state")
+            .arg(&state)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+
+    // 不给限制：默认只能用一次，打出 #邀请码
+    let printed = run(&[]);
+    let code = printed.strip_prefix('#').expect("打出 #邀请码");
+    let text = fs::read_to_string(&state).unwrap();
+    assert!(
+        text.starts_with("invite 3q2-7wEYkQ6n0Cf8Hs5VYA\n"),
+        "原来的行完整保留"
+    );
+    assert!(text.contains(&format!("invite {code} uses=1")));
+
+    // 给了私钥和公网地址：打出完整的网络码
+    let printed = run(&[
+        "--hours",
+        "24",
+        "--key",
+        key.to_str().unwrap(),
+        "--public",
+        "203.0.113.5:7443",
+    ]);
+    let prefix = format!("{}@203.0.113.5:7443#", secret.public_key());
+    let code = printed.strip_prefix(&prefix).expect("完整的网络码");
+    let line = fs::read_to_string(&state)
+        .unwrap()
+        .lines()
+        .find(|line| line.contains(code))
+        .unwrap()
+        .to_string();
+    assert!(
+        line.contains("expires=") && !line.contains("uses="),
+        "{line}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
