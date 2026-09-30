@@ -5,7 +5,7 @@
 //! 所以这一层能被完整地单元测试，不需要真的网络。
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,8 @@ use meshora_dataplane::{
     DataPlaneError, DatagramKind, Event, PeerConfig, PeerSet, PeerStatus, WgMessage, classify,
 };
 
+use crate::lan;
+
 /// 每秒最多处理多少个握手报文，超过就要求对端先用 cookie 证明自己的地址。
 ///
 /// 和 boringtun 自带的 device 模块取同一个值。注意每个握手报文会被计两次（先在这里预检，
@@ -32,6 +34,12 @@ const HANDSHAKE_RATE_LIMIT: u64 = 100;
 /// 控制面那边另有更紧的限速（先限速再做密码学运算），这里只保证它们不会在队列里无限堆积 ——
 /// 比如控制面正卡在给协调服务写消息的时候。契约允许丢控制报文
 const CONTROL_DATAGRAM_RATE: u32 = 1000;
+
+/// 每秒最多复制多少个局域网广播 / 组播报文（复制之前的个数）。
+///
+/// 每个报文要给每个节点各发一份，放任不管的话，一个疯狂发广播的程序能让流量按节点数放大。
+/// 游戏的局域网公告一般一秒一两个，这个上限留足了余量
+const FLOOD_RATE: u32 = 200;
 
 /// 暂存缓冲区：装得下最大的 UDP 报文，再留出 WireGuard 的 32 字节开销。
 const BUF_LEN: usize = u16::MAX as usize + 32;
@@ -171,6 +179,9 @@ pub struct Engine {
     local: NodeKey,
     rate_limiter: Arc<RateLimiter>,
     control_budget: Budget,
+    flood_budget: Budget,
+    /// overlay 网段的定向广播地址，见 [`Engine::set_lan`]
+    lan_broadcast: Option<Ipv4Addr>,
     config: PeerSet,
     peers: HashMap<NodeKey, Peer>,
     by_index: HashMap<u32, NodeKey>,
@@ -185,6 +196,8 @@ impl Engine {
         Self {
             rate_limiter: Arc::new(RateLimiter::new(&public, HANDSHAKE_RATE_LIMIT)),
             control_budget: Budget::new(CONTROL_DATAGRAM_RATE),
+            flood_budget: Budget::new(FLOOD_RATE),
+            lan_broadcast: None,
             local: NodeKey::from_bytes(public.to_bytes()),
             secret,
             public,
@@ -276,10 +289,47 @@ impl Engine {
         Ok(out)
     }
 
-    /// 从虚拟网卡读到一个 IP 报文：找到该发给哪个 peer，加密。
+    /// 告诉引擎本机所在的 overlay 网段，用来认出发往这个网段广播地址的报文。
     ///
-    /// 没有 peer 的网段覆盖目的地址、或者那个 peer 还没有路径时，报文被丢弃。
-    pub fn outbound(&mut self, packet: &[u8], now: Instant) -> Option<Transmit> {
+    /// 有的游戏不发 `255.255.255.255`，而是按网卡的掩码自己算出广播地址再发；
+    /// 不设的话这类报文认不出来，会按单播找接收方、找不到而被丢掉。
+    pub fn set_lan(&mut self, addr: Ipv4Addr, prefix_len: u8) {
+        self.lan_broadcast = lan::directed_broadcast(addr, prefix_len);
+    }
+
+    /// 从虚拟网卡读到一个 IP 报文：加密，交出要发往网络的报文。
+    ///
+    /// - 单播：找到网段覆盖目的地址的那个 peer。没有这样的 peer、或它还没有路径时，报文被丢弃
+    /// - 局域网广播 / 组播（IPv4 UDP，发往 `255.255.255.255`、组播地址或本网段的广播地址）：
+    ///   给**每个**已有路径的 peer 各发一份，局域网游戏找房间靠的就是它们。
+    ///   操作系统自己的服务发现（mDNS、LLMNR、SSDP、NetBIOS）不复制。每秒最多复制 200 个，超出的丢弃
+    pub fn outbound(&mut self, packet: &[u8], now: Instant) -> Vec<Transmit> {
+        if lan::is_lan_broadcast(packet, self.lan_broadcast) {
+            return self.flood(packet, now);
+        }
+        self.unicast(packet, now).into_iter().collect()
+    }
+
+    fn flood(&mut self, packet: &[u8], now: Instant) -> Vec<Transmit> {
+        if !self.flood_budget.take(now) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (key, peer) in &mut self.peers {
+            // 还没有路径的 peer 跳过：交给 Tunn 的话报文会在它的队列里一直等下去
+            let Some(path) = peer.path else {
+                continue;
+            };
+            if let TunnResult::WriteToNetwork(datagram) =
+                peer.tunn.encapsulate(packet, &mut self.buf)
+            {
+                out.push(peer.transmit(Link::to_peer(path, *key), datagram, now));
+            }
+        }
+        out
+    }
+
+    fn unicast(&mut self, packet: &[u8], now: Instant) -> Option<Transmit> {
         let dst = Tunn::dst_address(packet)?;
         let key = *self.config.route(dst)?;
         let peer = self.peers.get_mut(&key)?;
@@ -497,7 +547,7 @@ mod tests {
     use std::num::NonZeroU16;
 
     use super::*;
-    use crate::testutil::ipv4;
+    use crate::testutil::{ipv4, udp4};
     use meshora_dataplane::CONTROL_MAGIC;
 
     /// 一个节点：引擎、它的 overlay 地址、它在测试网络里的 UDP 地址
@@ -601,7 +651,7 @@ mod tests {
 
         // 路径还没设：报文进了 Tunn 的队列，但什么也发不出去
         let packet = ipv4(a.ip, b.ip, b"ping");
-        assert_eq!(a.engine.outbound(&packet, now), None);
+        assert!(a.engine.outbound(&packet, now).is_empty());
 
         // 设路径：立刻发起握手
         let init = a
@@ -659,7 +709,7 @@ mod tests {
         let now = Instant::now();
         // B 没有到 A 的路径（不变量 3：不因为收到过 A 的报文就自己选一条）
         let reply = ipv4(b.ip, a.ip, b"pong");
-        assert_eq!(b.engine.outbound(&reply, now), None);
+        assert!(b.engine.outbound(&reply, now).is_empty());
 
         // 会话已经有了，设路径不会再发起握手
         let out = b
@@ -667,7 +717,7 @@ mod tests {
             .set_path(&a.key, Path::Direct(a.addr), now)
             .unwrap();
         assert!(out.is_empty());
-        let t = b.engine.outbound(&reply, now).unwrap();
+        let t = b.engine.outbound(&reply, now).pop().unwrap();
         assert_eq!(t.link, Link::Direct(a.addr));
         let actions = a.engine.inbound(&t.datagram, Link::Direct(b.addr), now);
         assert_eq!(written(&actions), [reply]);
@@ -683,11 +733,19 @@ mod tests {
 
         // A 的报文从另一个地址到达：照常解密交付，但 B 的发送路径不变
         let elsewhere = SocketAddr::from(([198, 51, 100, 7], 5555));
-        let t = a.engine.outbound(&ipv4(a.ip, b.ip, b"x"), now).unwrap();
+        let t = a
+            .engine
+            .outbound(&ipv4(a.ip, b.ip, b"x"), now)
+            .pop()
+            .unwrap();
         let actions = b.engine.inbound(&t.datagram, Link::Direct(elsewhere), now);
         assert_eq!(written(&actions).len(), 1);
 
-        let reply = b.engine.outbound(&ipv4(b.ip, a.ip, b"y"), now).unwrap();
+        let reply = b
+            .engine
+            .outbound(&ipv4(b.ip, a.ip, b"y"), now)
+            .pop()
+            .unwrap();
         assert_eq!(reply.link, Link::Direct(a.addr));
         let status = b.engine.status();
         assert_eq!(status[0].path, Some(Path::Direct(a.addr)));
@@ -698,7 +756,7 @@ mod tests {
         let (mut a, mut b) = connected_pair();
         let now = Instant::now();
         let spoofed = ipv4(IpAddr::from([100, 64, 0, 99]), b.ip, b"spoof");
-        let t = a.engine.outbound(&spoofed, now).unwrap();
+        let t = a.engine.outbound(&spoofed, now).pop().unwrap();
         let actions = b.engine.inbound(&t.datagram, Link::Direct(a.addr), now);
         assert!(written(&actions).is_empty());
     }
@@ -716,7 +774,7 @@ mod tests {
             .unwrap();
 
         let packet = ipv4(a.ip, b.ip, b"still here");
-        let t = a.engine.outbound(&packet, now).unwrap();
+        let t = a.engine.outbound(&packet, now).pop().unwrap();
         assert_eq!(
             classify(&t.datagram),
             DatagramKind::WireGuard(WgMessage::TransportData)
@@ -732,7 +790,11 @@ mod tests {
         b.engine.apply(&PeerSet::default()).unwrap();
         assert!(b.engine.status().is_empty());
 
-        let t = a.engine.outbound(&ipv4(a.ip, b.ip, b"gone"), now).unwrap();
+        let t = a
+            .engine
+            .outbound(&ipv4(a.ip, b.ip, b"gone"), now)
+            .pop()
+            .unwrap();
         assert!(
             b.engine
                 .inbound(&t.datagram, Link::Direct(a.addr), now)
@@ -906,8 +968,8 @@ mod tests {
 
         // 没有网段覆盖的目的地址
         let packet = ipv4(a.ip, IpAddr::from([10, 9, 9, 9]), b"?");
-        assert_eq!(a.engine.outbound(&packet, now), None);
-        assert_eq!(a.engine.outbound(b"", now), None);
+        assert!(a.engine.outbound(&packet, now).is_empty());
+        assert!(a.engine.outbound(b"", now).is_empty());
     }
 
     #[test]
@@ -918,6 +980,7 @@ mod tests {
         let t = a
             .engine
             .outbound(&ipv4(a.ip, b.ip, &[0; 100]), now)
+            .pop()
             .unwrap();
         // 120 字节的 IP 报文加上 WireGuard 的 32 字节开销。boringtun 不做规范里的 16 字节填充
         assert_eq!(t.datagram.len(), 120 + 32);
@@ -957,5 +1020,127 @@ mod tests {
         let keepalives: Vec<_> = out.iter().filter(|t| t.datagram.len() == 32).collect();
         assert_eq!(keepalives.len(), 1);
         assert_eq!(keepalives[0].link, Link::Direct(b.addr));
+    }
+
+    /// A 握手到 B：A 设直连路径、发起握手，B 回应，A 发出的第一个报文再交给 B
+    fn handshake(a: &mut Node, b: &mut Node, now: Instant) {
+        let init = a
+            .engine
+            .set_path(&b.key, Path::Direct(b.addr), now)
+            .unwrap();
+        let response = transmits(
+            &b.engine
+                .inbound(&init[0].datagram, Link::Direct(a.addr), now),
+        );
+        for t in transmits(
+            &a.engine
+                .inbound(&response[0].datagram, Link::Direct(b.addr), now),
+        ) {
+            b.engine.inbound(&t.datagram, Link::Direct(a.addr), now);
+        }
+    }
+
+    /// A 和 B、C 都握过手；B、C 之间不认识
+    fn connected_star() -> (Node, Node, Node) {
+        let (mut a, mut b, mut c) = (node(1), node(2), node(3));
+        let now = Instant::now();
+        a.engine
+            .apply(&PeerSet::new([config_for(&b), config_for(&c)]).unwrap())
+            .unwrap();
+        b.engine
+            .apply(&PeerSet::new([config_for(&a)]).unwrap())
+            .unwrap();
+        c.engine
+            .apply(&PeerSet::new([config_for(&a)]).unwrap())
+            .unwrap();
+        handshake(&mut a, &mut b, now);
+        handshake(&mut a, &mut c, now);
+        (a, b, c)
+    }
+
+    /// 把 A 发出的报文按链路交给 B、C，返回各自写进虚拟网卡的内容
+    fn deliver_to(
+        out: &[Transmit],
+        a: &Node,
+        peers: &mut [&mut Node],
+        now: Instant,
+    ) -> Vec<Vec<Vec<u8>>> {
+        peers
+            .iter_mut()
+            .map(|peer| {
+                out.iter()
+                    .filter(|t| t.link == Link::Direct(peer.addr))
+                    .flat_map(|t| {
+                        written(&peer.engine.inbound(&t.datagram, Link::Direct(a.addr), now))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn game_discovery_reaches_every_peer() {
+        let (mut a, mut b, mut c) = connected_star();
+        let now = Instant::now();
+        for dst in [[255, 255, 255, 255], [224, 0, 2, 60]] {
+            let packet = udp4(a.ip, IpAddr::from(dst), 4445, b"room");
+            let out = a.engine.outbound(&packet, now);
+            assert_eq!(out.len(), 2, "发往 {dst:?} 的报文该给每个 peer 各发一份");
+            let got = deliver_to(&out, &a, &mut [&mut b, &mut c], now);
+            assert_eq!(got, [vec![packet.clone()], vec![packet.clone()]]);
+        }
+    }
+
+    #[test]
+    fn directed_broadcast_needs_set_lan() {
+        let (mut a, mut b, mut c) = connected_star();
+        let now = Instant::now();
+        let packet = udp4(a.ip, IpAddr::from([100, 127, 255, 255]), 6112, b"room");
+        assert!(
+            a.engine.outbound(&packet, now).is_empty(),
+            "不知道网段就认不出"
+        );
+
+        a.engine.set_lan(Ipv4Addr::new(100, 64, 0, 1), 10);
+        let out = a.engine.outbound(&packet, now);
+        let got = deliver_to(&out, &a, &mut [&mut b, &mut c], now);
+        assert_eq!(got, [vec![packet.clone()], vec![packet.clone()]]);
+    }
+
+    #[test]
+    fn peers_without_a_path_are_skipped() {
+        let (mut a, b) = connected_pair();
+        let c = node(3);
+        a.engine
+            .apply(&PeerSet::new([config_for(&b), config_for(&c)]).unwrap())
+            .unwrap();
+        let packet = udp4(a.ip, IpAddr::from([255, 255, 255, 255]), 6112, b"room");
+        let out = a.engine.outbound(&packet, Instant::now());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].link, Link::Direct(b.addr));
+    }
+
+    #[test]
+    fn os_discovery_is_not_flooded() {
+        let (mut a, _b, _c) = connected_star();
+        let packet = udp4(a.ip, IpAddr::from([224, 0, 0, 251]), 5353, b"mdns");
+        assert!(a.engine.outbound(&packet, Instant::now()).is_empty());
+    }
+
+    #[test]
+    fn flooding_is_rate_limited() {
+        let (mut a, _b, _c) = connected_star();
+        let now = Instant::now();
+        let packet = udp4(a.ip, IpAddr::from([255, 255, 255, 255]), 6112, b"room");
+        for _ in 0..FLOOD_RATE {
+            assert_eq!(a.engine.outbound(&packet, now).len(), 2);
+        }
+        assert!(a.engine.outbound(&packet, now).is_empty(), "一秒内超额就丢");
+        // 单播不受广播预算影响
+        let unicast = udp4(a.ip, IpAddr::from([100, 64, 0, 2]), 6112, b"join");
+        assert_eq!(a.engine.outbound(&unicast, now).len(), 1);
+        // 过了一秒预算补满
+        let later = now + Duration::from_secs(1);
+        assert_eq!(a.engine.outbound(&packet, later).len(), 2);
     }
 }

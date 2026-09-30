@@ -10,6 +10,7 @@
 //! 经中继的报文由驱动里的中继客户端收发：每个中继一条 Noise IK 加密的 TCP 长连接（见 meshora-relay）。
 
 pub mod engine;
+mod lan;
 #[cfg(test)]
 mod testutil;
 pub mod userspace;

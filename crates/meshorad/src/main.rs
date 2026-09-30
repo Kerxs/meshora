@@ -292,6 +292,8 @@ async fn run(up: Up) -> Result<(), String> {
         Arc::new(sink),
     )
     .map_err(|err| format!("启动数据面失败：{err}"))?;
+    // 让数据面认得出发往本网段广播地址的报文 —— 局域网游戏找房间会用到
+    dataplane.set_lan(welcome.overlay_ip, welcome.prefix_len);
 
     tokio::select! {
         result = session.run(Arc::new(dataplane), events_rx) => {
