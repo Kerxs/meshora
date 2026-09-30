@@ -124,6 +124,11 @@ impl PeerPaths {
         }
     }
 
+    /// 最近一次探测 `addr` 测到的往返时间。没探测通过为 `None`。
+    pub fn rtt(&self, addr: SocketAddr) -> Option<Duration> {
+        self.candidates.get(&addr).and_then(|c| c.rtt)
+    }
+
     /// 有没有一条通的直连。
     pub fn has_fresh(&self, now: Instant) -> bool {
         self.candidates.values().any(|c| c.fresh(now))

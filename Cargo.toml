@@ -48,6 +48,9 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 libc = "0.2"
 # Windows 的虚拟网卡驱动 wintun 的绑定。运行时要求 wintun.dll 在 meshorad.exe 旁边
 wintun = "0.5"
+# 配 wintun 网卡的地址、MTU、跃点数用 IP Helper API，不调 netsh：桌面端没有控制台，
+# 每起一个 netsh 都会闪一个黑窗口。tokio 本来就依赖同一个版本
+windows-sys = "0.61"
 
 [workspace.lints.rust]
 # M1 接 wintun 时免不了 FFI：届时在具体模块上 allow，并写清 SAFETY

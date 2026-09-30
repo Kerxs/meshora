@@ -42,6 +42,12 @@ pub struct TunConfig {
     pub prefix_len: u8,
     /// MTU。
     pub mtu: u16,
+    /// 接口跃点数（interface metric）。`None` 交给系统自动定。只在 Windows 上起作用。
+    ///
+    /// Windows 发往 `255.255.255.255` 和组播地址的报文只从**一张**网卡出去，挑的是跃点数最小的那张。
+    /// 局域网游戏找房间正是这么发的：想让它进 overlay，就得把虚拟网卡的跃点数压到物理网卡之下。
+    /// 虚拟网卡上没有默认路由，所以这不影响上网的流量。
+    pub metric: Option<u32>,
 }
 
 /// 一块打开、配置好的虚拟网卡。
@@ -84,7 +90,8 @@ pub struct Pipes {
     pub to_tun: mpsc::Sender<Vec<u8>>,
 }
 
-/// 前缀长度换成子网掩码：10 → 255.192.0.0
+/// 前缀长度换成子网掩码：10 → 255.192.0.0。Windows 上直接交前缀长度，用不着它
+#[cfg(any(target_os = "linux", test))]
 fn netmask(prefix_len: u8) -> Ipv4Addr {
     let bits = u32::MAX
         .checked_shl(32 - u32::from(prefix_len))
@@ -111,6 +118,7 @@ mod tests {
             address: Ipv4Addr::new(100, 64, 0, 1),
             prefix_len: 33,
             mtu: 1280,
+            metric: None,
         };
         let err = Tun::open(&config).err().unwrap();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -225,6 +233,8 @@ mod tests {
                 address: TUN_ADDR,
                 prefix_len: 24,
                 mtu: 1280,
+                // 顺带验证设跃点数这条路径（只在 Windows 上起作用）
+                metric: Some(5),
             })
             .unwrap();
             assert_eq!(tun.name(), name);

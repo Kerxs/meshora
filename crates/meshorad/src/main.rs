@@ -6,22 +6,16 @@
 //! meshorad up --key <文件> --coord <地址:端口> --coord-key <公钥> [选项]
 //! ```
 //!
-//! `up` 的顺序：向协调服务注册拿到 overlay 地址 → 按这个地址建虚拟网卡 → 起数据面 → 跑控制面。
-//! 需要管理员权限（建虚拟网卡）。
+//! `up` 做的事在库里（[`meshorad::start`]），桌面端也用它。需要管理员权限（建虚拟网卡）。
 
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use lexopt::prelude::*;
-use meshora_control::{Config, Session};
-use meshora_tun::{Pipes, Tun, TunConfig};
 use meshora_types::{NodeKey, NodeSecret};
-use meshora_wg::{TunChannels, UserspaceDataPlane};
-use tokio::sync::mpsc;
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -241,62 +235,22 @@ fn warn_if_readable_by_others(path: &Path) {
 fn warn_if_readable_by_others(_path: &Path) {}
 
 async fn run(up: Up) -> Result<(), String> {
-    let secret = load_key(&up.key)?;
-    info!(key = %secret.public_key(), "本机身份");
-
-    let socket = UdpSocket::bind(("0.0.0.0", up.port))
-        .map_err(|err| format!("绑定 UDP 端口 {} 失败：{err}", up.port))?;
-    // --port 0 时由系统挑端口，上报给协调服务的得是实际绑上的那个
-    let local_port = socket
-        .local_addr()
-        .map_err(|err| format!("读取 UDP 端口失败：{err}"))?
-        .port();
-
-    let session = Session::connect(Config {
-        secret: secret.clone(),
+    let mut node = meshorad::start(meshorad::Options {
+        secret: load_key(&up.key)?,
         coord: up.coord,
         coord_key: up.coord_key,
-        local_port,
+        port: up.port,
+        tun: up.tun,
+        mtu: up.mtu,
+        metric: None,
         keepalive: up.keepalive,
         relay_only: up.relay_only,
     })
     .await
-    .map_err(|err| format!("注册失败：{err}"))?;
-    let welcome = session.welcome().clone();
-
-    let tun = Tun::open(&TunConfig {
-        name: up.tun.clone(),
-        address: welcome.overlay_ip,
-        prefix_len: welcome.prefix_len,
-        mtu: up.mtu,
-    })
-    .map_err(|err| format!("创建虚拟网卡 {} 失败：{err}", up.tun))?;
-    info!(
-        tun = tun.name(),
-        ip = %welcome.overlay_ip,
-        prefix = welcome.prefix_len,
-        "虚拟网卡已就绪"
-    );
-    let Pipes { from_tun, to_tun } = tun
-        .spawn()
-        .map_err(|err| format!("启动虚拟网卡失败：{err}"))?;
-
-    let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let sink = move |event| {
-        let _ = events_tx.send(event);
-    };
-    let dataplane = UserspaceDataPlane::start(
-        &secret,
-        socket,
-        TunChannels { from_tun, to_tun },
-        Arc::new(sink),
-    )
-    .map_err(|err| format!("启动数据面失败：{err}"))?;
-    // 让数据面认得出发往本网段广播地址的报文 —— 局域网游戏找房间会用到
-    dataplane.set_lan(welcome.overlay_ip, welcome.prefix_len);
+    .map_err(|err| err.to_string())?;
 
     tokio::select! {
-        result = session.run(Arc::new(dataplane), events_rx) => {
+        result = node.wait() => {
             result.map_err(|err| format!("控制面退出：{err}"))
         }
         _ = shutdown_signal() => {

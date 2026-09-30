@@ -6,13 +6,13 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use meshora_control::{Config, ControlError, Session};
+use meshora_control::{Config, ControlError, Session, Status};
 use meshora_dataplane::DataPlane;
 use meshora_proto::control::RelayInfo;
 use meshora_types::{NodeKey, NodeSecret, Path};
 use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 /// 路径收敛要经过上报端点、NetMap、几轮探测、WireGuard 握手 —— 给足时间
 const CONVERGE: Duration = Duration::from_secs(20);
@@ -57,6 +57,7 @@ struct Node {
     tun_in: mpsc::Sender<Vec<u8>>,
     tun_out: mpsc::Receiver<Vec<u8>>,
     dataplane: Arc<UserspaceDataPlane>,
+    status: watch::Receiver<Status>,
 }
 
 fn config(secret: &NodeSecret, coord: &Coord, local_port: u16) -> Config {
@@ -78,6 +79,7 @@ async fn start_node(secret: &NodeSecret, coord: &Coord, relay_only: bool) -> Nod
     config.relay_only = relay_only;
     let session = Session::connect(config).await.unwrap();
     let ip = session.welcome().overlay_ip;
+    let status = session.status();
 
     let (tun_in, from_tun) = mpsc::channel(64);
     let (to_tun, tun_out) = mpsc::channel(64);
@@ -100,6 +102,7 @@ async fn start_node(secret: &NodeSecret, coord: &Coord, relay_only: bool) -> Nod
         tun_in,
         tun_out,
         dataplane,
+        status,
     }
 }
 
@@ -157,6 +160,24 @@ async fn two_nodes_find_each_other_and_talk_directly() {
             matches!(status[0].path, Some(Path::Direct(addr)) if addr.ip() == IpAddr::from([127, 0, 0, 1]))
         );
         assert!(status[0].last_handshake.is_some());
+    }
+
+    // 界面看到的：对方的地址、走的直连、测到的延迟
+    let (ip_a, ip_b) = (node_a.ip, node_b.ip);
+    for (node, other) in [(&mut node_a, ip_b), (&mut node_b, ip_a)] {
+        let status = tokio::time::timeout(
+            CONVERGE,
+            node.status
+                .wait_for(|s| s.peers.first().is_some_and(|p| p.rtt.is_some())),
+        )
+        .await
+        .expect("状态里一直没有延迟")
+        .unwrap()
+        .clone();
+        assert!(status.coord_connected);
+        assert_eq!(status.peers.len(), 1);
+        assert_eq!(status.peers[0].overlay_ip, other);
+        assert!(matches!(status.peers[0].path, Some(Path::Direct(_))));
     }
 }
 
