@@ -82,8 +82,10 @@ M1 已经按这里的设计造出了主干，在 Linux 上能跑通。两层之�
   wintun     utun        tun      VpnService     tun
 ```
 
-第一个目标平台是 **Windows** —— 开发机就是它，而且 Windows 上的分应用分流
-（[Application Routing](/guide/capabilities#application-routing)）是最难的一块，
-先啃硬的能更早暴露设计问题。
+第一个目标平台是 **Windows**，而且 **1.0.0 只做 Windows** —— 1.0.0 只做[局域网游戏联机](/guide/lan-play)，
+玩这类游戏的人绝大多数在 Windows 上。其余平台都在 [1.0 之后](/guide/roadmap#_1-0-之后)。
+
+更长远看，Windows 上的分应用分流（[Application Routing](/guide/roadmap#application-routing)）也是最难的一块，
+先在 Windows 上打好底子，能更早暴露设计问题。
 
 下一步：[自动网络：建连流水线](/guide/connection-flow) 逐步拆解两个节点从互不相识到建立连接的全过程。
