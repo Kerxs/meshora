@@ -10,21 +10,23 @@
 //!   第 n 个地址，名单顺序不变地址就不变。二是**凭邀请码加入**的：节点在 Hello 里带上邀请码，
 //!   核对无误就分给它最小的空闲地址，写进状态文件（[`Config::state`]），重启后地址不变。
 //!   邀请码也存在状态文件里，第一次启动时生成。见[状态文件](#状态文件)
-//! - **只能加人，不能在运行时踢人**：要移出一个成员，从状态文件里删掉它那一行、换掉邀请码、重启
+//! - **状态文件改了就生效**：协调服务每 [`STATE_POLL`] 看一次它变没变。删掉一个成员，
+//!   它马上被断开、从所有人的 NetMap 里消失；换了邀请码，旧的网络码马上作废。
+//!   文件改坏了（格式不对、地址冲突）就记一条警告、保持原样
 //! - **NetMap 是整个名单**（声明式），带上每个节点最近上报的端点。节点的控制连接断了，
 //!   它仍然在网里 —— 控制面抖一下，不该把已经通了的数据面也拆掉
 //! - **收到第一条加密消息（Hello）之前不做任何有副作用的事**：IK 的首个握手包可以被重放（R1）
 //!
 //! # 状态文件
 //!
-//! 纯文本，一行一项，`#` 开头的是注释。人可以直接改（改完重启）：
+//! 纯文本，一行一项，`#` 开头的是注释。人可以直接改，改完不用重启：
 //!
 //! ```text
 //! invite 3q2-7wEYkQ6n0Cf8Hs5VYA
 //! member mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY= 100.64.0.3
 //! ```
 //!
-//! - `invite`：邀请码。删掉这一行再启动，会生成一个新的 —— 旧的网络码随之失效，
+//! - `invite`：邀请码。删掉这一行，会生成一个新的写回去 —— 旧的网络码随之失效，
 //!   已经加入的成员不受影响
 //! - `member`：凭邀请码加入的成员和它的地址。删掉一行，这个成员就不在网里了
 
@@ -72,6 +74,10 @@ const PROBE_RATE: u32 = 200;
 /// 网里最多多少个成员（名单里的加上凭邀请码加入的）。NetMap 要发给每个人，
 /// 成员数没有上限的话，一份邀请码泄漏出去就能把协调服务拖垮
 pub const MAX_MEMBERS: usize = 1024;
+/// 多久看一次状态文件变没变。
+pub const STATE_POLL: Duration = Duration::from_secs(2);
+/// 被移出的成员：给它的连接多少时间把"你被移出了"送出去，然后断开
+const KICK_FLUSH: Duration = Duration::from_secs(1);
 
 /// 协调服务的配置。
 pub struct Config {
@@ -97,6 +103,8 @@ struct Conn {
     /// 自然合并，最新的一份也绝不会丢 —— 此前用队列发，队列满了就跳过，
     /// 跳过的偏偏是最后一份的话，这个节点就一直拿着过时的 NetMap
     net_map: Arc<Notify>,
+    /// "你被移出了"：连接收到它就告诉对方、断开
+    kick: Arc<Notify>,
 }
 
 /// 一个成员
@@ -111,6 +119,8 @@ struct Member {
 struct State {
     /// 所有成员，同时是地址表
     members: Vec<Member>,
+    /// 邀请码。`None` 表示不接受邀请加入
+    invite: Option<Invite>,
     online: HashMap<NodeKey, Conn>,
     endpoints: HashMap<NodeKey, Vec<SocketAddr>>,
 }
@@ -126,10 +136,10 @@ impl State {
 
 struct Shared {
     secret: NodeSecret,
-    /// 邀请码。`None` 表示不接受邀请加入
-    invite: Option<Invite>,
     /// 状态文件，有邀请码时才有
     state_file: Option<PathBuf>,
+    /// 上次读或写状态文件之后它的样子。和现在的不一样，就是有人手改过
+    state_stamp: Mutex<Option<Stamp>>,
     overlay: Ipv4Net,
     probe: Option<SocketAddr>,
     relays: Vec<RelayInfo>,
@@ -170,10 +180,17 @@ impl Shared {
     /// 不能进时返回给它看的原因
     fn admit(&self, key: &NodeKey, invite: Option<Invite>) -> Result<Ipv4Addr, String> {
         let mut state = self.state();
+        // 状态文件刚被人改过、还没轮到重读：先读进来。不然下面加人时整个重写文件，
+        // 会用内存里的旧内容把人手改的覆盖掉（比如刚换掉的邀请码又被写回旧的）
+        if let Some(path) = &self.state_file
+            && file_stamp(path) != *self.stamp()
+        {
+            self.apply_state_file(&mut state, path);
+        }
         if let Some(ip) = state.address_of(key) {
             return Ok(ip);
         }
-        let (ours, theirs) = match (&self.invite, invite) {
+        let (ours, theirs) = match (state.invite, invite) {
             (Some(ours), Some(theirs)) => (ours, theirs),
             (None, Some(_)) => return Err("这个网络不接受凭邀请码加入".into()),
             (_, None) => return Err("这把公钥不在协调服务的节点名单里".into()),
@@ -193,7 +210,7 @@ impl Shared {
         });
         // 先写进文件再算加入：否则重启之后这个地址可能分给别人
         if let Some(path) = &self.state_file
-            && let Err(err) = save_state(path, ours, &state.members)
+            && let Err(err) = self.save(path, &ours, &state.members)
         {
             state.members.pop();
             warn!(%err, path = %path.display(), "写状态文件失败，拒绝新成员");
@@ -203,6 +220,86 @@ impl Shared {
         // 其他人的 NetMap 里要多出这个新成员
         self.broadcast_net_maps(&state, Some(key));
         Ok(ip)
+    }
+
+    fn stamp(&self) -> MutexGuard<'_, Option<Stamp>> {
+        self.state_stamp
+            .lock()
+            .expect("协调服务的状态在持锁时 panic 过")
+    }
+
+    /// 写状态文件，记下写完之后它的样子 —— 自己写的不算"有人改过"
+    fn save(&self, path: &Path, invite: &Invite, members: &[Member]) -> io::Result<()> {
+        save_state(path, invite, members)?;
+        *self.stamp() = file_stamp(path);
+        Ok(())
+    }
+
+    /// 状态文件被人改了：重新读，按变化增删成员、换邀请码
+    fn reload(&self, path: &Path) {
+        let mut state = self.state();
+        self.apply_state_file(&mut state, path);
+    }
+
+    /// 把状态文件的内容套到现在的成员表上。文件有错就保持原样
+    fn apply_state_file(&self, state: &mut State, path: &Path) {
+        // 不管读没读成都记下：坏掉的文件不必每轮都再报一次，改好了自然又会变
+        *self.stamp() = file_stamp(path);
+        let stored = match load_state(path) {
+            Ok(stored) => stored,
+            Err(err) => {
+                warn!(%err, "状态文件读不了或者写错了，保持原样");
+                return;
+            }
+        };
+        let fixed = state
+            .members
+            .iter()
+            .filter(|m| !m.joined)
+            .copied()
+            .collect();
+        let members = match merge_joined(fixed, stored.joined, self.overlay) {
+            Ok(members) if members.len() <= MAX_MEMBERS => members,
+            Ok(_) => {
+                warn!(max = MAX_MEMBERS, "状态文件里的成员超过上限，保持原样");
+                return;
+            }
+            Err(err) => {
+                warn!(%err, "状态文件有错，保持原样");
+                return;
+            }
+        };
+        let (invite, regenerated) = match stored.invite {
+            Some(invite) => (invite, false),
+            None => (Invite::generate(), true),
+        };
+
+        let removed: Vec<NodeKey> = state
+            .members
+            .iter()
+            .map(|member| member.key)
+            .filter(|key| !members.iter().any(|member| member.key == *key))
+            .collect();
+        let changed = members != state.members;
+        let invite_changed = state.invite != Some(invite);
+        state.members = members;
+        state.invite = Some(invite);
+        for key in &removed {
+            state.endpoints.remove(key);
+            if let Some(conn) = state.online.remove(key) {
+                conn.kick.notify_one();
+            }
+            info!(node = %key, "状态文件里没有它了，移出网络");
+        }
+        if changed {
+            self.broadcast_net_maps(state, None);
+        }
+        if invite_changed {
+            info!("邀请码换了，旧的网络码作废。新的网络码末尾是 #{invite}");
+        }
+        if regenerated && let Err(err) = self.save(path, &invite, &state.members) {
+            warn!(%err, path = %path.display(), "新邀请码写不进状态文件");
+        }
     }
 
     /// 网里有变化：通知每个在线节点的连接，发一份新的 NetMap
@@ -220,6 +317,39 @@ impl Shared {
 fn usable_endpoint(addr: &SocketAddr) -> bool {
     let broadcast = matches!(addr.ip(), IpAddr::V4(ip) if ip.is_broadcast());
     addr.port() != 0 && !addr.ip().is_unspecified() && !addr.ip().is_multicast() && !broadcast
+}
+
+/// 把状态文件里凭邀请码加入的成员并进名单里的成员。名单里已经有的跳过（以名单为准）；
+/// 地址不在网段里、和别人撞上都是错
+fn merge_joined(
+    mut members: Vec<Member>,
+    joined: Vec<(NodeKey, Ipv4Addr)>,
+    overlay: Ipv4Net,
+) -> Result<Vec<Member>, String> {
+    for (key, ip) in joined {
+        if members.iter().any(|member| member.key == key) {
+            // 后来又写进了名单：以名单为准，这一条下次存的时候自然消失
+            continue;
+        }
+        if !overlay.contains(&ip) {
+            return Err(format!(
+                "状态文件里 {key} 的地址 {ip} 不在 overlay 网段 {overlay} 里"
+            ));
+        }
+        if let Some(other) = members.iter().find(|member| member.ip == ip) {
+            return Err(format!(
+                "状态文件里 {key} 的地址 {ip} 已经分给了 {}（名单加长之后撞上了？）。\
+                 把名单里的这个节点挪到最后，或者从状态文件里删掉那一行",
+                other.key
+            ));
+        }
+        members.push(Member {
+            key,
+            ip,
+            joined: true,
+        });
+    }
+    Ok(members)
 }
 
 /// 网段里最小的、还没分出去的地址
@@ -338,30 +468,7 @@ impl Coordinator {
         let mut invite = None;
         if let Some(path) = &config.state {
             let stored = load_state(path)?;
-            for (key, ip) in stored.joined {
-                if members.iter().any(|member| member.key == key) {
-                    // 后来又写进了名单：以名单为准，这一条下次存的时候自然消失
-                    continue;
-                }
-                if !config.overlay.contains(&ip) {
-                    return Err(invalid(format!(
-                        "状态文件里 {key} 的地址 {ip} 不在 overlay 网段 {} 里",
-                        config.overlay
-                    )));
-                }
-                if let Some(other) = members.iter().find(|member| member.ip == ip) {
-                    return Err(invalid(format!(
-                        "状态文件里 {key} 的地址 {ip} 已经分给了 {}（名单加长之后撞上了）。\
-                         把名单里的这个节点挪到最后，或者从状态文件里删掉那一行",
-                        other.key
-                    )));
-                }
-                members.push(Member {
-                    key,
-                    ip,
-                    joined: true,
-                });
-            }
+            members = merge_joined(members, stored.joined, config.overlay).map_err(invalid)?;
             let invite = *invite.insert(stored.invite.unwrap_or_else(Invite::generate));
             // 写回去：新生成的邀请码要存下来；已经写进名单的成员也顺带从文件里去掉
             save_state(path, &invite, &members)?;
@@ -378,13 +485,14 @@ impl Coordinator {
         Ok(Self {
             shared: Arc::new(Shared {
                 secret: config.secret,
-                invite,
+                state_stamp: Mutex::new(config.state.as_deref().and_then(file_stamp)),
                 state_file: config.state,
                 overlay: config.overlay,
                 probe: config.probe,
                 relays: config.relays,
                 state: Mutex::new(State {
                     members,
+                    invite,
                     online: HashMap::new(),
                     endpoints: HashMap::new(),
                 }),
@@ -396,7 +504,7 @@ impl Coordinator {
 
     /// 邀请码。没有状态文件时是 `None`：不接受邀请加入。
     pub fn invite(&self) -> Option<Invite> {
-        self.shared.invite
+        self.shared.state().invite
     }
 
     /// 判断一把公钥是不是成员。同一个进程里的中继用它：凭邀请码新加入的成员也马上能用中继。
@@ -430,12 +538,15 @@ async fn run(
     info!(
         key = %shared.secret.public_key(),
         nodes = shared.state().members.len(),
-        invite = shared.invite.is_some(),
+        invite = shared.state().invite.is_some(),
         "协调服务启动"
     );
 
     if let Some(socket) = probe {
         tokio::spawn(probe_loop(Arc::clone(&shared), socket));
+    }
+    if let Some(path) = shared.state_file.clone() {
+        tokio::spawn(watch_state(Arc::clone(&shared), path));
     }
 
     loop {
@@ -508,6 +619,7 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
 
     let (tx, mut rx) = mpsc::channel(QUEUE);
     let net_map = Arc::new(Notify::new());
+    let kick = Arc::new(Notify::new());
     let id = shared.next_conn.fetch_add(1, Ordering::Relaxed);
     {
         let mut state = shared.state();
@@ -526,6 +638,7 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
                 id,
                 tx: tx.clone(),
                 net_map: Arc::clone(&net_map),
+                kick: Arc::clone(&kick),
             },
         );
     }
@@ -558,7 +671,21 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     });
 
     loop {
-        let bytes = match tokio::time::timeout(IDLE_TIMEOUT, reader.recv()).await {
+        let received = tokio::select! {
+            received = tokio::time::timeout(IDLE_TIMEOUT, reader.recv()) => received,
+            () = kick.notified() => {
+                // 状态文件里删掉了它：告诉它一声再断开。写任务发完队列里的就会自己结束
+                let reason = "你已经被移出这个网络".to_string();
+                let _ = tx.try_send(ServerMessage::Rejected { reason });
+                drop(tx);
+                if tokio::time::timeout(KICK_FLUSH, writer_task).await.is_err() {
+                    debug!(node = %key, "被移出的节点迟迟不收，直接断开");
+                }
+                info!(node = %key, "节点被移出，已断开");
+                return;
+            }
+        };
+        let bytes = match received {
             Ok(Ok(bytes)) => bytes,
             Ok(Err(err)) => {
                 debug!(node = %key, %err, "连接断开");
@@ -609,6 +736,25 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     }
     writer_task.abort();
     info!(node = %key, "节点下线");
+}
+
+/// 状态文件的样子：修改时间和大小。文件不在是 `None`
+type Stamp = (Option<std::time::SystemTime>, u64);
+
+fn file_stamp(path: &Path) -> Option<Stamp> {
+    std::fs::metadata(path)
+        .ok()
+        .map(|meta| (meta.modified().ok(), meta.len()))
+}
+
+/// 盯着状态文件：和上次读写之后的样子不一样了，就重新读
+async fn watch_state(shared: Arc<Shared>, path: PathBuf) {
+    loop {
+        tokio::time::sleep(STATE_POLL).await;
+        if file_stamp(&path) != *shared.stamp() {
+            shared.reload(&path);
+        }
+    }
 }
 
 /// 简单的令牌桶：每秒补满

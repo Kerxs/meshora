@@ -340,6 +340,10 @@ const FAILURES = {
     hint: "网络码里带着邀请码，但这个网络只认名单。把下面的 ID 发给建网络的人，加进名单后再点「重试」。",
     showId: true,
   },
+  rejectedKicked: {
+    title: "你已被移出这个网络",
+    hint: "建网络的人把你移出了。想回来的话，向对方要一个新的网络码。",
+  },
   rejectedFull: {
     title: "网络已满",
     hint: "这个网络的人数到上限了。联系建网络的人。",
@@ -408,7 +412,8 @@ views.failed = {
   },
   update(ov) {
     let kind = ov.error.kind;
-    if (kind === "rejected" && ov.error.message.includes("邀请码不对")) kind = "rejectedInvite";
+    if (kind === "rejected" && ov.error.message.includes("移出")) kind = "rejectedKicked";
+    else if (kind === "rejected" && ov.error.message.includes("邀请码不对")) kind = "rejectedInvite";
     else if (kind === "rejected" && ov.error.message.includes("不接受凭邀请码")) kind = "rejectedClosed";
     else if (kind === "rejected" && ov.error.message.includes("网络已满")) kind = "rejectedFull";
     if (kind === "tun" && /wintun\.dll/i.test(ov.error.message)) kind = "tunDriver";

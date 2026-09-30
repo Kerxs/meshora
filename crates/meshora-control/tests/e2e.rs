@@ -246,3 +246,77 @@ async fn a_wrong_coordinator_key_is_refused() {
     let result = Session::connect(config(&a, &coord, 41641)).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn a_member_removed_from_the_state_file_is_told_and_stops() {
+    let dir = std::env::temp_dir().join(format!("meshora-control-kick-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let state = dir.join("coord.state");
+
+    let coord_secret = NodeSecret::generate();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let coordinator = meshora_coord::Coordinator::new(meshora_coord::Config {
+        secret: coord_secret.clone(),
+        nodes: vec![],
+        state: Some(state.clone()),
+        overlay: "100.64.0.0/10".parse().unwrap(),
+        probe: None,
+        relays: vec![],
+    })
+    .unwrap();
+    let invite = coordinator.invite();
+    tokio::spawn(coordinator.serve(listener, None));
+
+    let friend = NodeSecret::generate();
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let local_port = socket.local_addr().unwrap().port();
+    let session = Session::connect(Config {
+        secret: friend.clone(),
+        coord: addr,
+        coord_key: coord_secret.public_key(),
+        invite,
+        local_port,
+        keepalive: NonZeroU16::new(25),
+        relay_only: false,
+    })
+    .await
+    .expect("凭邀请码加入");
+    let (_tun_in, from_tun) = mpsc::channel(8);
+    let (to_tun, _tun_out) = mpsc::channel(8);
+    let (events_tx, events_rx) = mpsc::unbounded_channel();
+    let sink = move |event| {
+        let _ = events_tx.send(event);
+    };
+    let dataplane = Arc::new(
+        UserspaceDataPlane::start(
+            &friend,
+            socket,
+            TunChannels { from_tun, to_tun },
+            Arc::new(sink),
+        )
+        .unwrap(),
+    );
+    let running = tokio::spawn(session.run(dataplane, events_rx));
+
+    // 网络主人从状态文件里删掉它（邀请码没换）
+    let key = friend.public_key().to_string();
+    let text: String = std::fs::read_to_string(&state)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains(&key))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&state, text).unwrap();
+
+    // 控制面停下、说明原因，而不是拿着还有效的邀请码重连回去
+    let result = tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("被移出之后控制面一直没停")
+        .unwrap();
+    match result {
+        Err(ControlError::Rejected(reason)) => assert!(reason.contains("移出"), "{reason}"),
+        other => panic!("应该是被移出，结果是 {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -192,6 +192,12 @@ impl Session {
                 // Ping 的发出时间，量出来的往返时间会凭空多出这段等待
                 let outgoing = tokio::select! {
                     message = connection.inbox.recv() => match message {
+                        // 连着连着被拒了：网络主人把本机移出了网络。不再重连 ——
+                        // 手里的邀请码要是还有效，一重连就又加回去了
+                        Some(ServerMessage::Rejected { reason }) => {
+                            warn!(%reason, "协调服务把本机移出了网络");
+                            return Err(ControlError::Rejected(reason));
+                        }
                         Some(message) => {
                             let now = Instant::now();
                             last_heard = now;
@@ -463,7 +469,8 @@ impl Node {
             }
             ServerMessage::Pong => vec![],
             ServerMessage::Welcome { .. } | ServerMessage::Rejected { .. } => {
-                debug!("注册之后又收到了 Welcome 或 Rejected，忽略");
+                // Rejected 在 Session::run 里就处理了，走不到这里
+                debug!("注册之后又收到了 Welcome，忽略");
                 vec![]
             }
         }

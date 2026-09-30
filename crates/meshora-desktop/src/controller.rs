@@ -389,13 +389,17 @@ async fn run(
             _ = tick.tick() => {}
         }
         if !node.is_running() {
-            let message = match node.wait().await {
-                Ok(()) => "节点停了".to_string(),
-                Err(err) => format!("和网络的连接断了：{err}"),
+            let failure = match node.wait().await {
+                Ok(()) => Failure::new(FailureKind::Stopped, "节点停了"),
+                // 连着连着被协调服务拒了：多半是被移出了网络
+                Err(err @ ControlError::Rejected(_)) => {
+                    Failure::new(FailureKind::Rejected, err.to_string())
+                }
+                Err(err) => Failure::new(FailureKind::Stopped, format!("和网络的连接断了：{err}")),
             };
-            warn!(%message);
+            warn!(message = %failure.message);
             let mut state = shared.state();
-            state.phase = Phase::Failed(Failure::new(FailureKind::Stopped, message));
+            state.phase = Phase::Failed(failure);
             state.snapshot = Snapshot::default();
             return;
         }
