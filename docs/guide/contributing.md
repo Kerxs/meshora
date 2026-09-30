@@ -75,3 +75,11 @@ cargo test --workspace
   ping 过来）。CI 里怎么下载、核对 wintun.dll，放行 ping 用的什么命令，都在 `.github/workflows/rust.yml`
 - 只在 Linux 上：用网络命名空间模拟几台机器和 NAT 路由器，真的 ping 一遍。先 `cargo build -p meshorad -p meshora-coord`，
   再 `sudo scripts/e2e-netns.sh target/debug`（需要 iproute2、iptables、ping）
+
+### 发布（维护者）
+
+1. 改根目录 `Cargo.toml` 里的 `version`（各个 crate 都跟着它），`cargo check` 更新 `Cargo.lock`，提交推到 main
+2. 打同名标签推上去：`git tag v0.1.0 && git push origin v0.1.0`
+3. [`desktop.yml`](https://github.com/Kerxs/meshora/blob/main/.github/workflows/desktop.yml) 核对标签和版本号一致、
+   打安装包、算 SHA-256，建一个**草稿** Release，附上安装包和 `SHA256SUMS.txt`。`v0.*` 和带 `-` 的版本标成预发布
+4. 下载草稿里的安装包，在干净的 Windows 上装一遍、连一次，再手动点发布

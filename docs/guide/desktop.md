@@ -16,6 +16,17 @@
 
 连着网的时候关掉窗口，客户端只是缩到托盘，游戏里的连接不断；要彻底退出，右键托盘图标。
 
+## 下载
+
+安装包发在 [GitHub Releases](https://github.com/Kerxs/meshora/releases)，**现在那里还是空的** —— 还没发布过任何版本。
+发布以后，每个版本附一个 `SHA256SUMS.txt`，装之前核对一下安装包没被换过：
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\Meshora_*_x64-setup.exe
+```
+
+算出来的值要和 `SHA256SUMS.txt` 里的一致。只有 Windows x64 的安装包，没有免安装版（[为什么](#它是怎么做的)）。
+
 ## 给玩家：加入一个网络
 
 1. **安装。** 安装包装到 `C:\Program Files`。打开时 Windows 会弹"是否允许此应用对你的设备进行更改" ——
