@@ -3,25 +3,20 @@
 //! ```text
 //! meshorad genkey [文件]              生成私钥：写进文件并打出公钥；不给文件就把私钥打到标准输出
 //! meshorad pubkey [文件]              读私钥（从文件，不给就从标准输入），打出公钥
-//! meshorad up --key <文件> --coord <地址:端口> --coord-key <公钥> [选项]
+//! meshorad up --key <文件> --join <网络码> [选项]
 //! ```
 //!
-//! `up` 的顺序：向协调服务注册拿到 overlay 地址 → 按这个地址建虚拟网卡 → 起数据面 → 跑控制面。
-//! 需要管理员权限（建虚拟网卡）。
+//! `up` 做的事在库里（[`meshorad::start`]），桌面端也用它。需要管理员权限（建虚拟网卡）。
 
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use lexopt::prelude::*;
-use meshora_control::{Config, Session};
-use meshora_tun::{Pipes, Tun, TunConfig};
 use meshora_types::{NodeKey, NodeSecret};
-use meshora_wg::{TunChannels, UserspaceDataPlane};
-use tokio::sync::mpsc;
+use meshorad::NetworkCode;
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -34,8 +29,9 @@ const USAGE: &str = "\
 
 up 的选项：
   --key <文件>          私钥文件（必需）
-  --coord <地址:端口>   协调服务的地址（必需）
-  --coord-key <公钥>    协调服务的公钥（必需）
+  --join <网络码>       要加入的网络：协调服务的 公钥@地址:端口（网络码，建网络的人给你的）
+  --coord <地址:端口>   协调服务的地址。和 --coord-key 一起用，可以代替 --join
+  --coord-key <公钥>    协调服务的公钥
   --port <端口>         WireGuard 和控制报文共用的 UDP 端口，默认 41641，0 表示让系统挑
   --tun <名字>          虚拟网卡的名字，默认 meshora0
   --mtu <字节>          虚拟网卡的 MTU，默认 1280
@@ -46,8 +42,7 @@ up 的选项：
 
 struct Up {
     key: PathBuf,
-    coord: SocketAddr,
-    coord_key: NodeKey,
+    network: NetworkCode,
     port: u16,
     tun: String,
     mtu: u16,
@@ -86,11 +81,13 @@ fn parse() -> Result<Command, lexopt::Error> {
         "genkey" => Ok(Command::GenKey(path_argument(&mut parser)?)),
         "pubkey" => Ok(Command::PubKey(path_argument(&mut parser)?)),
         "up" => {
-            let (mut key, mut coord, mut coord_key) = (None, None, None);
+            let (mut key, mut join, mut coord, mut coord_key) = (None, None, None, None);
             let mut up = Up {
                 key: PathBuf::new(),
-                coord: SocketAddr::from(([0, 0, 0, 0], 0)),
-                coord_key: NodeKey::from_bytes([0; 32]),
+                network: NetworkCode::new(
+                    NodeKey::from_bytes([0; 32]),
+                    SocketAddr::from(([0, 0, 0, 0], 0)),
+                ),
                 port: 41641,
                 tun: "meshora0".into(),
                 mtu: 1280,
@@ -101,6 +98,7 @@ fn parse() -> Result<Command, lexopt::Error> {
             while let Some(arg) = parser.next()? {
                 match arg {
                     Long("key") => key = Some(PathBuf::from(parser.value()?)),
+                    Long("join") => join = Some(parser.value()?.parse()?),
                     Long("coord") => coord = Some(parser.value()?.parse()?),
                     Long("coord-key") => coord_key = Some(parser.value()?.parse()?),
                     Long("port") => up.port = parser.value()?.parse()?,
@@ -114,8 +112,15 @@ fn parse() -> Result<Command, lexopt::Error> {
                 }
             }
             up.key = key.ok_or("缺少 --key")?;
-            up.coord = coord.ok_or("缺少 --coord")?;
-            up.coord_key = coord_key.ok_or("缺少 --coord-key")?;
+            up.network = match (join, coord, coord_key) {
+                (Some(code), None, None) => code,
+                (None, Some(coord), Some(coord_key)) => NetworkCode::new(coord_key, coord),
+                (None, None, None) => {
+                    return Err("缺少 --join（或者 --coord 加 --coord-key）".into());
+                }
+                (Some(_), _, _) => return Err("--join 和 --coord、--coord-key 只能二选一".into()),
+                (None, _, _) => return Err("--coord 和 --coord-key 要一起给".into()),
+            };
             Ok(Command::Up(up))
         }
         other => Err(format!("不认识的子命令 {other:?}\n\n{USAGE}").into()),
@@ -242,61 +247,27 @@ fn warn_if_readable_by_others(_path: &Path) {}
 
 async fn run(up: Up) -> Result<(), String> {
     let secret = load_key(&up.key)?;
-    info!(key = %secret.public_key(), "本机身份");
-
-    let socket = UdpSocket::bind(("0.0.0.0", up.port))
-        .map_err(|err| format!("绑定 UDP 端口 {} 失败：{err}", up.port))?;
-    // --port 0 时由系统挑端口，上报给协调服务的得是实际绑上的那个
-    let local_port = socket
-        .local_addr()
-        .map_err(|err| format!("读取 UDP 端口失败：{err}"))?
-        .port();
-
-    let session = Session::connect(Config {
-        secret: secret.clone(),
-        coord: up.coord,
-        coord_key: up.coord_key,
-        local_port,
+    let coord = up
+        .network
+        .resolve()
+        .await
+        .map_err(|err| format!("找不到协调服务 {}：{err}", up.network.host))?;
+    let mut node = meshorad::start(meshorad::Options {
+        secret,
+        coord,
+        coord_key: up.network.coord_key,
+        port: up.port,
+        tun: up.tun,
+        mtu: up.mtu,
+        metric: None,
         keepalive: up.keepalive,
         relay_only: up.relay_only,
     })
     .await
-    .map_err(|err| format!("注册失败：{err}"))?;
-    let welcome = session.welcome().clone();
-
-    let tun = Tun::open(&TunConfig {
-        name: up.tun.clone(),
-        address: welcome.overlay_ip,
-        prefix_len: welcome.prefix_len,
-        mtu: up.mtu,
-    })
-    .map_err(|err| format!("创建虚拟网卡 {} 失败：{err}", up.tun))?;
-    info!(
-        tun = tun.name(),
-        ip = %welcome.overlay_ip,
-        prefix = welcome.prefix_len,
-        "虚拟网卡已就绪"
-    );
-    let Pipes { from_tun, to_tun } = tun
-        .spawn()
-        .map_err(|err| format!("启动虚拟网卡失败：{err}"))?;
-
-    let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let sink = move |event| {
-        let _ = events_tx.send(event);
-    };
-    let dataplane = UserspaceDataPlane::start(
-        &secret,
-        socket,
-        TunChannels { from_tun, to_tun },
-        Arc::new(sink),
-    )
-    .map_err(|err| format!("启动数据面失败：{err}"))?;
-    // 让数据面认得出发往本网段广播地址的报文 —— 局域网游戏找房间会用到
-    dataplane.set_lan(welcome.overlay_ip, welcome.prefix_len);
+    .map_err(|err| err.to_string())?;
 
     tokio::select! {
-        result = session.run(Arc::new(dataplane), events_rx) => {
+        result = node.wait() => {
             result.map_err(|err| format!("控制面退出：{err}"))
         }
         _ = shutdown_signal() => {

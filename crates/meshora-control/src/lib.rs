@@ -33,7 +33,7 @@ use meshora_proto::noise::{Channel, NoiseError, NoiseStream, NoiseWriter};
 use meshora_types::{NodeKey, NodeSecret, Path};
 use rand_core::{OsRng, RngCore};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -94,6 +94,28 @@ pub struct Welcome {
     pub relays: Vec<RelayInfo>,
 }
 
+/// 控制面此刻的样子，给界面看。见 [`Session::status`]。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Status {
+    /// 和协调服务的连接此刻是否连着。断了的时候已经通了的 peer 照常通，只是看不到新变化。
+    pub coord_connected: bool,
+    /// 协调服务最近一次告诉本机的 peer，按 overlay 地址排好。
+    pub peers: Vec<PeerView>,
+}
+
+/// 一个 peer 在控制面眼里的样子。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerView {
+    /// peer 的身份。
+    pub key: NodeKey,
+    /// peer 的 overlay 地址。
+    pub overlay_ip: Ipv4Addr,
+    /// 已经交给数据面的发送路径。还没选出来为 `None`。
+    pub path: Option<Path>,
+    /// 走直连时，最近一次探测这条直连测到的往返时间。走中继时没测，为 `None`。
+    pub rtt: Option<Duration>,
+}
+
 /// 和协调服务的一条连接：读由单独的任务负责（Noise 的读不能在 select 里被中途取消），
 /// 读到的消息经 channel 交出来
 struct Connection {
@@ -113,6 +135,7 @@ pub struct Session {
     config: Config,
     welcome: Welcome,
     connection: Connection,
+    status: watch::Sender<Status>,
 }
 
 impl Session {
@@ -124,7 +147,16 @@ impl Session {
             config,
             welcome,
             connection,
+            status: watch::Sender::new(Status {
+                coord_connected: true,
+                peers: Vec::new(),
+            }),
         })
+    }
+
+    /// 订阅控制面的状态。[`run`](Self::run) 跑起来之后，每处理完一件事就更新一次（内容没变不通知）。
+    pub fn status(&self) -> watch::Receiver<Status> {
+        self.status.subscribe()
     }
 
     /// 协调服务分配的地址等信息。守护进程据此配置虚拟网卡。
@@ -142,6 +174,7 @@ impl Session {
             config,
             welcome,
             mut connection,
+            status,
         } = self;
         let mut node = Node::new(&config, &welcome, dataplane);
         let mut tick = tokio::time::interval(TICK);
@@ -151,27 +184,30 @@ impl Session {
             let mut last_heard = Instant::now();
             node.take_network_changed();
             loop {
-                let now = Instant::now();
+                // 时间在事件到了之后再取：select 可能等了将近一个节拍，拿等待之前的时刻去记
+                // Ping 的发出时间，量出来的往返时间会凭空多出这段等待
                 let outgoing = tokio::select! {
                     message = connection.inbox.recv() => match message {
                         Some(message) => {
+                            let now = Instant::now();
                             last_heard = now;
                             node.on_server_message(message, now)
                         }
                         None => break,
                     },
                     event = events.recv() => match event {
-                        Some(event) => node.on_event(event, now),
+                        Some(event) => node.on_event(event, Instant::now()),
                         None => return Ok(()),
                     },
-                    _ = tick.tick() => node.on_tick(now),
+                    _ = tick.tick() => node.on_tick(Instant::now()),
                 };
+                node.publish(&status, true);
                 for message in outgoing {
                     if let Err(err) = connection.writer.send(&message.encode()).await {
                         debug!(%err, "发往协调服务失败");
                     }
                 }
-                if now.duration_since(last_heard) > COORD_SILENCE {
+                if last_heard.elapsed() > COORD_SILENCE {
                     warn!(silence = ?COORD_SILENCE, "协调服务太久没有回音");
                     break;
                 }
@@ -183,6 +219,7 @@ impl Session {
 
             // 断开了：边重连边照常处理事件和节拍，只是发不了消息给协调服务
             warn!("和协调服务的连接断了，重连中");
+            node.publish(&status, false);
             let mut backoff = Duration::from_secs(1);
             connection = loop {
                 let (delay, config) = (backoff, &config);
@@ -192,15 +229,15 @@ impl Session {
                 };
                 tokio::pin!(reconnect);
                 let result = loop {
-                    let now = Instant::now();
                     tokio::select! {
                         result = &mut reconnect => break result,
                         event = events.recv() => match event {
-                            Some(event) => drop(node.on_event(event, now)),
+                            Some(event) => drop(node.on_event(event, Instant::now())),
                             None => return Ok(()),
                         },
-                        _ = tick.tick() => drop(node.on_tick(now)),
+                        _ = tick.tick() => drop(node.on_tick(Instant::now())),
                     }
+                    node.publish(&status, false);
                 };
                 match result {
                     Ok((again, connection)) => {
@@ -294,6 +331,7 @@ async fn connect_once(config: &Config) -> Result<(Welcome, Connection), ControlE
 }
 
 struct PeerState {
+    overlay_ip: Ipv4Addr,
     paths: PeerPaths,
     /// 已经告诉数据面的路径
     current: Option<Path>,
@@ -445,10 +483,12 @@ impl Node {
         self.peers.retain(|key, _| set.get(key).is_some());
         for peer in &peers {
             let state = self.peers.entry(peer.key).or_insert_with(|| PeerState {
+                overlay_ip: peer.overlay_ip,
                 paths: PeerPaths::default(),
                 current: None,
                 last_call_me_maybe: None,
             });
+            state.overlay_ip = peer.overlay_ip;
             state.paths.set_advertised(&peer.endpoints);
         }
         self.update_paths(now);
@@ -577,6 +617,35 @@ impl Node {
             self.next_probe = now;
         }
         self.last_local_ip = Some(new);
+    }
+
+    /// 把此刻的样子交给订阅者，没变就不通知
+    fn publish(&self, status: &watch::Sender<Status>, coord_connected: bool) {
+        let mut peers: Vec<PeerView> = self
+            .peers
+            .iter()
+            .map(|(key, state)| PeerView {
+                key: *key,
+                overlay_ip: state.overlay_ip,
+                path: state.current,
+                rtt: match state.current {
+                    Some(Path::Direct(addr)) => state.paths.rtt(addr),
+                    _ => None,
+                },
+            })
+            .collect();
+        peers.sort_by_key(|peer| peer.overlay_ip);
+        let next = Status {
+            coord_connected,
+            peers,
+        };
+        status.send_if_modified(|current| {
+            let changed = *current != next;
+            if changed {
+                *current = next;
+            }
+            changed
+        });
     }
 
     fn take_network_changed(&mut self) -> bool {

@@ -48,6 +48,20 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 libc = "0.2"
 # Windows 的虚拟网卡驱动 wintun 的绑定。运行时要求 wintun.dll 在 meshorad.exe 旁边
 wintun = "0.5"
+# 配 wintun 网卡的地址、MTU、跃点数用 IP Helper API，不调 netsh：桌面端没有控制台，
+# 每起一个 netsh 都会闪一个黑窗口。tokio 本来就依赖同一个版本
+windows-sys = "0.61"
+# 桌面端（crates/meshora-desktop）的界面：系统自带的 WebView2 画界面，Rust 这一侧直接跑节点。
+# 只在 Windows 上编译。它拉进来的依赖比整个核心还多，所以核心的 crate 一个都不许依赖它
+# custom-protocol：界面文件编进可执行文件里，从 tauri:// 读，不连开发服务器（这里没有开发服务器）。
+# tray-icon：连着网的时候关窗口只是缩到托盘，游戏里的连接不断
+tauri = { version = "2.12", default-features = false, features = ["wry", "common-controls-v6", "compression", "custom-protocol", "tray-icon"] }
+tauri-build = { version = "2.7", default-features = false }
+# 第二次打开客户端时把已经开着的那个窗口叫到前面：两份同时跑会抢同一块虚拟网卡和同一个端口
+tauri-plugin-single-instance = "2"
+# 桌面端存设置、和界面之间传数据。tauri 本来就依赖它们
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [workspace.lints.rust]
 # M1 接 wintun 时免不了 FFI：届时在具体模块上 allow，并写清 SAFETY

@@ -23,6 +23,8 @@
   **在 Linux 上，两台机器之间能经加密隧道 ping 通**：同一网段直连、两边各在一个 NAT 后面打洞直连、
   打不通时经中继，都验证过（NAT 是用 Linux 模拟的）。**Windows 上**，守护进程和 wintun 虚拟网卡在
   CI 的 Windows 虚拟机里实测过：和同一台机器上的另一个节点经加密隧道收发报文，直连和经中继都通。
+  还有 Windows 的**桌面客户端** `meshora-desktop`（Tauri）：贴一个网络码就能加入，见
+  [桌面客户端](https://kerxs.github.io/meshora/guide/desktop)。它和 `meshorad` 用同一套节点代码。
 - **仓库元文件** —— 许可证、贡献指南、安全策略。
 
 还差的：**没在两台真的 Windows 机器之间试过**（M1 的目标）；**没在真实网络里测过打洞**（家用路由器、运营商的 NAT）；
@@ -123,6 +125,11 @@ cargo test --workspace
 
 CI 在 Linux 和 Windows 上都跑测试，见 [`.github/workflows/rust.yml`](.github/workflows/rust.yml)。
 
+桌面客户端的界面部分（Tauri）只在 Windows 上编译；在别的平台上 `meshora-desktop` 只编出一个打一句话就退出的程序，
+所以 Linux 上的 `cargo build --workspace` 不需要 WebKit。它的可执行文件要求管理员权限，
+开发时设环境变量 `MESHORA_DESKTOP_AS_INVOKER=1` 再编译就不要求（这时连网络会停在建虚拟网卡那一步）。
+安装包由 [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml) 打。
+
 ## 自己试一试
 
 > **还没经过任何安全审查，别拿它保护真实的流量。** 这一节是给想亲手验证设计的人看的。
@@ -165,6 +172,8 @@ sudo scripts/e2e-netns.sh target/debug
    ```bash
    sudo meshorad up --key node.key --coord <服务器地址>:7443 --coord-key <协调服务的公钥>
    ```
+
+   协调服务启动时会打出**网络码**（`公钥@地址:端口`），`--coord` 加 `--coord-key` 也可以换成 `--join <网络码>`。
 
 然后 A 上 `ping 100.64.0.2`，B 上 `ping 100.64.0.1`。节点日志里的 `切换路径` 说明走的是哪条路：
 `path=Direct(...)` 是直连，`path=Relay {...}` 是经中继。

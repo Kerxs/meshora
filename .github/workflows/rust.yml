@@ -41,36 +41,20 @@ jobs:
         # Windows 是第一个目标平台，从第一天起就进 CI；Linux 是协调服务和中继的平台
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Windows 上还要编译桌面端（Tauri），从头编译比核心慢得多
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install --no-self-update
       - run: cargo test --workspace --locked
-      # wintun 那部分代码只在 Windows 上才编译得到，lint 也只能在这里做
+      # wintun 和桌面端界面（Tauri）那部分代码只在 Windows 上才编译得到，lint 也只能在这里做
       - if: runner.os == 'Windows'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # Windows 上真的创建网卡要 wintun.dll。从官网下载，核对压缩包的哈希和 DLL 的签名，
+      # Windows 上真的创建网卡要 wintun.dll。从官网下载，核对压缩包的哈希和 DLL 的签名（脚本里），
       # 放到测试程序和 meshorad.exe 旁边 —— 代码只从可执行文件所在的目录加载它，不走系统搜索路径
       - if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $zip = Join-Path $env:RUNNER_TEMP 'wintun.zip'
-          Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $zip
-          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
-          Write-Output "wintun-0.14.1.zip SHA256: $hash"
-          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP -Force
-          $dll = Join-Path $env:RUNNER_TEMP 'wintun\bin\amd64\wintun.dll'
-          $sig = Get-AuthenticodeSignature $dll
-          Write-Output "wintun.dll signature: $($sig.Status) / $($sig.SignerCertificate.Subject)"
-          if ($hash -ne '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51') {
-            throw 'wintun-0.14.1.zip SHA256 mismatch'
-          }
-          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=WireGuard LLC') {
-            throw 'wintun.dll is not validly signed by WireGuard LLC'
-          }
-          Copy-Item $dll target\debug\deps\
-          Copy-Item $dll target\debug\
+        run: scripts/fetch-wintun.ps1 -Destination target\debug, target\debug\deps
       # 真机测试里另一个节点会主动 ping 过来。Windows 防火墙默认挡进来的 ping：
       # 这条就是 README 让用户执行的命令，只是网段换成测试用的 198.18.0.0/15。
       # 先打出防火墙各配置文件的开关状态，看得出这条规则是不是真起了作用

@@ -1,0 +1,5 @@
+# tauri-build 每次编译重新生成的权限 schema
+/gen/
+
+# CI 下载的 wintun.dll（scripts/fetch-wintun.ps1），打包用
+/wintun/
