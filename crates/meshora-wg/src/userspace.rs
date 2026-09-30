@@ -10,7 +10,7 @@ mod relay;
 
 use std::collections::HashMap;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -181,6 +181,12 @@ impl UserspaceDataPlane {
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.shared.socket.local_addr()
     }
+
+    /// 本机所在的 overlay 网段，见 [`Engine::set_lan`]。
+    /// 虚拟网卡配好地址之后调一次。
+    pub fn set_lan(&self, addr: Ipv4Addr, prefix_len: u8) {
+        self.shared.engine().set_lan(addr, prefix_len);
+    }
 }
 
 impl Drop for UserspaceDataPlane {
@@ -244,8 +250,9 @@ async fn receive_loop(shared: Arc<Shared>) {
 
 async fn tun_loop(shared: Arc<Shared>, mut from_tun: mpsc::Receiver<Vec<u8>>) {
     while let Some(packet) = from_tun.recv().await {
-        let transmit = shared.engine().outbound(&packet, Instant::now());
-        if let Some(t) = transmit {
+        // 先把锁放掉再发：局域网广播会给每个节点各产出一份，发送要 await
+        let transmits = shared.engine().outbound(&packet, Instant::now());
+        for t in transmits {
             shared.transmit(t).await;
         }
     }
