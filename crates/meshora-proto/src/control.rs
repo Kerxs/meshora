@@ -7,14 +7,15 @@
 //!
 //! 1. 节点连上，完成 Noise IK 握手 —— 身份在这一步就证明了
 //! 2. 节点发 [`ClientMessage::Hello`]。**协调服务在收到它之前不做任何有副作用的事**：
-//!    IK 的第一个握手包可以被重放，收到加密的 Hello 才说明对面真在线（威胁模型 R1）
+//!    IK 的第一个握手包可以被重放，收到加密的 Hello 才说明对面真在线（威胁模型 R1）。
+//!    Hello 里可以带邀请码：不在名单里的节点凭它加入网络
 //! 3. 协调服务回 [`ServerMessage::Welcome`]（或 [`ServerMessage::Rejected`] 后断开），
 //!    接着发 [`ServerMessage::NetMap`]；此后网里有变化就再发一份完整的 NetMap
 //! 4. 节点的候选端点变了就发 [`ClientMessage::Endpoints`]
 
 use std::net::{Ipv4Addr, SocketAddr};
 
-use meshora_types::NodeKey;
+use meshora_types::{Invite, NodeKey};
 
 use crate::codec::{DecodeError, Reader, Writer};
 
@@ -41,8 +42,14 @@ pub struct RelayInfo {
 /// 节点发给协调服务的消息。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientMessage {
-    /// 握手后的第一条消息。身份已经由握手证明，这里什么也不用带。
-    Hello,
+    /// 握手后的第一条消息。身份已经由握手证明。
+    ///
+    /// 不在名单里的节点带上邀请码，协调服务核对无误就把它加进网络。已经在名单里的节点
+    /// 带不带都一样。不带时只有一个字节，和没有邀请码之前的节点发的一模一样。
+    Hello {
+        /// 邀请码。
+        invite: Option<Invite>,
+    },
     /// 本机的候选端点（完整列表）。
     Endpoints(Vec<SocketAddr>),
     /// 请协调服务转告 `peer`：现在向我的端点发包。两边同时发，才能在各自的 NAT 上凿出洞。
@@ -115,7 +122,12 @@ impl ClientMessage {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         match self {
-            Self::Hello => w.u8(tag::HELLO),
+            Self::Hello { invite } => {
+                w.u8(tag::HELLO);
+                if let Some(invite) = invite {
+                    w.bytes(invite.as_bytes());
+                }
+            }
             Self::Endpoints(endpoints) => {
                 w.u8(tag::ENDPOINTS);
                 write_endpoints(&mut w, endpoints);
@@ -133,7 +145,15 @@ impl ClientMessage {
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader::new(bytes);
         let message = match r.u8()? {
-            tag::HELLO => Self::Hello,
+            tag::HELLO => Self::Hello {
+                invite: match r.rest() {
+                    [] => None,
+                    rest => Some(Invite::from_bytes(
+                        rest.try_into()
+                            .map_err(|_| DecodeError::Invalid("邀请码应为 16 个字节"))?,
+                    )),
+                },
+            },
             tag::ENDPOINTS => Self::Endpoints(read_endpoints(&mut r)?),
             tag::CALL_ME_MAYBE => Self::CallMeMaybe { peer: r.key()? },
             tag::PING => Self::Ping,
@@ -259,7 +279,10 @@ mod tests {
     #[test]
     fn client_messages_round_trip() {
         let messages = [
-            ClientMessage::Hello,
+            ClientMessage::Hello { invite: None },
+            ClientMessage::Hello {
+                invite: Some(Invite::from_bytes([5; 16])),
+            },
             ClientMessage::Endpoints(vec![
                 addr("192.168.1.10:41641"),
                 addr("[2001:db8::7]:41641"),
@@ -319,6 +342,15 @@ mod tests {
             Err(DecodeError::UnknownType(99))
         );
         assert_eq!(ClientMessage::decode(&[]), Err(DecodeError::Truncated));
+        // 没有邀请码的 Hello 就是一个字节：老节点发的也是这个
+        assert_eq!(
+            ClientMessage::decode(&[tag::HELLO]),
+            Ok(ClientMessage::Hello { invite: None })
+        );
+        assert_eq!(
+            ClientMessage::decode(&[tag::HELLO, 1, 2, 3]),
+            Err(DecodeError::Invalid("邀请码应为 16 个字节"))
+        );
         assert_eq!(
             ClientMessage::decode(&[tag::PING, 0]),
             Err(DecodeError::TrailingBytes)

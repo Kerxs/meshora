@@ -61,7 +61,10 @@ async fn start_relay(nodes: Vec<NodeKey>) -> RelayInfo {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(meshora_relay::serve(
-        meshora_relay::Config { secret, nodes },
+        meshora_relay::Config {
+            secret,
+            allow: meshora_relay::allow_list(nodes),
+        },
         listener,
     ));
     RelayInfo { key, addr }
@@ -76,6 +79,7 @@ async fn start_coord(case: &Case, nodes: Vec<NodeKey>, relays: Vec<RelayInfo>) -
     let config = meshora_coord::Config {
         secret,
         nodes,
+        state: None,
         overlay: format!("198.18.{}.0/24", case.subnet).parse().unwrap(),
         probe: Some(probe.local_addr().unwrap()),
         relays,
@@ -156,6 +160,7 @@ async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) -> Ech
         secret: secret.clone(),
         coord: coord.addr,
         coord_key: coord.key,
+        invite: None,
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: case.relay_only,

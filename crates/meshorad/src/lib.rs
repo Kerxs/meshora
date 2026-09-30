@@ -14,7 +14,7 @@ use std::sync::Arc;
 use meshora_control::{Config, ControlError, Session, Status, Welcome};
 use meshora_dataplane::{DataPlane, PeerStatus};
 use meshora_tun::{Pipes, Tun, TunConfig};
-use meshora_types::{NodeKey, NodeSecret};
+use meshora_types::{Invite, NodeKey, NodeSecret};
 use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -30,6 +30,8 @@ pub struct Options {
     pub coord: SocketAddr,
     /// 协调服务的公钥。
     pub coord_key: NodeKey,
+    /// 邀请码：本机还不在网里时凭它加入。
+    pub invite: Option<Invite>,
     /// WireGuard 和控制报文共用的 UDP 端口，0 表示让系统挑。
     pub port: u16,
     /// 虚拟网卡的名字。
@@ -102,6 +104,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         secret: options.secret.clone(),
         coord: options.coord,
         coord_key: options.coord_key,
+        invite: options.invite,
         local_port,
         keepalive: options.keepalive,
         relay_only: options.relay_only,

@@ -11,6 +11,8 @@ publish.workspace = true
 base64.workspace = true
 x25519-dalek.workspace = true
 zeroize.workspace = true
+# 生成邀请码
+rand_core.workspace = true
 
 [lints]
 workspace = true

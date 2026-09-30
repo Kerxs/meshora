@@ -2245,6 +2245,7 @@ name = "meshora-types"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "rand_core",
  "x25519-dalek",
  "zeroize",
 ]

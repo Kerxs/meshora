@@ -22,6 +22,7 @@ async fn start(nodes: &[&NodeSecret]) -> Coord {
     let config = Config {
         secret,
         nodes: nodes.iter().map(|n| n.public_key()).collect(),
+        state: None,
         overlay: "100.64.0.0/10".parse().unwrap(),
         probe: Some(probe),
         relays: vec![],
@@ -55,7 +56,7 @@ async fn recv(client: &mut Client) -> ServerMessage {
 /// 连上、打招呼、收下 Welcome 和第一份 NetMap
 async fn join(coord: &Coord, secret: &NodeSecret) -> (Client, ServerMessage, ServerMessage) {
     let mut client = connect(coord, secret).await;
-    send(&mut client, ClientMessage::Hello).await;
+    send(&mut client, ClientMessage::Hello { invite: None }).await;
     let welcome = recv(&mut client).await;
     let net_map = recv(&mut client).await;
     (client, welcome, net_map)
@@ -98,7 +99,7 @@ async fn stranger_is_rejected() {
     let coord = start(&[&a]).await;
 
     let mut client = connect(&coord, &stranger).await;
-    send(&mut client, ClientMessage::Hello).await;
+    send(&mut client, ClientMessage::Hello { invite: None }).await;
     assert!(matches!(
         recv(&mut client).await,
         ServerMessage::Rejected { .. }
@@ -341,4 +342,247 @@ fn bad_member_lists_are_refused() {
     // /30 只有两个可用地址
     let keys: Vec<NodeKey> = (1..=3).map(|n| NodeKey::from_bytes([n; 32])).collect();
     assert!(assign(&keys, "10.0.0.0/30".parse().unwrap()).is_err());
+}
+
+/// 测试用的状态文件，放在单独的临时目录里，用完删掉
+struct TempState(PathBuf);
+
+impl TempState {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("meshora-coord-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Self(dir.join("coord.state"))
+    }
+
+    fn text(&self) -> String {
+        std::fs::read_to_string(&self.0).unwrap()
+    }
+}
+
+impl Drop for TempState {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+fn state_config(secret: NodeSecret, nodes: Vec<NodeKey>, state: &TempState) -> Config {
+    Config {
+        secret,
+        nodes,
+        state: Some(state.0.clone()),
+        overlay: "100.64.0.0/10".parse().unwrap(),
+        probe: None,
+        relays: vec![],
+    }
+}
+
+/// 带状态文件起一个协调服务，交出它的邀请码
+async fn start_with(
+    secret: NodeSecret,
+    nodes: &[&NodeSecret],
+    state: &TempState,
+) -> (Coord, Invite) {
+    let key = secret.public_key();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let coordinator = Coordinator::new(state_config(
+        secret,
+        nodes.iter().map(|n| n.public_key()).collect(),
+        state,
+    ))
+    .unwrap();
+    let invite = coordinator.invite().expect("有状态文件就有邀请码");
+    tokio::spawn(coordinator.serve(listener, None));
+    let coord = Coord {
+        addr,
+        probe: addr,
+        key,
+    };
+    (coord, invite)
+}
+
+async fn hello(
+    coord: &Coord,
+    secret: &NodeSecret,
+    invite: Option<Invite>,
+) -> (Client, ServerMessage) {
+    let mut client = connect(coord, secret).await;
+    send(&mut client, ClientMessage::Hello { invite }).await;
+    let first = recv(&mut client).await;
+    (client, first)
+}
+
+fn welcome_ip(message: &ServerMessage) -> Ipv4Addr {
+    match message {
+        ServerMessage::Welcome { overlay_ip, .. } => *overlay_ip,
+        other => panic!("应该是 Welcome，收到 {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn an_invite_lets_a_stranger_join_with_the_next_free_address() {
+    let state = TempState::new("join");
+    let a = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let (coord, invite) = start_with(NodeSecret::generate(), &[&a], &state).await;
+    let (mut client_a, _, _) = join(&coord, &a).await;
+
+    let (_friend, welcome) = hello(&coord, &friend, Some(invite)).await;
+    assert_eq!(welcome_ip(&welcome), Ipv4Addr::new(100, 64, 0, 2));
+
+    // 已经在线的人收到新的 NetMap，里面有了新成员
+    let net_map = recv(&mut client_a).await;
+    assert_eq!(
+        net_map,
+        ServerMessage::NetMap {
+            peers: vec![PeerInfo {
+                key: friend.public_key(),
+                overlay_ip: Ipv4Addr::new(100, 64, 0, 2),
+                endpoints: vec![],
+            }],
+        }
+    );
+    // 写进了状态文件
+    assert!(
+        state
+            .text()
+            .contains(&format!("member {} 100.64.0.2", friend.public_key()))
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_invite_is_rejected_and_changes_nothing() {
+    let state = TempState::new("wrong");
+    let a = NodeSecret::generate();
+    let stranger = NodeSecret::generate();
+    let (coord, _) = start_with(NodeSecret::generate(), &[&a], &state).await;
+
+    let (_client, reply) = hello(&coord, &stranger, Some(Invite::generate())).await;
+    let ServerMessage::Rejected { reason } = reply else {
+        panic!("应该被拒绝");
+    };
+    assert!(reason.contains("邀请码不对"), "{reason}");
+    assert!(!state.text().contains("member "));
+
+    // 不带邀请码的陌生人也进不来
+    let (_client, reply) = hello(&coord, &stranger, None).await;
+    assert!(matches!(reply, ServerMessage::Rejected { .. }));
+}
+
+#[tokio::test]
+async fn without_a_state_file_invites_are_refused() {
+    let a = NodeSecret::generate();
+    let stranger = NodeSecret::generate();
+    let coord = start(&[&a]).await;
+    let (_client, reply) = hello(&coord, &stranger, Some(Invite::generate())).await;
+    let ServerMessage::Rejected { reason } = reply else {
+        panic!("应该被拒绝");
+    };
+    assert!(reason.contains("不接受"), "{reason}");
+}
+
+#[tokio::test]
+async fn joined_members_keep_their_address_across_restarts() {
+    let state = TempState::new("restart");
+    let a = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let other = NodeSecret::generate();
+    let secret = NodeSecret::generate();
+
+    let (coord, invite) = start_with(secret.clone(), &[&a], &state).await;
+    let (_c1, welcome) = hello(&coord, &friend, Some(invite)).await;
+    assert_eq!(welcome_ip(&welcome), Ipv4Addr::new(100, 64, 0, 2));
+    let (_c2, welcome) = hello(&coord, &other, Some(invite)).await;
+    assert_eq!(welcome_ip(&welcome), Ipv4Addr::new(100, 64, 0, 3));
+
+    // 重启：同一个状态文件。邀请码不变，成员不用邀请码也认得，地址不变
+    let (coord, again) = start_with(secret, &[&a], &state).await;
+    assert_eq!(again, invite);
+    let (_c3, welcome) = hello(&coord, &other, None).await;
+    assert_eq!(welcome_ip(&welcome), Ipv4Addr::new(100, 64, 0, 3));
+}
+
+#[tokio::test]
+async fn deleting_the_invite_line_rotates_it_without_touching_members() {
+    let state = TempState::new("rotate");
+    let a = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let late = NodeSecret::generate();
+    let secret = NodeSecret::generate();
+
+    let (coord, old) = start_with(secret.clone(), &[&a], &state).await;
+    let (_c, _) = hello(&coord, &friend, Some(old)).await;
+
+    let text: String = state
+        .text()
+        .lines()
+        .filter(|line| !line.starts_with("invite"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&state.0, text).unwrap();
+
+    let (coord, new) = start_with(secret, &[&a], &state).await;
+    assert_ne!(new, old);
+    // 旧的邀请码进不来了；已经加入的照常
+    let (_c, reply) = hello(&coord, &late, Some(old)).await;
+    assert!(matches!(reply, ServerMessage::Rejected { .. }));
+    let (_c, reply) = hello(&coord, &friend, None).await;
+    assert_eq!(welcome_ip(&reply), Ipv4Addr::new(100, 64, 0, 2));
+}
+
+#[test]
+fn a_state_file_that_collides_with_the_node_list_is_an_error() {
+    let state = TempState::new("collide");
+    let a = NodeSecret::generate();
+    let b = NodeSecret::generate();
+    let joined = NodeSecret::generate();
+    std::fs::create_dir_all(state.0.parent().unwrap()).unwrap();
+    // joined 占着 .2，名单后来又加了一个 b，也要 .2
+    std::fs::write(
+        &state.0,
+        format!("member {} 100.64.0.2\n", joined.public_key()),
+    )
+    .unwrap();
+    let ok = Coordinator::new(state_config(
+        NodeSecret::generate(),
+        vec![a.public_key()],
+        &state,
+    ));
+    assert!(ok.is_ok());
+    let err = Coordinator::new(state_config(
+        NodeSecret::generate(),
+        vec![a.public_key(), b.public_key()],
+        &state,
+    ))
+    .err()
+    .unwrap();
+    assert!(err.to_string().contains("已经分给了"), "{err}");
+
+    std::fs::write(&state.0, "member not-a-key 100.64.0.2\n").unwrap();
+    assert!(Coordinator::new(state_config(NodeSecret::generate(), vec![], &state)).is_err());
+}
+
+#[test]
+fn the_member_check_for_the_relay_sees_new_members() {
+    let state = TempState::new("relay");
+    let a = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let coordinator = Coordinator::new(state_config(
+        NodeSecret::generate(),
+        vec![a.public_key()],
+        &state,
+    ))
+    .unwrap();
+    let members = coordinator.members();
+    assert!(members(&a.public_key()));
+    assert!(!members(&friend.public_key()));
+
+    let invite = coordinator.invite().unwrap();
+    coordinator
+        .shared
+        .admit(&friend.public_key(), Some(invite))
+        .unwrap();
+    assert!(members(&friend.public_key()));
 }

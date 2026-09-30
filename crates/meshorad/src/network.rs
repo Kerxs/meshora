@@ -1,9 +1,11 @@
-//! 网络码：加入一个联机网络要的全部信息 —— 协调服务的公钥和地址。
+//! 网络码：加入一个联机网络要的全部信息 —— 协调服务的公钥和地址，可能还有邀请码。
 //!
-//! 写成 `公钥@主机:端口`，比如 `mTe0...Xk=@play.example.com:7443`。建网络的人把它发给朋友，
-//! 朋友贴进客户端就能连。前面可以带 `meshora:`，前后的空白不算。
+//! 写成 `公钥@主机:端口#邀请码`，比如 `mTe0...Xk=@play.example.com:7443#3q2-7wEYkQ6n0Cf8Hs5VYA`。
+//! 建网络的人把它发给朋友，朋友贴进客户端就能加入。前面可以带 `meshora:`，前后的空白不算。
 //!
-//! 网络码不是秘密：拿到它只能连到协调服务，协调服务不认你的公钥照样拒之门外。
+//! - **不带邀请码的**不是秘密：拿到它只能连到协调服务，协调服务不认你的公钥照样拒之门外
+//! - **带邀请码的是秘密**：谁拿到都能加入这个网络。只发给要一起玩的人
+//!
 //! 公钥是用来认协调服务的 —— 有了它，冒充协调服务的人过不了握手。
 
 use std::fmt;
@@ -11,11 +13,11 @@ use std::io;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
-use meshora_types::NodeKey;
+use meshora_types::{Invite, NodeKey};
 
 const PREFIX: &str = "meshora:";
 
-/// 一个网络码：协调服务的公钥和地址，写成 `公钥@主机:端口`。
+/// 一个网络码：协调服务的公钥和地址，可能还有邀请码。写成 `公钥@主机:端口#邀请码`。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkCode {
     /// 协调服务的公钥。
@@ -24,6 +26,8 @@ pub struct NetworkCode {
     pub host: String,
     /// 协调服务的端口。
     pub port: u16,
+    /// 邀请码。有了它，不在名单里也能加入。
+    pub invite: Option<Invite>,
 }
 
 impl NetworkCode {
@@ -33,6 +37,7 @@ impl NetworkCode {
             coord_key,
             host: addr.ip().to_string(),
             port: addr.port(),
+            invite: None,
         }
     }
 
@@ -58,9 +63,13 @@ impl NetworkCode {
 impl fmt::Display for NetworkCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.host.contains(':') {
-            write!(f, "{}@[{}]:{}", self.coord_key, self.host, self.port)
+            write!(f, "{}@[{}]:{}", self.coord_key, self.host, self.port)?;
         } else {
-            write!(f, "{}@{}:{}", self.coord_key, self.host, self.port)
+            write!(f, "{}@{}:{}", self.coord_key, self.host, self.port)?;
+        }
+        match &self.invite {
+            Some(invite) => write!(f, "#{invite}"),
+            None => Ok(()),
         }
     }
 }
@@ -83,6 +92,17 @@ impl FromStr for NetworkCode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         let s = s.strip_prefix(PREFIX).unwrap_or(s);
+        let (s, invite) = match s.rsplit_once('#') {
+            Some((rest, invite)) => (
+                rest,
+                Some(
+                    invite
+                        .parse()
+                        .map_err(|_| ParseNetworkCodeError("网络码里 # 后面不是合法的邀请码"))?,
+                ),
+            ),
+            None => (s, None),
+        };
         let (key, addr) = s
             .split_once('@')
             .ok_or(ParseNetworkCodeError("网络码应为 公钥@地址:端口，没找到 @"))?;
@@ -115,6 +135,7 @@ impl FromStr for NetworkCode {
             coord_key,
             host: host.to_owned(),
             port,
+            invite,
         })
     }
 }
@@ -141,13 +162,40 @@ mod tests {
 
         let code: NetworkCode = format!("{}@[2001:db8::1]:7443", key()).parse().unwrap();
         assert_eq!(code.host, "2001:db8::1");
+        assert_eq!(code.invite, None);
+    }
+
+    #[test]
+    fn carries_an_invite() {
+        let invite = Invite::from_bytes([3; 16]);
+        let code: NetworkCode = format!("{}@play.example.com:7443#{invite}", key())
+            .parse()
+            .unwrap();
+        assert_eq!(code.invite, Some(invite));
+        assert_eq!(code.host, "play.example.com");
+        assert_eq!(code.port, 7443);
+
+        let code: NetworkCode = format!("{}@[2001:db8::1]:7443#{invite}", key())
+            .parse()
+            .unwrap();
+        assert_eq!(code.host, "2001:db8::1");
+        assert_eq!(code.invite, Some(invite));
+
+        assert!(
+            format!("{}@play.example.com:7443#nope", key())
+                .parse::<NetworkCode>()
+                .is_err()
+        );
     }
 
     #[test]
     fn round_trips_through_display() {
+        let invite = Invite::from_bytes([3; 16]);
         for text in [
             format!("{}@play.example.com:7443", key()),
             format!("{}@[2001:db8::1]:7443", key()),
+            format!("{}@play.example.com:7443#{invite}", key()),
+            format!("{}@[2001:db8::1]:7443#{invite}", key()),
         ] {
             let code: NetworkCode = text.parse().unwrap();
             assert_eq!(code.to_string(), text);

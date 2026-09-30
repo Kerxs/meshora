@@ -37,12 +37,22 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// 发往一个节点的帧队列。满了就丢，和 UDP 一样。
 const QUEUE: usize = 256;
 
+/// 谁能用这个中继：每次有节点连上来时问一次。
+///
+/// 是个函数而不是名单：和协调服务跑在同一个进程里时，凭邀请码新加入的节点也要马上能用中继。
+pub type Allow = Arc<dyn Fn(&NodeKey) -> bool + Send + Sync>;
+
+/// 只允许一份固定名单里的节点。
+pub fn allow_list(nodes: Vec<NodeKey>) -> Allow {
+    Arc::new(move |key| nodes.contains(key))
+}
+
 /// 中继服务的配置。
 pub struct Config {
     /// 中继自己的身份。节点事先知道它的公钥（协调服务在 Welcome 里告诉节点）。
     pub secret: NodeSecret,
     /// 允许使用这个中继的节点。
-    pub nodes: Vec<NodeKey>,
+    pub allow: Allow,
 }
 
 struct Client {
@@ -52,7 +62,7 @@ struct Client {
 
 struct Shared {
     secret: NodeSecret,
-    nodes: Vec<NodeKey>,
+    allow: Allow,
     clients: Mutex<HashMap<NodeKey, Client>>,
     next_id: AtomicU64,
     admission: Arc<Admission>,
@@ -68,7 +78,7 @@ impl Shared {
 pub async fn serve(config: Config, listener: TcpListener) -> io::Result<()> {
     let shared = Arc::new(Shared {
         secret: config.secret,
-        nodes: config.nodes,
+        allow: config.allow,
         clients: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(0),
         admission: Admission::new(PENDING_PER_SOURCE),
@@ -109,7 +119,7 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
         }
     };
     let key = stream.remote();
-    if !shared.nodes.contains(&key) {
+    if !(shared.allow)(&key) {
         debug!(%from, node = %key, "不在名单里，断开");
         return;
     }
@@ -192,7 +202,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let config = Config {
             secret,
-            nodes: nodes.iter().map(|n| n.public_key()).collect(),
+            allow: allow_list(nodes.iter().map(|n| n.public_key()).collect()),
         };
         tokio::spawn(serve(config, listener));
         (addr, key)
