@@ -8,7 +8,7 @@
   const id = "mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY=";
   const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443#3q2-7wEYkQ6n0Cf8Hs5VYA";
   const peers = [
-    { id: "Kx81ZrT0pQv3Yb7Nc2Lw5Df8Gh1Jk4Ms6Aa9Ee0Ii2U=", ip: "100.64.0.1", route: "direct", rttMs: 14, jitterMs: 3, online: true, rx: 18_734_112, tx: 9_201_554 },
+    { id: "Kx81ZrT0pQv3Yb7Nc2Lw5Df8Gh1Jk4Ms6Aa9Ee0Ii2U=", ip: "100.64.0.1", route: "direct", rttMs: 14, jitterMs: 3, lossPercent: 2, online: true, rx: 18_734_112, tx: 9_201_554 },
     { id: "Pm42VcX9sB1nQ7rT3yH5jK8lZ0wE2dF4gA6uI9oO1eU=", ip: "100.64.0.2", route: "relay", rttMs: null, jitterMs: null, online: true, rx: 2_048_331, tx: 1_530_227 },
     { id: "Wq7Hd3Fk9Lz1Xc5Vb8Nm2As4Df6Gh0Jk3Lq5We7Rt9Y=", ip: "100.64.0.4", route: "pending", rttMs: null, jitterMs: null, online: false, rx: 0, tx: 0 },
   ];

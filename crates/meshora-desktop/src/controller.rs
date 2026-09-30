@@ -119,6 +119,8 @@ pub struct PeerRow {
     pub rtt_ms: Option<u64>,
     /// 直连往返时间的抖动（毫秒）。
     pub jitter_ms: Option<u64>,
+    /// 直连的丢包率（百分比）。
+    pub loss_percent: Option<u8>,
     /// 最近 180 秒内握过手（WireGuard 的会话不续就作废的时长）。
     pub online: bool,
     /// 收到的字节数。
@@ -477,6 +479,7 @@ fn rows(status: &Status, peers: &[PeerStatus], now: Instant) -> Vec<PeerRow> {
                 },
                 rtt_ms: view.rtt.map(millis),
                 jitter_ms: view.jitter.map(millis),
+                loss_percent: view.loss_percent,
                 online: data
                     .and_then(|peer| peer.last_handshake)
                     .is_some_and(|at| now.saturating_duration_since(at) < ONLINE_WINDOW),
@@ -518,6 +521,7 @@ mod tests {
                     path: Some(Path::Direct(SocketAddr::from(([192, 0, 2, 1], 41641)))),
                     rtt: Some(Duration::from_micros(12_700)),
                     jitter: Some(Duration::from_micros(2_300)),
+                    loss_percent: Some(3),
                 },
                 PeerView {
                     key: key(2),
@@ -525,6 +529,7 @@ mod tests {
                     path: Some(relay),
                     rtt: None,
                     jitter: None,
+                    loss_percent: None,
                 },
                 PeerView {
                     key: key(3),
@@ -532,6 +537,7 @@ mod tests {
                     path: None,
                     rtt: None,
                     jitter: None,
+                    loss_percent: None,
                 },
             ],
         };
@@ -561,6 +567,7 @@ mod tests {
                 route: "direct",
                 rtt_ms: Some(12),
                 jitter_ms: Some(2),
+                loss_percent: Some(3),
                 online: true,
                 rx: 10,
                 tx: 20,

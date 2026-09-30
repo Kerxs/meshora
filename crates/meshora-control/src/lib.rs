@@ -118,6 +118,8 @@ pub struct PeerView {
     pub rtt: Option<Duration>,
     /// 走直连时，这条直连往返时间的抖动（平均偏差）。走中继时为 `None`。
     pub jitter: Option<Duration>,
+    /// 走直连时，这条直连探测的丢包率（百分比，平滑过）。走中继时为 `None`。
+    pub loss_percent: Option<u8>,
 }
 
 /// 和协调服务的一条连接：读由单独的任务负责（Noise 的读不能在 select 里被中途取消），
@@ -653,6 +655,13 @@ impl Node {
                 },
                 jitter: match state.current {
                     Some(Path::Direct(addr)) => state.paths.jitter(addr),
+                    _ => None,
+                },
+                loss_percent: match state.current {
+                    Some(Path::Direct(addr)) => state
+                        .paths
+                        .loss(addr)
+                        .map(|loss| (loss * 100.0).round().clamp(0.0, 100.0) as u8),
                     _ => None,
                 },
             })
