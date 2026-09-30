@@ -315,7 +315,8 @@ function peerRow(peer) {
       badge.className = `badge ${kind}`;
       badge.title =
         kind === "direct"
-          ? "两台电脑之间直接连通，游戏流量不经过第三方"
+          ? "两台电脑之间直接连通，游戏流量不经过第三方" +
+            (peer.jitterMs === null || peer.jitterMs === undefined ? "" : `。延迟抖动约 ${peer.jitterMs} ms`)
           : kind === "relay"
             ? "打不通直连，经中继服务器转发（全程加密，中继看不到内容）"
             : "还在建立连接";

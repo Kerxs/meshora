@@ -117,6 +117,8 @@ pub struct PeerRow {
     pub route: &'static str,
     /// 直连测到的往返时间（毫秒）。
     pub rtt_ms: Option<u64>,
+    /// 直连往返时间的抖动（毫秒）。
+    pub jitter_ms: Option<u64>,
     /// 最近 180 秒内握过手（WireGuard 的会话不续就作废的时长）。
     pub online: bool,
     /// 收到的字节数。
@@ -449,6 +451,10 @@ fn snapshot(node: &Node) -> Snapshot {
     }
 }
 
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// 把控制面和数据面各自知道的拼成界面上的一行行：地址、路径、延迟来自控制面，
 /// 握手和流量来自数据面
 fn rows(status: &Status, peers: &[PeerStatus], now: Instant) -> Vec<PeerRow> {
@@ -465,9 +471,8 @@ fn rows(status: &Status, peers: &[PeerStatus], now: Instant) -> Vec<PeerRow> {
                     Some(Path::Relay { .. }) => "relay",
                     None => "pending",
                 },
-                rtt_ms: view
-                    .rtt
-                    .map(|rtt| u64::try_from(rtt.as_millis()).unwrap_or(u64::MAX)),
+                rtt_ms: view.rtt.map(millis),
+                jitter_ms: view.jitter.map(millis),
                 online: data
                     .and_then(|peer| peer.last_handshake)
                     .is_some_and(|at| now.saturating_duration_since(at) < ONLINE_WINDOW),
@@ -508,18 +513,21 @@ mod tests {
                     overlay_ip: Ipv4Addr::new(100, 64, 0, 1),
                     path: Some(Path::Direct(SocketAddr::from(([192, 0, 2, 1], 41641)))),
                     rtt: Some(Duration::from_micros(12_700)),
+                    jitter: Some(Duration::from_micros(2_300)),
                 },
                 PeerView {
                     key: key(2),
                     overlay_ip: Ipv4Addr::new(100, 64, 0, 2),
                     path: Some(relay),
                     rtt: None,
+                    jitter: None,
                 },
                 PeerView {
                     key: key(3),
                     overlay_ip: Ipv4Addr::new(100, 64, 0, 3),
                     path: None,
                     rtt: None,
+                    jitter: None,
                 },
             ],
         };
@@ -548,6 +556,7 @@ mod tests {
                 ip: "100.64.0.1".into(),
                 route: "direct",
                 rtt_ms: Some(12),
+                jitter_ms: Some(2),
                 online: true,
                 rx: 10,
                 tx: 20,
