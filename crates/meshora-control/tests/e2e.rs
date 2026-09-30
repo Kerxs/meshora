@@ -243,6 +243,101 @@ async fn relay_carries_the_traffic_when_direct_is_off() {
     }
 }
 
+/// 一个可以随时拔掉的 TCP 转发：模拟中继挂了（连着的连接断开，新的也连不上）
+struct Cable {
+    addr: SocketAddr,
+    tasks: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
+}
+
+impl Cable {
+    async fn to(target: SocketAddr) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let tasks = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let spawned = Arc::clone(&tasks);
+        let accept = tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let task = tokio::spawn(async move {
+                    if let Ok(mut outbound) = tokio::net::TcpStream::connect(target).await {
+                        let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                    }
+                });
+                spawned.lock().unwrap().push(task.abort_handle());
+            }
+        });
+        tasks.lock().unwrap().push(accept.abort_handle());
+        Self { addr, tasks }
+    }
+
+    fn cut(&self) {
+        for task in self.tasks.lock().unwrap().drain(..) {
+            task.abort();
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_dead_relay_is_replaced_by_the_next_one() {
+    let a = NodeSecret::generate();
+    let b = NodeSecret::generate();
+    // 两个中继都接在可以拔掉的线上，拔掉正在用的那个
+    let mut relays = Vec::new();
+    for _ in 0..2 {
+        let relay = start_relay(&[&a, &b]).await;
+        let cable = Cable::to(relay.addr).await;
+        let info = RelayInfo {
+            key: relay.key,
+            addr: cable.addr,
+        };
+        relays.push((info, cable));
+    }
+    let infos = relays.iter().map(|(info, _)| info.clone()).collect();
+    let coord = start_coord(&[&a, &b], infos).await;
+    let mut node_a = start_node(&a, &coord, true).await;
+    let mut node_b = start_node(&b, &coord, true).await;
+
+    let via = |relay: &RelayInfo| Path::Relay {
+        relay: relay.key,
+        addr: relay.addr,
+    };
+    let received = deliver(&node_a, &mut node_b, b"first relay").await;
+    assert_eq!(&received[20..], b"first relay");
+    // 两个中继差不多快，走哪个看谁先测出来；两边各自选路，也不一定是同一个。拔掉 A 在用的那个
+    let used = node_a.dataplane.status()[0].path;
+    let (dead, alive) = if used == Some(via(&relays[0].0)) {
+        (&relays[0], &relays[1])
+    } else {
+        (&relays[1], &relays[0])
+    };
+    let second = alive.0.clone();
+
+    dead.1.cut();
+    let cut = std::time::Instant::now();
+    for node in [&mut node_a, &mut node_b] {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            node.status.wait_for(|s| {
+                s.peers
+                    .first()
+                    .is_some_and(|p| p.path == Some(via(&second)))
+            }),
+        )
+        .await
+        .expect("中继挂了，一直没换到另一个")
+        .unwrap();
+    }
+    // 正在用的中继每秒探测，连丢两次就换：几秒之内，不是等中继连接自己超时（25 秒）
+    assert!(
+        cut.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        cut.elapsed()
+    );
+    let received = deliver(&node_a, &mut node_b, b"second relay").await;
+    assert_eq!(&received[20..], b"second relay");
+    let received = deliver(&node_b, &mut node_a, b"and back").await;
+    assert_eq!(&received[20..], b"and back");
+}
+
 #[tokio::test]
 async fn a_node_outside_the_member_list_is_turned_away() {
     let a = NodeSecret::generate();

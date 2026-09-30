@@ -385,8 +385,8 @@ impl TokenBucket {
 /// 发出去、还在等回应的 Ping
 struct Pending {
     to: NodeKey,
-    /// 发往哪个直连地址；`None` 是经中继发的
-    addr: Option<SocketAddr>,
+    /// 走的哪条路：直连地址，或者经哪个中继
+    via: Path,
     sent: Instant,
 }
 
@@ -400,7 +400,8 @@ struct Node {
     keepalive: Option<NonZeroU16>,
     relay_only: bool,
     dataplane: Arc<dyn DataPlane>,
-    relay: Option<Path>,
+    /// 协调服务给的中继，按它排的顺序
+    relays: Vec<Path>,
     probe: Option<SocketAddr>,
     peers: HashMap<NodeKey, PeerState>,
     pending: HashMap<TxId, Pending>,
@@ -427,7 +428,7 @@ impl Node {
             keepalive: config.keepalive,
             relay_only: config.relay_only,
             dataplane,
-            relay: None,
+            relays: Vec::new(),
             probe: None,
             peers: HashMap::new(),
             pending: HashMap::new(),
@@ -445,11 +446,18 @@ impl Node {
     }
 
     fn on_reconnected(&mut self, welcome: &Welcome) {
-        // M1 只用第一个中继
-        self.relay = welcome.relays.first().map(|relay| Path::Relay {
-            relay: relay.key,
-            addr: relay.addr,
-        });
+        // 每个中继都探测、都可以走：哪个挂了，探测不通，选路自然换到别的
+        self.relays = welcome
+            .relays
+            .iter()
+            .map(|relay| Path::Relay {
+                relay: relay.key,
+                addr: relay.addr,
+            })
+            .collect();
+        for state in self.peers.values_mut() {
+            state.paths.retain_relays(&self.relays);
+        }
         self.probe = welcome.probe;
         // 新连接上，协调服务可能不记得本机的端点了：下个节拍重新上报
         self.reported = None;
@@ -516,7 +524,11 @@ impl Node {
     fn on_event(&mut self, event: Event, now: Instant) -> Vec<ClientMessage> {
         match event {
             Event::ControlDatagram { from, datagram } => self.on_disco(from, &datagram, now),
-            Event::RelayedControl { peer, datagram } => self.on_relayed_disco(peer, &datagram, now),
+            Event::RelayedControl {
+                peer,
+                via,
+                datagram,
+            } => self.on_relayed_disco(peer, via, &datagram, now),
             Event::HandshakeCompleted { peer, via } => {
                 debug!(%peer, ?via, "WireGuard 握手完成");
             }
@@ -564,7 +576,7 @@ impl Node {
     }
 
     /// 经中继来的控制报文。中继告诉了我们是谁发的，报文本身照样要验证
-    fn on_relayed_disco(&mut self, peer: NodeKey, datagram: &[u8], now: Instant) {
+    fn on_relayed_disco(&mut self, peer: NodeKey, via: Path, datagram: &[u8], now: Instant) {
         if !self.disco_budget.take(now) {
             return;
         }
@@ -584,8 +596,9 @@ impl Node {
         }
         match message {
             DiscoMessage::Ping { tx } => {
-                // 原路（经中继）回过去。observed 对经中继的探测没有意义，填中继的地址
-                let Some(relay @ Path::Relay { addr, .. }) = self.relay else {
+                // 原路（经同一个中继）回过去：对方一定连着这个中继。
+                // observed 对经中继的探测没有意义，填中继的地址
+                let Path::Relay { addr, .. } = via else {
                     return;
                 };
                 let pong = disco::seal(
@@ -593,7 +606,7 @@ impl Node {
                     &sender,
                     &DiscoMessage::Pong { tx, observed: addr },
                 );
-                if let Err(err) = self.dataplane.send_control_via(relay, &sender, &pong) {
+                if let Err(err) = self.dataplane.send_control_via(via, &sender, &pong) {
                     debug!(%sender, %err, "经中继发 Pong 失败");
                 }
             }
@@ -616,9 +629,9 @@ impl Node {
                 self.reflexive = Some(observed);
             }
         } else if let Some(state) = self.peers.get_mut(&sender) {
-            match pending.addr {
-                Some(addr) => state.paths.on_pong(addr, rtt, now),
-                None => state.paths.on_relay_pong(rtt, now),
+            match pending.via {
+                Path::Direct(addr) => state.paths.on_pong(addr, rtt, now),
+                relay @ Path::Relay { .. } => state.paths.on_relay_pong(relay, rtt, now),
             }
             self.update_paths(now);
         }
@@ -697,17 +710,23 @@ impl Node {
                 path: state.current,
                 rtt: match state.current {
                     Some(Path::Direct(addr)) => state.paths.rtt(addr),
-                    Some(Path::Relay { .. }) => state.paths.relay_quality().map(|q| q.0),
+                    Some(relay @ Path::Relay { .. }) => {
+                        state.paths.relay_quality(relay).map(|q| q.0)
+                    }
                     None => None,
                 },
                 jitter: match state.current {
                     Some(Path::Direct(addr)) => state.paths.jitter(addr),
-                    Some(Path::Relay { .. }) => state.paths.relay_quality().map(|q| q.1),
+                    Some(relay @ Path::Relay { .. }) => {
+                        state.paths.relay_quality(relay).map(|q| q.1)
+                    }
                     None => None,
                 },
                 loss_percent: match state.current {
                     Some(Path::Direct(addr)) => state.paths.loss(addr),
-                    Some(Path::Relay { .. }) => state.paths.relay_quality().map(|q| q.2),
+                    Some(relay @ Path::Relay { .. }) => {
+                        state.paths.relay_quality(relay).map(|q| q.2)
+                    }
                     None => None,
                 }
                 .map(|loss| (loss * 100.0).round().clamp(0.0, 100.0) as u8),
@@ -751,19 +770,19 @@ impl Node {
     /// 探测所有到时候的候选
     fn ping_due(&mut self, now: Instant) {
         // 中继那条路也探测：知道它多快、丢不丢包，才能和直连比；走中继时界面上也有延迟可看。
-        // 只走中继的节点也探测它
-        if let Some(relay) = self.relay {
-            let due: Vec<NodeKey> = self
-                .peers
-                .iter_mut()
-                .filter_map(|(key, state)| {
-                    let active = matches!(state.current, Some(Path::Relay { .. }));
-                    state.paths.relay_due(now, active).then_some(*key)
-                })
-                .collect();
-            for key in due {
-                self.ping_via_relay(key, relay, now);
+        // 只走中继的节点也探测它。每个中继都探测：顺带让数据面连着每个中继，
+        // 对方经哪个中继发来都收得到
+        let mut due = Vec::new();
+        for &relay in &self.relays {
+            for (key, state) in &mut self.peers {
+                let active = state.current == Some(relay);
+                if state.paths.relay_due(relay, now, active) {
+                    due.push((*key, relay));
+                }
             }
+        }
+        for (key, relay) in due {
+            self.ping_via_relay(key, relay, now);
         }
         if self.relay_only {
             return;
@@ -801,7 +820,7 @@ impl Node {
             tx,
             Pending {
                 to,
-                addr: Some(addr),
+                via: Path::Direct(addr),
                 sent: now,
             },
         );
@@ -819,7 +838,7 @@ impl Node {
             tx,
             Pending {
                 to,
-                addr: None,
+                via: relay,
                 sent: now,
             },
         );
@@ -828,12 +847,8 @@ impl Node {
     /// 按选路规则算出每个 peer 该走的路，变了就告诉数据面
     fn update_paths(&mut self, now: Instant) {
         for (key, state) in &mut self.peers {
-            let desired = if self.relay_only {
-                self.relay
-            } else {
-                state.paths.choose(state.current, self.relay, now)
-            };
-            let Some(desired) = desired else {
+            // 只走中继的节点从不探测直连，直连永远不"通"，选出来的只会是中继
+            let Some(desired) = state.paths.choose(state.current, &self.relays, now) else {
                 continue;
             };
             if state.current == Some(desired) {

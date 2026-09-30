@@ -360,9 +360,10 @@ impl Engine {
                         from,
                         datagram: datagram.to_vec(),
                     },
-                    // 经中继来的：中继认证过发送方，告诉控制面是谁
+                    // 经中继来的：中继认证过发送方，告诉控制面是谁、经的哪个中继
                     Link::Relay { peer, .. } => Event::RelayedControl {
                         peer,
+                        via: link.path(),
                         datagram: datagram.to_vec(),
                     },
                 };
@@ -932,15 +933,20 @@ mod tests {
 
         // 经中继来的：带上中继告诉我们的发送方
         let peer = NodeKey::from_bytes([4; 32]);
+        let relay = NodeKey::from_bytes([9; 32]);
         let link = Link::Relay {
-            relay: NodeKey::from_bytes([9; 32]),
+            relay,
             addr: from,
             peer,
         };
         let actions = a.engine.inbound(&datagram, link, Instant::now());
         assert_eq!(
             actions,
-            [Action::Event(Event::RelayedControl { peer, datagram })]
+            [Action::Event(Event::RelayedControl {
+                peer,
+                via: Path::Relay { relay, addr: from },
+                datagram
+            })]
         );
     }
 

@@ -132,10 +132,13 @@ pub enum Event {
     ///
     /// `peer` 是中继认证过的发送方：中继只转发它认得的节点的报文，而且告诉我们是谁发的。
     /// 报文内容仍未经认证，和 [`Event::ControlDatagram`] 一样可能被丢弃。回应它要经
-    /// [`DataPlane::send_control_via`] 沿中继发回去，对方没有可以直接回应的地址。
+    /// [`DataPlane::send_control_via`] 沿**同一个**中继（`via`）发回去，对方没有可以直接回应的地址 ——
+    /// 网里有好几个中继时，只有来的那个确定对方连着。
     RelayedControl {
         /// 发送方。
         peer: NodeKey,
+        /// 经过的中继，一定是 [`Path::Relay`]。
+        via: Path,
         /// 整个报文，包括开头的魔数。
         datagram: Vec<u8>,
     },
