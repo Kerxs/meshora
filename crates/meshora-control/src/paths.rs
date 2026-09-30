@@ -8,9 +8,12 @@
 //!   正在用的直连断了，大约两三秒就能发现、回落中继
 //! - 延迟看两样：平滑后的往返时间和抖动（算法同 TCP 估算重传超时，RFC 6298）。
 //!   打分是"往返时间 + 4 × 抖动 + 丢包罚分"：对联机游戏，忽快忽慢、时不时丢包，
-//!   都比稳定地慢一点更难受。丢包率是探测的丢失比例，平滑过；每 1% 记 [`LOSS_PENALTY_PER_PERCENT`]
-//! - 选路：当前的直连还通，只有别的直连分数**明显**更好才换（免得在两条差不多的路之间来回跳）；
-//!   当前的不通了就挑分数最好的；一条都不通就走中继
+//!   都比稳定地慢一点更难受。丢包率是探测的丢失比例，平滑过；每 1% 记 [`LOSS_PENALTY_PER_PERCENT`]。
+//!   只算一条通着的路偶尔丢的：连丢到判定断开的是断线，不算丢包
+//! - 中继那条路也探测（经中继发 Ping），同样记往返时间、抖动、丢包
+//! - 选路：通着的直连和测过的中继放在一起按分数比。中继要**明显**比直连好才选它 ——
+//!   它占着第三方的带宽，而且多绕一段；当前的路还通，别的路也要明显更好才换（免得来回跳）。
+//!   一条直连都不通，就走中继
 //! - 本机换了网络，所有直连一律作废：先走中继，重新探测，通了再切回来
 
 use std::collections::BTreeMap;
@@ -116,10 +119,72 @@ impl Candidate {
     }
 }
 
+impl Candidate {
+    /// 到没到探测的时候。顺带结算上一个 Ping：等够了还没回就记一次丢失。
+    /// 到了的话记为"刚探测过"
+    fn poll_due(&mut self, now: Instant, interval: Duration) -> bool {
+        if let Some(sent) = self.awaiting
+            && now.duration_since(sent) >= PONG_WAIT
+        {
+            // 先不记进丢包率：这次丢失是"偶尔丢一个"还是"整条路断了"，要等下文。
+            // 见 pong()
+            self.awaiting = None;
+            self.misses = self.misses.saturating_add(1);
+        }
+        let working = self
+            .last_pong
+            .is_some_and(|pong| now.duration_since(pong) < FRESH);
+        // 一条通着的路刚丢了一次：马上补探，别等下一轮
+        let retry = working && (1..MAX_MISSES).contains(&self.misses);
+        let is_due = retry
+            || self
+                .last_ping
+                .is_none_or(|ping| now.duration_since(ping) >= interval);
+        if is_due && self.awaiting.is_none() {
+            self.last_ping = Some(now);
+            self.awaiting = Some(now);
+            return true;
+        }
+        false
+    }
+
+    /// 收到了回应
+    fn pong(&mut self, rtt: Duration, now: Instant) {
+        // 丢过几次、路又没断（没到 MAX_MISSES）：那几次是偶尔丢包，记进丢包率。
+        // 到了 MAX_MISSES 的是断线，由"通不通"管，不算丢包 —— 不然断了几十秒的直连恢复之后，
+        // 丢包率高得吓人、要一两分钟才降下来，这期间一直输给中继
+        if self.misses < MAX_MISSES {
+            for _ in 0..self.misses {
+                self.record_loss(true);
+            }
+        }
+        // 还在等的那个 Ping 按时回来了，记一次"没丢"。迟到的 Pong 不再记：一次探测只记一个结果
+        if self.awaiting.take().is_some() {
+            self.record_loss(false);
+        }
+        self.last_pong = Some(now);
+        self.misses = 0;
+        self.sample(rtt);
+    }
+
+    /// 此前的探测结果作废，马上重新探测
+    fn invalidate(&mut self) {
+        self.misses = MAX_MISSES;
+        self.awaiting = None;
+        self.last_ping = None;
+    }
+
+    fn loss_fraction(&self) -> Option<f32> {
+        self.srtt.map(|_| self.loss as f32 / 10_000.0)
+    }
+}
+
 /// 一个 peer 的候选端点和探测记录。
 #[derive(Clone, Debug, Default)]
 pub struct PeerPaths {
     candidates: BTreeMap<SocketAddr, Candidate>,
+    /// 经中继到它的那条路
+    relay: Candidate,
 }
 
 impl PeerPaths {
@@ -160,10 +225,10 @@ impl PeerPaths {
     /// 先走中继，重新探测通了再切回来。
     pub fn network_changed(&mut self) {
         for candidate in self.candidates.values_mut() {
-            candidate.misses = MAX_MISSES;
-            candidate.awaiting = None;
-            candidate.last_ping = None;
+            candidate.invalidate();
         }
+        // 到中继的连接也是在旧网络上建的，测到的数也不作数了
+        self.relay.invalidate();
     }
 
     /// 到时候该探测的候选，同时把它们记为"刚探测过"。顺带忘掉过期的学来候选。
@@ -175,38 +240,26 @@ impl PeerPaths {
         });
         let mut due = Vec::new();
         for (addr, candidate) in &mut self.candidates {
-            // 上一个 Ping 等够了还没回应：记一次丢失
-            if let Some(sent) = candidate.awaiting
-                && now.duration_since(sent) >= PONG_WAIT
-            {
-                candidate.awaiting = None;
-                candidate.misses = candidate.misses.saturating_add(1);
-                // 只算通过的路：从没回应过的候选丢了不说明什么，它可能根本不存在
-                if candidate.last_pong.is_some() {
-                    candidate.record_loss(true);
-                }
-            }
-            let working = candidate
-                .last_pong
-                .is_some_and(|pong| now.duration_since(pong) < FRESH);
-            // 一条通着的路刚丢了一次：马上补探，别等下一轮
-            let retry = working && (1..MAX_MISSES).contains(&candidate.misses);
             let interval = if Some(*addr) == active {
                 ACTIVE_PING_INTERVAL
             } else {
                 PING_INTERVAL
             };
-            let is_due = retry
-                || candidate
-                    .last_ping
-                    .is_none_or(|ping| now.duration_since(ping) >= interval);
-            if is_due && candidate.awaiting.is_none() {
-                candidate.last_ping = Some(now);
-                candidate.awaiting = Some(now);
+            if candidate.poll_due(now, interval) {
                 due.push(*addr);
             }
         }
         due
+    }
+
+    /// 该不该经中继探测一次。`active` 表示正在走中继：和正在用的直连一样探测得更勤。
+    pub fn relay_due(&mut self, now: Instant, active: bool) -> bool {
+        let interval = if active {
+            ACTIVE_PING_INTERVAL
+        } else {
+            PING_INTERVAL
+        };
+        self.relay.poll_due(now, interval)
     }
 
     /// 收到了发往 `addr` 的 Ping 的回应。
@@ -215,15 +268,13 @@ impl PeerPaths {
     /// 而能回应我们这次 Ping 的只有持有对方私钥的人。
     pub fn on_pong(&mut self, addr: SocketAddr, rtt: Duration, now: Instant) {
         if let Some(candidate) = self.candidates.get_mut(&addr) {
-            // 还在等的那个 Ping 按时回来了，记一次"没丢"。迟到的 Pong（那次已经记成丢了）
-            // 不再记：一次探测只记一个结果
-            if candidate.awaiting.take().is_some() {
-                candidate.record_loss(false);
-            }
-            candidate.last_pong = Some(now);
-            candidate.misses = 0;
-            candidate.sample(rtt);
+            candidate.pong(rtt, now);
         }
+    }
+
+    /// 收到了经中继发出的 Ping 的回应。
+    pub fn on_relay_pong(&mut self, rtt: Duration, now: Instant) {
+        self.relay.pong(rtt, now);
     }
 
     /// 这个候选平滑后的往返时间。没探测通过为 `None`。
@@ -235,7 +286,7 @@ impl PeerPaths {
     pub fn loss(&self, addr: SocketAddr) -> Option<f32> {
         self.candidates
             .get(&addr)
-            .and_then(|c| c.srtt.map(|_| c.loss as f32 / 10_000.0))
+            .and_then(Candidate::loss_fraction)
     }
 
     /// 这个候选往返时间的抖动（平均偏差）。没探测通过为 `None`。
@@ -245,30 +296,72 @@ impl PeerPaths {
             .and_then(|c| c.srtt.map(|_| c.rttvar))
     }
 
+    /// 中继那条路平滑后的往返时间、抖动、丢包率。没探测通过为 `None`。
+    pub fn relay_quality(&self) -> Option<(Duration, Duration, f32)> {
+        let relay = &self.relay;
+        relay
+            .srtt
+            .map(|srtt| (srtt, relay.rttvar, relay.loss as f32 / 10_000.0))
+    }
+
     /// 有没有一条通的直连。
     pub fn has_fresh(&self, now: Instant) -> bool {
         self.candidates.values().any(|c| c.fresh(now))
     }
 
-    /// 该走哪条路：当前的直连还通、别的也没明显更好就不换；否则挑分数最好的通路；
-    /// 都不通就走中继。
+    /// 该走哪条路。
+    ///
+    /// - 通着的直连里挑分数最好的；测过、通着的中继也参加比较，但要**明显**更好才选它
+    /// - 当前的路还通，别的路也要明显更好才换
+    /// - 一条直连都不通，走中继（测没测过都一样）
     pub fn choose(&self, current: Option<Path>, relay: Option<Path>, now: Instant) -> Option<Path> {
-        let best = self
+        let better = |challenger: Duration, incumbent: Duration| {
+            challenger + SWITCH_MARGIN.max(incumbent / SWITCH_FRACTION) < incumbent
+        };
+        let best_direct = self
             .candidates
             .iter()
             .filter(|(_, c)| c.fresh(now))
-            .min_by_key(|(_, c)| c.score());
-        if let Some(Path::Direct(addr)) = current
-            && let Some(current_candidate) = self.candidates.get(&addr).filter(|c| c.fresh(now))
-        {
-            let ours = current_candidate.score();
-            let margin = SWITCH_MARGIN.max(ours / SWITCH_FRACTION);
-            return match best {
-                Some((best_addr, c)) if c.score() + margin < ours => Some(Path::Direct(*best_addr)),
-                _ => current,
-            };
+            .min_by_key(|(_, c)| c.score())
+            .map(|(addr, c)| (Path::Direct(*addr), c.score()));
+        let measured_relay = relay
+            .filter(|_| self.relay.fresh(now))
+            .map(|path| (path, self.relay.score()));
+
+        // 不考虑"当前走哪条"时的最佳：直连优先，中继要明显更好
+        let best = match (best_direct, measured_relay) {
+            (Some(direct), Some(relay)) if better(relay.1, direct.1) => Some(relay),
+            (Some(direct), _) => Some(direct),
+            (None, _) => None,
+        };
+
+        let current_score = match current {
+            Some(Path::Direct(addr)) => self
+                .candidates
+                .get(&addr)
+                .filter(|c| c.fresh(now))
+                .map(Candidate::score),
+            Some(path @ Path::Relay { .. }) if Some(path) == relay => {
+                measured_relay.map(|(_, score)| score)
+            }
+            _ => None,
+        };
+        match (current, current_score, best) {
+            // 正在走中继、有了通着的直连，而中继又没有明显更好（best 已经这样比过了）：
+            // 回到直连。这里不能再要求直连"明显更好" —— 两条路都很快时（比如直连 0.1ms、
+            // 中继 0.5ms），直连永远好不出那么多，一旦落到中继就再也回不来
+            (Some(Path::Relay { .. }), _, Some((path @ Path::Direct(_), _))) => Some(path),
+            // 当前的路还通：别的路明显更好才换
+            (Some(current), Some(ours), Some((path, score))) => {
+                if path != current && better(score, ours) {
+                    Some(path)
+                } else {
+                    Some(current)
+                }
+            }
+            (_, _, Some((path, _))) => Some(path),
+            (_, _, None) => relay,
         }
-        best.map(|(addr, _)| Path::Direct(*addr)).or(relay)
     }
 }
 
@@ -468,20 +561,34 @@ mod tests {
     }
 
     #[test]
-    fn a_missed_probe_counts_as_loss_and_a_late_pong_does_not_undo_it() {
+    fn an_occasional_miss_counts_as_loss() {
         let now = Instant::now();
         let mut paths = working(now);
         assert_eq!(paths.loss(addr(1)), Some(0.0));
         let active = Some(addr(1));
         paths.due_pings(now + SEC, active);
-        // 1 秒没回：记一次丢
-        paths.due_pings(now + 2 * SEC, active);
-        let after_miss = paths.loss(addr(1)).unwrap();
-        assert!(after_miss > 0.1, "{after_miss}");
-        // 第一次的 Pong 迟到了，补探的那个还在等：迟到的不算"没丢"，补探的回来才算
-        paths.candidates.get_mut(&addr(1)).unwrap().awaiting = None;
-        paths.on_pong(addr(1), 1200 * MS, now + 2 * SEC + 200 * MS);
-        assert_eq!(paths.loss(addr(1)), Some(after_miss));
+        // 1 秒没回：丢了一次，补探
+        assert_eq!(paths.due_pings(now + 2 * SEC, active), [addr(1)]);
+        // 补探的回来了：那一次算偶尔丢包
+        paths.on_pong(addr(1), 20 * MS, now + 2 * SEC + 20 * MS);
+        let loss = paths.loss(addr(1)).unwrap();
+        assert!(loss > 0.05, "{loss}");
+    }
+
+    #[test]
+    fn an_outage_is_not_counted_as_loss() {
+        // e2e 里撞出来的：直连断了几十秒，恢复后丢包率要是记着那几十秒，就一直输给中继
+        let now = Instant::now();
+        let mut paths = working(now);
+        let active = Some(addr(1));
+        for second in 1..30 {
+            paths.due_pings(now + second * SEC, active);
+        }
+        assert!(!paths.has_fresh(now + 30 * SEC), "断了");
+        paths.due_pings(now + 30 * SEC, active);
+        paths.on_pong(addr(1), 20 * MS, now + 30 * SEC + 20 * MS);
+        assert_eq!(paths.loss(addr(1)), Some(0.0), "恢复了，丢包率还是干净的");
+        assert!(paths.has_fresh(now + 30 * SEC + 20 * MS));
     }
 
     #[test]
@@ -504,6 +611,104 @@ mod tests {
             paths.on_pong(addr(3), 10 * MS, now);
         }
         assert_eq!(paths.choose(on_1, None, now), Some(Path::Direct(addr(3))));
+    }
+
+    /// 中继那条路测过若干次，每次都是 `rtt`
+    fn measure_relay(paths: &mut PeerPaths, rtt: Duration, now: Instant) {
+        for _ in 0..30 {
+            paths.on_relay_pong(rtt, now);
+        }
+    }
+
+    #[test]
+    fn the_relay_path_is_probed_and_measured() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        assert!(paths.relay_due(now, false));
+        assert!(!paths.relay_due(now + MS, false), "刚探测过");
+        assert_eq!(paths.relay_quality(), None);
+        paths.on_relay_pong(40 * MS, now + 40 * MS);
+        let (rtt, _, loss) = paths.relay_quality().unwrap();
+        assert_eq!(rtt, 40 * MS);
+        assert_eq!(loss, 0.0);
+        // 正在走中继时探测得更勤
+        assert!(paths.relay_due(now + SEC, true));
+        assert!(!paths.relay_due(now + SEC + MS, false));
+    }
+
+    #[test]
+    fn a_clearly_better_relay_beats_a_bad_direct_path() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        for _ in 0..30 {
+            paths.on_pong(addr(1), 20 * MS, now);
+        }
+        measure_relay(&mut paths, 60 * MS, now);
+        let direct = Some(Path::Direct(addr(1)));
+        // 干净的 20ms 直连：不走 60ms 的中继
+        assert_eq!(paths.choose(None, relay(), now), direct);
+        assert_eq!(paths.choose(direct, relay(), now), direct);
+        // 直连丢 40% 的包（罚 200ms）：中继明显更好，换过去
+        paths.candidates.get_mut(&addr(1)).unwrap().loss = 4_000;
+        assert_eq!(paths.choose(direct, relay(), now), relay());
+        assert_eq!(paths.choose(None, relay(), now), relay());
+    }
+
+    #[test]
+    fn direct_is_preferred_when_the_relay_is_only_a_little_faster() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        for _ in 0..30 {
+            paths.on_pong(addr(1), 20 * MS, now);
+        }
+        measure_relay(&mut paths, 15 * MS, now);
+        assert_eq!(
+            paths.choose(None, relay(), now),
+            Some(Path::Direct(addr(1)))
+        );
+        // 正在走中继（比如直连刚恢复）：中继没有明显更好，就回到直连
+        assert_eq!(
+            paths.choose(relay(), relay(), now),
+            Some(Path::Direct(addr(1)))
+        );
+    }
+
+    #[test]
+    fn comes_back_to_direct_when_both_paths_are_fast() {
+        // e2e 里撞出来的：直连 0.1ms、中继 0.5ms，落到中继后要能回到直连
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        for _ in 0..30 {
+            paths.on_pong(addr(1), Duration::from_micros(100), now);
+        }
+        measure_relay(&mut paths, Duration::from_micros(500), now);
+        assert_eq!(
+            paths.choose(relay(), relay(), now),
+            Some(Path::Direct(addr(1)))
+        );
+    }
+
+    #[test]
+    fn an_unmeasured_relay_does_not_displace_a_working_direct_path() {
+        let now = Instant::now();
+        let paths = working(now);
+        let direct = Some(Path::Direct(addr(1)));
+        assert_eq!(paths.choose(direct, relay(), now + 30 * MS), direct);
+        assert_eq!(paths.choose(relay(), relay(), now + 30 * MS), direct);
+    }
+
+    #[test]
+    fn a_network_change_also_invalidates_the_relay_measurement() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        measure_relay(&mut paths, 30 * MS, now);
+        assert!(paths.relay.fresh(now));
+        paths.network_changed();
+        assert!(!paths.relay.fresh(now));
+        assert!(paths.relay_due(now + MS, false), "马上重新探测");
     }
 
     #[test]

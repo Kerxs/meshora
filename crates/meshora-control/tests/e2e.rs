@@ -226,6 +226,21 @@ async fn relay_carries_the_traffic_when_direct_is_off() {
         );
         assert!(status[0].last_handshake.is_some());
     }
+
+    // 经中继的探测也通：走中继时状态里有往返时间（控制报文经中继来回）
+    for node in [&mut node_a, &mut node_b] {
+        let status = tokio::time::timeout(
+            CONVERGE,
+            node.status
+                .wait_for(|s| s.peers.first().is_some_and(|p| p.rtt.is_some())),
+        )
+        .await
+        .expect("走中继时一直没有往返时间")
+        .unwrap()
+        .clone();
+        assert!(matches!(status.peers[0].path, Some(Path::Relay { .. })));
+        assert!(status.peers[0].rtt.unwrap() < Duration::from_millis(500));
+    }
 }
 
 #[tokio::test]

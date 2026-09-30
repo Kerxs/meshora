@@ -25,8 +25,9 @@
 //! 3. **发送路径只能由 [`DataPlane::set_path`] 改变。** 数据面不做 WireGuard 式的漫游。
 //! 4. **控制报文和 WireGuard 共用同一个 UDP socket。** 打洞凿出来的 NAT 映射必须就是
 //!    WireGuard 用的那个。
-//! 5. **[`Event::ControlDatagram`] 里的数据未经认证。** 数据面只按魔数分流，
-//!    并且可以在交出之前就丢掉一部分（比如限速），控制面不能指望每一条都收得到。
+//! 5. **[`Event::ControlDatagram`] 和 [`Event::RelayedControl`] 里的数据未经认证。**
+//!    数据面只按魔数分流，并且可以在交出之前就丢掉一部分（比如限速），控制面不能指望每一条都收得到。
+//!    经中继来的，中继认证过的只是"谁发的"，内容照样要控制面自己验证。
 //!
 //! 每一条的理由写在对应方法的文档里，设计文档里也有一份：
 //! <https://kerxs.github.io/meshora/guide/interfaces>
@@ -88,6 +89,21 @@ pub trait DataPlane: Send + Sync {
     /// WireGuard 报文的东西。
     fn send_control(&self, to: SocketAddr, datagram: &[u8]) -> Result<(), DataPlaneError>;
 
+    /// 沿着指定的路径把一个控制报文发给 `peer`。
+    ///
+    /// [`Path::Direct`] 和 [`send_control`](Self::send_control) 一样，从共享的 UDP socket 发出；
+    /// [`Path::Relay`] 经这个中继交给 `peer`，对方收到的是 [`Event::RelayedControl`]。
+    /// 控制面靠它探测中继那条路的延迟和丢包 —— 不然只能拿直连和"不知道多快"的中继比。
+    ///
+    /// 和 [`send_control`](Self::send_control) 一样，`datagram` 必须以 [`CONTROL_MAGIC`] 开头。
+    /// 不保证送达：中继连接还没建好、队列满了，报文就丢掉。
+    fn send_control_via(
+        &self,
+        path: Path,
+        peer: &NodeKey,
+        datagram: &[u8],
+    ) -> Result<(), DataPlaneError>;
+
     /// 所有 peer 的当前状态，顺序不做保证。
     fn status(&self) -> Vec<PeerStatus>;
 }
@@ -112,6 +128,17 @@ pub struct PeerStatus {
 /// 数据面交回控制面的事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// 经中继收到一个控制报文（以 [`CONTROL_MAGIC`] 开头）。
+    ///
+    /// `peer` 是中继认证过的发送方：中继只转发它认得的节点的报文，而且告诉我们是谁发的。
+    /// 报文内容仍未经认证，和 [`Event::ControlDatagram`] 一样可能被丢弃。回应它要经
+    /// [`DataPlane::send_control_via`] 沿中继发回去，对方没有可以直接回应的地址。
+    RelayedControl {
+        /// 发送方。
+        peer: NodeKey,
+        /// 整个报文，包括开头的魔数。
+        datagram: Vec<u8>,
+    },
     /// 和 `peer` 完成了一次 WireGuard 握手。
     ///
     /// `via` 是握手报文实际走的路径，不一定是当前的发送路径 —— 对端可能是从一个
