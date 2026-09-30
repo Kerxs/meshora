@@ -315,7 +315,8 @@ function peerRow(peer) {
       badge.className = `badge ${kind}`;
       badge.title =
         kind === "direct"
-          ? "两台电脑之间直接连通，游戏流量不经过第三方"
+          ? "两台电脑之间直接连通，游戏流量不经过第三方" +
+            (peer.jitterMs === null || peer.jitterMs === undefined ? "" : `。延迟抖动约 ${peer.jitterMs} ms`)
           : kind === "relay"
             ? "打不通直连，经中继服务器转发（全程加密，中继看不到内容）"
             : "还在建立连接";
@@ -338,6 +339,10 @@ const FAILURES = {
     title: "这个网络不接受邀请",
     hint: "网络码里带着邀请码，但这个网络只认名单。把下面的 ID 发给建网络的人，加进名单后再点「重试」。",
     showId: true,
+  },
+  rejectedKicked: {
+    title: "你已被移出这个网络",
+    hint: "建网络的人把你移出了。想回来的话，向对方要一个新的网络码。",
   },
   rejectedFull: {
     title: "网络已满",
@@ -407,7 +412,8 @@ views.failed = {
   },
   update(ov) {
     let kind = ov.error.kind;
-    if (kind === "rejected" && ov.error.message.includes("邀请码不对")) kind = "rejectedInvite";
+    if (kind === "rejected" && ov.error.message.includes("移出")) kind = "rejectedKicked";
+    else if (kind === "rejected" && ov.error.message.includes("邀请码不对")) kind = "rejectedInvite";
     else if (kind === "rejected" && ov.error.message.includes("不接受凭邀请码")) kind = "rejectedClosed";
     else if (kind === "rejected" && ov.error.message.includes("网络已满")) kind = "rejectedFull";
     if (kind === "tun" && /wintun\.dll/i.test(ov.error.message)) kind = "tunDriver";

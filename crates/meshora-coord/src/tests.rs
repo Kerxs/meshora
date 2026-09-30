@@ -586,3 +586,125 @@ fn the_member_check_for_the_relay_sees_new_members() {
         .unwrap();
     assert!(members(&friend.public_key()));
 }
+
+/// 改状态文件：`edit` 拿到现在的内容，返回新的
+fn rewrite(state: &TempState, edit: impl FnOnce(&str) -> String) {
+    let text = edit(&state.text());
+    std::fs::write(&state.0, text).unwrap();
+}
+
+/// 反复试，直到 `check` 成立；最多等过两轮状态文件检查
+async fn eventually<F, Fut>(what: &str, mut check: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + STATE_POLL * 3;
+    while tokio::time::Instant::now() < deadline {
+        if check().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("{what}：等了 {:?} 还没生效", STATE_POLL * 3);
+}
+
+#[tokio::test]
+async fn removing_a_member_line_kicks_it_at_once() {
+    let state = TempState::new("kick");
+    let a = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let (coord, invite) = start_with(NodeSecret::generate(), &[&a], &state).await;
+    let (mut friend_client, welcome) = hello(&coord, &friend, Some(invite)).await;
+    welcome_ip(&welcome);
+    let _ = recv(&mut friend_client).await; // 第一份 NetMap
+    let (mut client_a, _, _) = join(&coord, &a).await;
+
+    let friend_key = friend.public_key().to_string();
+    rewrite(&state, |text| {
+        text.lines()
+            .filter(|line| !line.contains(&friend_key))
+            .map(|line| format!("{line}\n"))
+            .collect()
+    });
+
+    // 被移出的一方先收到原因，然后连接被关掉
+    let ServerMessage::Rejected { reason } = recv(&mut friend_client).await else {
+        panic!("应该收到 Rejected");
+    };
+    assert!(reason.contains("移出"), "{reason}");
+    let closed = tokio::time::timeout(WAIT, friend_client.0.recv())
+        .await
+        .unwrap();
+    assert!(closed.is_err());
+
+    // 其他人的 NetMap 里没有它了
+    loop {
+        match recv(&mut client_a).await {
+            ServerMessage::NetMap { peers } if peers.is_empty() => break,
+            ServerMessage::NetMap { .. } => continue,
+            other => panic!("没想到收到 {other:?}"),
+        }
+    }
+    // 不带邀请码也回不来
+    let (_c, reply) = hello(&coord, &friend, None).await;
+    assert!(matches!(reply, ServerMessage::Rejected { .. }));
+}
+
+#[tokio::test]
+async fn a_new_invite_in_the_file_takes_effect_live() {
+    let state = TempState::new("live-invite");
+    let a = NodeSecret::generate();
+    let (coord, old) = start_with(NodeSecret::generate(), &[&a], &state).await;
+    let new = Invite::generate();
+    rewrite(&state, |text| {
+        text.replace(&old.to_string(), &new.to_string())
+    });
+
+    eventually("旧邀请码作废", || async {
+        let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(old)).await;
+        matches!(reply, ServerMessage::Rejected { .. })
+    })
+    .await;
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(new)).await;
+    welcome_ip(&reply);
+}
+
+#[tokio::test]
+async fn deleting_the_invite_line_while_running_writes_a_new_one() {
+    let state = TempState::new("live-rotate");
+    let a = NodeSecret::generate();
+    let (coord, old) = start_with(NodeSecret::generate(), &[&a], &state).await;
+    rewrite(&state, |text| {
+        text.lines()
+            .filter(|line| !line.starts_with("invite"))
+            .map(|line| format!("{line}\n"))
+            .collect()
+    });
+
+    eventually("写回新的邀请码", || async {
+        state.text().lines().any(|line| line.starts_with("invite "))
+    })
+    .await;
+    assert!(!state.text().contains(&old.to_string()));
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(old)).await;
+    assert!(matches!(reply, ServerMessage::Rejected { .. }));
+}
+
+#[tokio::test]
+async fn a_broken_state_file_changes_nothing() {
+    let state = TempState::new("live-broken");
+    let a = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let (coord, invite) = start_with(NodeSecret::generate(), &[&a], &state).await;
+    let (_c, reply) = hello(&coord, &friend, Some(invite)).await;
+    welcome_ip(&reply);
+
+    std::fs::write(&state.0, "这不是状态文件\n").unwrap();
+    // 等过一轮检查：成员和邀请码都还在
+    tokio::time::sleep(STATE_POLL * 2).await;
+    let (_c, reply) = hello(&coord, &friend, None).await;
+    assert_eq!(welcome_ip(&reply), Ipv4Addr::new(100, 64, 0, 2));
+    let (_c, reply) = hello(&coord, &NodeSecret::generate(), Some(invite)).await;
+    welcome_ip(&reply);
+}

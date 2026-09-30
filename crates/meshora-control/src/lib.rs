@@ -114,8 +114,10 @@ pub struct PeerView {
     pub overlay_ip: Ipv4Addr,
     /// 已经交给数据面的发送路径。还没选出来为 `None`。
     pub path: Option<Path>,
-    /// 走直连时，最近一次探测这条直连测到的往返时间。走中继时没测，为 `None`。
+    /// 走直连时，这条直连平滑后的往返时间。走中继时没测，为 `None`。
     pub rtt: Option<Duration>,
+    /// 走直连时，这条直连往返时间的抖动（平均偏差）。走中继时为 `None`。
+    pub jitter: Option<Duration>,
 }
 
 /// 和协调服务的一条连接：读由单独的任务负责（Noise 的读不能在 select 里被中途取消），
@@ -190,6 +192,12 @@ impl Session {
                 // Ping 的发出时间，量出来的往返时间会凭空多出这段等待
                 let outgoing = tokio::select! {
                     message = connection.inbox.recv() => match message {
+                        // 连着连着被拒了：网络主人把本机移出了网络。不再重连 ——
+                        // 手里的邀请码要是还有效，一重连就又加回去了
+                        Some(ServerMessage::Rejected { reason }) => {
+                            warn!(%reason, "协调服务把本机移出了网络");
+                            return Err(ControlError::Rejected(reason));
+                        }
                         Some(message) => {
                             let now = Instant::now();
                             last_heard = now;
@@ -461,7 +469,8 @@ impl Node {
             }
             ServerMessage::Pong => vec![],
             ServerMessage::Welcome { .. } | ServerMessage::Rejected { .. } => {
-                debug!("注册之后又收到了 Welcome 或 Rejected，忽略");
+                // Rejected 在 Session::run 里就处理了，走不到这里
+                debug!("注册之后又收到了 Welcome，忽略");
                 vec![]
             }
         }
@@ -620,6 +629,11 @@ impl Node {
             self.network_changed = true;
             self.reflexive = None;
             self.next_probe = now;
+            // 直连是在旧网络上打通的：一律当作不通，先走中继，重新探测。
+            // 不这样的话要等它们一个个超时，这几秒里游戏的报文都发进了黑洞
+            for state in self.peers.values_mut() {
+                state.paths.network_changed();
+            }
         }
         self.last_local_ip = Some(new);
     }
@@ -635,6 +649,10 @@ impl Node {
                 path: state.current,
                 rtt: match state.current {
                     Some(Path::Direct(addr)) => state.paths.rtt(addr),
+                    _ => None,
+                },
+                jitter: match state.current {
+                    Some(Path::Direct(addr)) => state.paths.jitter(addr),
                     _ => None,
                 },
             })
@@ -683,9 +701,14 @@ impl Node {
             .peers
             .iter_mut()
             .flat_map(|(key, state)| {
+                // 正在用的直连探测得更勤：它断了要尽快发现
+                let active = match state.current {
+                    Some(Path::Direct(addr)) => Some(addr),
+                    _ => None,
+                };
                 state
                     .paths
-                    .due_pings(now)
+                    .due_pings(now, active)
                     .into_iter()
                     .map(move |addr| (*key, addr))
             })

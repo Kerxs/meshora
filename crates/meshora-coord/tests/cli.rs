@@ -39,3 +39,52 @@ fn pubkey_reads_a_key_file() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// 真的启动一次、日志开着。库的测试里没有日志订阅者，日志语句里的表达式根本不会执行 ——
+/// 曾经有一条启动日志在同一条语句里两次加同一把锁，测试全过，真程序一启动就卡死
+#[test]
+fn starts_up_with_logging_on() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let dir = std::env::temp_dir().join(format!("meshora-coord-start-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let key = dir.join("coord.key");
+    fs::write(&key, format!("{}\n", *NodeSecret::generate().to_base64())).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_meshora-coord"))
+        .arg("--key")
+        .arg(&key)
+        .args(["--listen", "127.0.0.1:0", "--state"])
+        .arg(dir.join("coord.state"))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+
+    let mut seen = Vec::new();
+    let started = loop {
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(line) if line.contains("协调服务启动") => break true,
+            Ok(line) => seen.push(line),
+            Err(_) => break false,
+        }
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(started, "10 秒内没打出启动日志，之前的输出：{seen:#?}");
+    assert!(
+        seen.iter()
+            .any(|line| line.contains("网络码") && line.contains('#')),
+        "启动前应该打出带邀请码的网络码：{seen:#?}"
+    );
+}
