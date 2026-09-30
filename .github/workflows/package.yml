@@ -83,6 +83,8 @@ jobs:
     timeout-minutes: 30
     env:
       TARGET: ${{ matrix.arch }}-unknown-linux-musl
+      # 发出去的程序不带调试符号，小一半多
+      CARGO_PROFILE_RELEASE_STRIP: symbols
     steps:
       - uses: actions/checkout@v7
       # ring 里有 C 和汇编，要 musl 的 C 编译器
@@ -97,8 +99,8 @@ jobs:
           name="meshora-server-$version-linux-${{ matrix.arch }}"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/meshora-coord" "target/$TARGET/release/meshorad" LICENSE "dist/$name/"
-          # 真的是静态的、在这台机器上跑得起来
-          file "dist/$name/meshora-coord" | tee /dev/stderr | grep -q "statically linked"
+          # 真的是静态的（x86_64 上 file 说的是 static-pie linked）、在这台机器上跑得起来
+          file "dist/$name/meshora-coord" | tee /dev/stderr | grep -qE "statically linked|static-pie linked"
           "dist/$name/meshorad" genkey | "dist/$name/meshora-coord" pubkey
           tar -czf "dist/$name.tar.gz" -C dist "$name"
 
