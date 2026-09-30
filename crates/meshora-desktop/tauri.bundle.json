@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Meshora contributors",
+    "copyright": "MIT License",
+    "shortDescription": "和朋友组成虚拟局域网，联机打局域网游戏",
+    "resources": {
+      "wintun/wintun.dll": "wintun.dll",
+      "wintun/wintun-LICENSE.txt": "wintun-LICENSE.txt"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}
