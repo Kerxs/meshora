@@ -3,7 +3,7 @@
 //! ```text
 //! meshorad genkey [文件]              生成私钥：写进文件并打出公钥；不给文件就把私钥打到标准输出
 //! meshorad pubkey [文件]              读私钥（从文件，不给就从标准输入），打出公钥
-//! meshorad up --key <文件> --coord <地址:端口> --coord-key <公钥> [选项]
+//! meshorad up --key <文件> --join <网络码> [选项]
 //! ```
 //!
 //! `up` 做的事在库里（[`meshorad::start`]），桌面端也用它。需要管理员权限（建虚拟网卡）。
@@ -16,6 +16,7 @@ use std::process::ExitCode;
 
 use lexopt::prelude::*;
 use meshora_types::{NodeKey, NodeSecret};
+use meshorad::NetworkCode;
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -28,8 +29,9 @@ const USAGE: &str = "\
 
 up 的选项：
   --key <文件>          私钥文件（必需）
-  --coord <地址:端口>   协调服务的地址（必需）
-  --coord-key <公钥>    协调服务的公钥（必需）
+  --join <网络码>       要加入的网络：协调服务的 公钥@地址:端口（网络码，建网络的人给你的）
+  --coord <地址:端口>   协调服务的地址。和 --coord-key 一起用，可以代替 --join
+  --coord-key <公钥>    协调服务的公钥
   --port <端口>         WireGuard 和控制报文共用的 UDP 端口，默认 41641，0 表示让系统挑
   --tun <名字>          虚拟网卡的名字，默认 meshora0
   --mtu <字节>          虚拟网卡的 MTU，默认 1280
@@ -40,8 +42,7 @@ up 的选项：
 
 struct Up {
     key: PathBuf,
-    coord: SocketAddr,
-    coord_key: NodeKey,
+    network: NetworkCode,
     port: u16,
     tun: String,
     mtu: u16,
@@ -80,11 +81,13 @@ fn parse() -> Result<Command, lexopt::Error> {
         "genkey" => Ok(Command::GenKey(path_argument(&mut parser)?)),
         "pubkey" => Ok(Command::PubKey(path_argument(&mut parser)?)),
         "up" => {
-            let (mut key, mut coord, mut coord_key) = (None, None, None);
+            let (mut key, mut join, mut coord, mut coord_key) = (None, None, None, None);
             let mut up = Up {
                 key: PathBuf::new(),
-                coord: SocketAddr::from(([0, 0, 0, 0], 0)),
-                coord_key: NodeKey::from_bytes([0; 32]),
+                network: NetworkCode::new(
+                    NodeKey::from_bytes([0; 32]),
+                    SocketAddr::from(([0, 0, 0, 0], 0)),
+                ),
                 port: 41641,
                 tun: "meshora0".into(),
                 mtu: 1280,
@@ -95,6 +98,7 @@ fn parse() -> Result<Command, lexopt::Error> {
             while let Some(arg) = parser.next()? {
                 match arg {
                     Long("key") => key = Some(PathBuf::from(parser.value()?)),
+                    Long("join") => join = Some(parser.value()?.parse()?),
                     Long("coord") => coord = Some(parser.value()?.parse()?),
                     Long("coord-key") => coord_key = Some(parser.value()?.parse()?),
                     Long("port") => up.port = parser.value()?.parse()?,
@@ -108,8 +112,15 @@ fn parse() -> Result<Command, lexopt::Error> {
                 }
             }
             up.key = key.ok_or("缺少 --key")?;
-            up.coord = coord.ok_or("缺少 --coord")?;
-            up.coord_key = coord_key.ok_or("缺少 --coord-key")?;
+            up.network = match (join, coord, coord_key) {
+                (Some(code), None, None) => code,
+                (None, Some(coord), Some(coord_key)) => NetworkCode::new(coord_key, coord),
+                (None, None, None) => {
+                    return Err("缺少 --join（或者 --coord 加 --coord-key）".into());
+                }
+                (Some(_), _, _) => return Err("--join 和 --coord、--coord-key 只能二选一".into()),
+                (None, _, _) => return Err("--coord 和 --coord-key 要一起给".into()),
+            };
             Ok(Command::Up(up))
         }
         other => Err(format!("不认识的子命令 {other:?}\n\n{USAGE}").into()),
@@ -235,10 +246,16 @@ fn warn_if_readable_by_others(path: &Path) {
 fn warn_if_readable_by_others(_path: &Path) {}
 
 async fn run(up: Up) -> Result<(), String> {
+    let secret = load_key(&up.key)?;
+    let coord = up
+        .network
+        .resolve()
+        .await
+        .map_err(|err| format!("找不到协调服务 {}：{err}", up.network.host))?;
     let mut node = meshorad::start(meshorad::Options {
-        secret: load_key(&up.key)?,
-        coord: up.coord,
-        coord_key: up.coord_key,
+        secret,
+        coord,
+        coord_key: up.network.coord_key,
         port: up.port,
         tun: up.tun,
         mtu: up.mtu,

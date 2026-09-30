@@ -3,6 +3,8 @@
 //! 顺序：向协调服务注册拿到 overlay 地址 → 按这个地址建虚拟网卡 → 起数据面 → 跑控制面。
 //! 需要管理员权限（建虚拟网卡）。必须在 tokio 的多线程运行时里调用。
 
+mod network;
+
 use std::fmt;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -17,6 +19,8 @@ use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::info;
+
+pub use network::{NetworkCode, ParseNetworkCodeError};
 
 /// 启动一个节点要的东西。
 pub struct Options {
@@ -171,6 +175,11 @@ impl Node {
     /// 数据面眼里每个 peer 的状态（握手、流量）。
     pub fn peers(&self) -> Vec<PeerStatus> {
         self.dataplane.status()
+    }
+
+    /// 控制面还在不在跑。不在了，[`wait`](Self::wait) 立刻返回它退出的原因。
+    pub fn is_running(&self) -> bool {
+        !self.control.is_finished()
     }
 
     /// 等控制面退出。正常情况下它一直跑，退出就是出了无法恢复的错

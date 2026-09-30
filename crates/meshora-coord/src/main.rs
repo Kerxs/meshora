@@ -246,6 +246,17 @@ async fn run(args: Args) -> Result<(), String> {
         );
     }
 
+    // 朋友加入要的网络码：公钥@地址:端口。公网地址只有从 --probe-public 这类参数里才知道
+    let port = args.listen.port();
+    let addr = probe
+        .map(|addr| addr.ip())
+        .or((!args.listen.ip().is_unspecified()).then_some(args.listen.ip()))
+        .map_or_else(
+            || format!("<服务器的公网地址>:{port}"),
+            |ip| SocketAddr::new(ip, port).to_string(),
+        );
+    info!("网络码（发给要加入的朋友）：{}@{addr}", secret.public_key());
+
     let config = Config {
         secret,
         nodes: args.nodes,
