@@ -351,16 +351,22 @@ impl Engine {
             DatagramKind::WireGuard(kind) => {
                 self.inbound_wireguard(datagram, kind, link, now, &mut actions)
             }
-            // 经中继来的控制报文走什么路还没定（见接口契约的"还没定的"），先丢掉
             DatagramKind::Control => {
-                if let Link::Direct(from) = link
-                    && self.control_budget.take(now)
-                {
-                    actions.push(Action::Event(Event::ControlDatagram {
+                if !self.control_budget.take(now) {
+                    return actions;
+                }
+                let event = match link {
+                    Link::Direct(from) => Event::ControlDatagram {
                         from,
                         datagram: datagram.to_vec(),
-                    }));
-                }
+                    },
+                    // 经中继来的：中继认证过发送方，告诉控制面是谁
+                    Link::Relay { peer, .. } => Event::RelayedControl {
+                        peer,
+                        datagram: datagram.to_vec(),
+                    },
+                };
+                actions.push(Action::Event(event));
             }
             DatagramKind::Unknown => {}
         }
@@ -918,7 +924,23 @@ mod tests {
             .inbound(&datagram, Link::Direct(from), Instant::now());
         assert_eq!(
             actions,
-            [Action::Event(Event::ControlDatagram { from, datagram })]
+            [Action::Event(Event::ControlDatagram {
+                from,
+                datagram: datagram.clone()
+            })]
+        );
+
+        // 经中继来的：带上中继告诉我们的发送方
+        let peer = NodeKey::from_bytes([4; 32]);
+        let link = Link::Relay {
+            relay: NodeKey::from_bytes([9; 32]),
+            addr: from,
+            peer,
+        };
+        let actions = a.engine.inbound(&datagram, link, Instant::now());
+        assert_eq!(
+            actions,
+            [Action::Event(Event::RelayedControl { peer, datagram })]
         );
     }
 

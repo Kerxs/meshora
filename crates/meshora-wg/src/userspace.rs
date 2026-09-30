@@ -224,6 +224,25 @@ impl DataPlane for UserspaceDataPlane {
         Ok(())
     }
 
+    fn send_control_via(
+        &self,
+        path: Path,
+        peer: &NodeKey,
+        datagram: &[u8],
+    ) -> Result<(), DataPlaneError> {
+        match path {
+            Path::Direct(to) => self.send_control(to, datagram),
+            Path::Relay { relay, addr } => {
+                if classify(datagram) != DatagramKind::Control {
+                    return Err(DataPlaneError::NotControlDatagram);
+                }
+                self.shared
+                    .relay_send(relay, addr, *peer, datagram.to_vec());
+                Ok(())
+            }
+        }
+    }
+
     fn status(&self) -> Vec<PeerStatus> {
         self.shared.engine().status()
     }

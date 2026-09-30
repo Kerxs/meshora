@@ -385,7 +385,8 @@ impl TokenBucket {
 /// 发出去、还在等回应的 Ping
 struct Pending {
     to: NodeKey,
-    addr: SocketAddr,
+    /// 发往哪个直连地址；`None` 是经中继发的
+    addr: Option<SocketAddr>,
     sent: Instant,
 }
 
@@ -515,6 +516,7 @@ impl Node {
     fn on_event(&mut self, event: Event, now: Instant) -> Vec<ClientMessage> {
         match event {
             Event::ControlDatagram { from, datagram } => self.on_disco(from, &datagram, now),
+            Event::RelayedControl { peer, datagram } => self.on_relayed_disco(peer, &datagram, now),
             Event::HandshakeCompleted { peer, via } => {
                 debug!(%peer, ?via, "WireGuard 握手完成");
             }
@@ -557,24 +559,68 @@ impl Node {
                     self.ping_due(now);
                 }
             }
-            DiscoMessage::Pong { tx, observed } => {
-                let Some(pending) = self.pending.remove(&tx) else {
+            DiscoMessage::Pong { tx, observed } => self.on_pong(sender, tx, observed, now),
+        }
+    }
+
+    /// 经中继来的控制报文。中继告诉了我们是谁发的，报文本身照样要验证
+    fn on_relayed_disco(&mut self, peer: NodeKey, datagram: &[u8], now: Instant) {
+        if !self.disco_budget.take(now) {
+            return;
+        }
+        let peers = &self.peers;
+        let opened = disco::open(&self.secret, datagram, |key| peers.contains_key(key));
+        let (sender, message) = match opened {
+            Ok(opened) => opened,
+            Err(err) => {
+                debug!(%peer, %err, "丢弃一条经中继来的控制报文");
+                return;
+            }
+        };
+        // 中继说是 peer 发的，报文里的签名却是别人：不认
+        if sender != peer {
+            debug!(%peer, %sender, "经中继来的控制报文发送方对不上，丢弃");
+            return;
+        }
+        match message {
+            DiscoMessage::Ping { tx } => {
+                // 原路（经中继）回过去。observed 对经中继的探测没有意义，填中继的地址
+                let Some(relay @ Path::Relay { addr, .. }) = self.relay else {
                     return;
                 };
-                if pending.to != sender {
-                    return;
-                }
-                let rtt = now.duration_since(pending.sent);
-                if sender == self.coord_key {
-                    if self.reflexive != Some(observed) {
-                        info!(%observed, "探测到本机的公网端点");
-                        self.reflexive = Some(observed);
-                    }
-                } else if let Some(state) = self.peers.get_mut(&sender) {
-                    state.paths.on_pong(pending.addr, rtt, now);
-                    self.update_paths(now);
+                let pong = disco::seal(
+                    &self.secret,
+                    &sender,
+                    &DiscoMessage::Pong { tx, observed: addr },
+                );
+                if let Err(err) = self.dataplane.send_control_via(relay, &sender, &pong) {
+                    debug!(%sender, %err, "经中继发 Pong 失败");
                 }
             }
+            DiscoMessage::Pong { tx, observed } => self.on_pong(sender, tx, observed, now),
+        }
+    }
+
+    /// 收到一个 Pong：对上是哪次 Ping，记下往返时间
+    fn on_pong(&mut self, sender: NodeKey, tx: TxId, observed: SocketAddr, now: Instant) {
+        let Some(pending) = self.pending.remove(&tx) else {
+            return;
+        };
+        if pending.to != sender {
+            return;
+        }
+        let rtt = now.duration_since(pending.sent);
+        if sender == self.coord_key {
+            if self.reflexive != Some(observed) {
+                info!(%observed, "探测到本机的公网端点");
+                self.reflexive = Some(observed);
+            }
+        } else if let Some(state) = self.peers.get_mut(&sender) {
+            match pending.addr {
+                Some(addr) => state.paths.on_pong(addr, rtt, now),
+                None => state.paths.on_relay_pong(rtt, now),
+            }
+            self.update_paths(now);
         }
     }
 
@@ -651,19 +697,20 @@ impl Node {
                 path: state.current,
                 rtt: match state.current {
                     Some(Path::Direct(addr)) => state.paths.rtt(addr),
-                    _ => None,
+                    Some(Path::Relay { .. }) => state.paths.relay_quality().map(|q| q.0),
+                    None => None,
                 },
                 jitter: match state.current {
                     Some(Path::Direct(addr)) => state.paths.jitter(addr),
-                    _ => None,
+                    Some(Path::Relay { .. }) => state.paths.relay_quality().map(|q| q.1),
+                    None => None,
                 },
                 loss_percent: match state.current {
-                    Some(Path::Direct(addr)) => state
-                        .paths
-                        .loss(addr)
-                        .map(|loss| (loss * 100.0).round().clamp(0.0, 100.0) as u8),
-                    _ => None,
-                },
+                    Some(Path::Direct(addr)) => state.paths.loss(addr),
+                    Some(Path::Relay { .. }) => state.paths.relay_quality().map(|q| q.2),
+                    None => None,
+                }
+                .map(|loss| (loss * 100.0).round().clamp(0.0, 100.0) as u8),
             })
             .collect();
         peers.sort_by_key(|peer| peer.overlay_ip);
@@ -703,6 +750,21 @@ impl Node {
 
     /// 探测所有到时候的候选
     fn ping_due(&mut self, now: Instant) {
+        // 中继那条路也探测：知道它多快、丢不丢包，才能和直连比；走中继时界面上也有延迟可看。
+        // 只走中继的节点也探测它
+        if let Some(relay) = self.relay {
+            let due: Vec<NodeKey> = self
+                .peers
+                .iter_mut()
+                .filter_map(|(key, state)| {
+                    let active = matches!(state.current, Some(Path::Relay { .. }));
+                    state.paths.relay_due(now, active).then_some(*key)
+                })
+                .collect();
+            for key in due {
+                self.ping_via_relay(key, relay, now);
+            }
+        }
         if self.relay_only {
             return;
         }
@@ -739,7 +801,25 @@ impl Node {
             tx,
             Pending {
                 to,
-                addr,
+                addr: Some(addr),
+                sent: now,
+            },
+        );
+    }
+
+    fn ping_via_relay(&mut self, to: NodeKey, relay: Path, now: Instant) {
+        let mut tx = TxId::default();
+        OsRng.fill_bytes(&mut tx);
+        let datagram = disco::seal(&self.secret, &to, &DiscoMessage::Ping { tx });
+        if let Err(err) = self.dataplane.send_control_via(relay, &to, &datagram) {
+            debug!(peer = %to, %err, "经中继发 Ping 失败");
+            return;
+        }
+        self.pending.insert(
+            tx,
+            Pending {
+                to,
+                addr: None,
                 sent: now,
             },
         );

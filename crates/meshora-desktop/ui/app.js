@@ -309,7 +309,8 @@ function peerRow(peer) {
         if (peer.lossPercent >= 1) text += ` · 丢包 ${peer.lossPercent}%`;
         kind = "direct";
       } else {
-        text = "经中继";
+        text = peer.rttMs === null ? "经中继" : `经中继 · ${peer.rttMs < 1 ? "<1" : peer.rttMs} ms`;
+        if (peer.lossPercent >= 1) text += ` · 丢包 ${peer.lossPercent}%`;
         kind = "relay";
       }
       badge.textContent = text;
