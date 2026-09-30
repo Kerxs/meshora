@@ -14,6 +14,7 @@
 //!   各记各的：一个中继挂了（或者只是本机、对方连不上它），探测不通，自然换到别的中继
 //! - 选路：通着的直连和通着的中继放在一起按分数比。中继要**明显**比直连好才选它 ——
 //!   它占着第三方的带宽，而且多绕一段；当前的路还通，别的路也要明显更好才换（免得来回跳）。
+//!   从一条还通的直连换到中继，还要中继**连续** [`RELAY_PATIENCE`] 都明显更好：一个慢了的样本不算数。
 //!   一条直连都不通，就走最好的那个通着的中继；中继也都没测通，就留在当前的中继上，
 //!   没有当前的就用排第一的。直连要测够 [`SETTLED_SAMPLES`] 次才和中继比分数 —— 头几个样本不准
 //! - 本机换了网络，所有直连一律作废：先走中继，重新探测，通了再切回来
@@ -60,6 +61,13 @@ const SWITCH_FRACTION: u32 = 4;
 /// 没在用的直连 3 秒才探测一次，分数要半分钟以上才降得下来 —— e2e 里撞出来过：
 /// 一边早就直连了，另一边在中继上待满了 30 秒
 pub const SETTLED_SAMPLES: u32 = 5;
+/// 正在用的直连还通时，中继要**连续**这么久都明显更好，才从直连换过去。
+///
+/// 一次探测慢了（系统卡了一下、首包过 NAT），抖动随之跳起来，分数一下子就"输给"中继。
+/// 平滑的权重小（1/8、1/4），一个毛刺要十到二十秒才冲得淡（0.7ms 的路上一个 100ms 的毛刺要 20 秒）。
+/// 不等一等的话，直连会被一个毛刺弹到中继上 —— e2e 里撞出来过。
+/// 真正又丢包又抖的直连半分钟后照样换走；直连整个断了不归这里管，两三秒就回落中继
+pub const RELAY_PATIENCE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Default)]
 struct Candidate {
@@ -202,6 +210,8 @@ pub struct PeerPaths {
     candidates: BTreeMap<SocketAddr, Candidate>,
     /// 经各个中继到它的路，键是 [`Path::Relay`]
     relays: HashMap<Path, Candidate>,
+    /// 正在用的直连还通、中继却明显更好，从什么时候开始的（见 [`RELAY_PATIENCE`]）
+    relay_favored_since: Option<Instant>,
 }
 
 impl PeerPaths {
@@ -357,7 +367,9 @@ impl PeerPaths {
     /// - 一条直连都不通，走通着的中继里最好的；一个都没测通，留在当前的中继上，没有就用排第一的
     ///
     /// `relays` 是协调服务给的中继，按它排的顺序（分数一样时靠前的优先）。
-    pub fn choose(&self, current: Option<Path>, relays: &[Path], now: Instant) -> Option<Path> {
+    ///
+    /// 要改记录（中继从什么时候开始明显更好），所以取 `&mut self`：每个节拍调一次。
+    pub fn choose(&mut self, current: Option<Path>, relays: &[Path], now: Instant) -> Option<Path> {
         let better = |challenger: Duration, incumbent: Duration| {
             challenger + SWITCH_MARGIN.max(incumbent / SWITCH_FRACTION) < incumbent
         };
@@ -395,18 +407,26 @@ impl PeerPaths {
             Some(path @ Path::Relay { .. }) if relays.contains(&path) => relay_score(&path),
             _ => None,
         };
+        // 只有"等中继再明显更好一阵子"那一种情况把它放回去，别的情况一律清掉
+        let favored_since = self.relay_favored_since.take();
         match (current, current_score, best) {
             // 正在走中继、有了通着的直连，而中继又没有明显更好（best 已经这样比过了）：
             // 回到直连。这里不能再要求直连"明显更好" —— 两条路都很快时（比如直连 0.1ms、
             // 中继 0.5ms），直连永远好不出那么多，一旦落到中继就再也回不来
             (Some(Path::Relay { .. }), _, Some((path @ Path::Direct(_), _))) => Some(path),
-            // 当前的路还通：别的路明显更好才换
+            // 当前的路还通：别的路明显更好才换。从直连换到中继，还要中继连续明显更好一段时间
             (Some(current), Some(ours), Some((path, score))) => {
-                if path != current && better(score, ours) {
-                    Some(path)
-                } else {
-                    Some(current)
+                if path == current || !better(score, ours) {
+                    return Some(current);
                 }
+                if let (Path::Direct(_), Path::Relay { .. }) = (current, path) {
+                    let since = favored_since.unwrap_or(now);
+                    if now.duration_since(since) < RELAY_PATIENCE {
+                        self.relay_favored_since = Some(since);
+                        return Some(current);
+                    }
+                }
+                Some(path)
             }
             (_, _, Some((path, _))) => Some(path),
             // 什么都没测通（刚开始、或者全断了）：别在没测过的中继之间来回换
@@ -526,7 +546,7 @@ mod tests {
     fn still_falls_back_when_nobody_pings() {
         // 没有新的探测结果时，FRESH 仍是上限
         let now = Instant::now();
-        let paths = working(now);
+        let mut paths = working(now);
         let current = Some(Path::Direct(addr(1)));
         let pong = now + 20 * MS;
         assert_eq!(paths.choose(current, &relays(), pong + FRESH - MS), current);
@@ -680,6 +700,12 @@ mod tests {
         measure_relay_n(paths, relay_n(0), rtt, now);
     }
 
+    /// 直连 addr(1) 和中继在 `at` 这一刻都刚回应过（分数不变）：只是让它们还算通
+    fn keep_fresh(paths: &mut PeerPaths, at: Instant) {
+        paths.candidates.get_mut(&addr(1)).unwrap().last_pong = Some(at);
+        paths.relays.get_mut(&relay_n(0)).unwrap().last_pong = Some(at);
+    }
+
     fn measure_relay_n(paths: &mut PeerPaths, relay: Path, rtt: Duration, now: Instant) {
         paths.relay_due(relay, now, false);
         for _ in 0..30 {
@@ -719,10 +745,21 @@ mod tests {
         // 干净的 20ms 直连：不走 60ms 的中继
         assert_eq!(paths.choose(None, &relays(), now), direct);
         assert_eq!(paths.choose(direct, &relays(), now), direct);
-        // 直连丢 40% 的包（罚 200ms）：中继明显更好，换过去
+        // 直连丢 40% 的包（罚 200ms）：中继明显更好。还没走的时候直接选中继；
+        // 正在走直连的话，要中继连续明显更好 RELAY_PATIENCE 才换过去
         paths.candidates.get_mut(&addr(1)).unwrap().loss = 4_000;
-        assert_eq!(paths.choose(direct, &relays(), now), relay());
         assert_eq!(paths.choose(None, &relays(), now), relay());
+        assert_eq!(paths.choose(direct, &relays(), now), direct);
+        keep_fresh(&mut paths, now + RELAY_PATIENCE - MS);
+        assert_eq!(
+            paths.choose(direct, &relays(), now + RELAY_PATIENCE - MS),
+            direct
+        );
+        keep_fresh(&mut paths, now + RELAY_PATIENCE);
+        assert_eq!(
+            paths.choose(direct, &relays(), now + RELAY_PATIENCE),
+            relay()
+        );
     }
 
     #[test]
@@ -741,6 +778,55 @@ mod tests {
             paths.on_pong(addr(1), Duration::from_micros(300), now);
         }
         assert_eq!(paths.choose(direct, &relays(), now), direct);
+    }
+
+    #[test]
+    fn one_slow_probe_does_not_push_a_working_direct_path_onto_the_relay() {
+        // e2e 里撞出来的：直连恢复后第一个样本慢（30ms），抖动跳起来，分数一下子输给 0.6ms 的中继
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        measure_relay(&mut paths, Duration::from_micros(600), now);
+        paths.set_advertised(&[addr(1)]);
+        for _ in 0..30 {
+            paths.on_pong(addr(1), Duration::from_micros(700), now);
+        }
+        let direct = Some(Path::Direct(addr(1)));
+        paths.on_pong(addr(1), 30 * MS, now);
+        assert_eq!(paths.choose(direct, &relays(), now), direct);
+        // 之后每秒一个正常的样本：还没等够，分数就降回去了
+        for second in 1..30 {
+            let at = now + second * SEC;
+            paths.on_pong(addr(1), Duration::from_micros(700), at);
+            measure_relay(&mut paths, Duration::from_micros(600), at);
+            assert_eq!(
+                paths.choose(direct, &relays(), at),
+                direct,
+                "第 {second} 秒"
+            );
+        }
+        assert!(paths.relay_favored_since.is_none(), "毛刺过去了，计时清掉");
+    }
+
+    #[test]
+    fn the_patience_clock_restarts_after_a_detour() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        for _ in 0..30 {
+            paths.on_pong(addr(1), 20 * MS, now);
+        }
+        measure_relay(&mut paths, 20 * MS, now);
+        paths.candidates.get_mut(&addr(1)).unwrap().loss = 4_000;
+        let direct = Some(Path::Direct(addr(1)));
+        assert_eq!(paths.choose(direct, &relays(), now), direct, "开始计时");
+        // 中途评估过一次别的情况（比如当前在中继上）：计时作废
+        paths.choose(relay(), &relays(), now + SEC);
+        keep_fresh(&mut paths, now + RELAY_PATIENCE);
+        assert_eq!(
+            paths.choose(direct, &relays(), now + RELAY_PATIENCE),
+            direct,
+            "从头计时，不是接着上次的"
+        );
     }
 
     #[test]
@@ -782,7 +868,7 @@ mod tests {
     #[test]
     fn an_unmeasured_relay_does_not_displace_a_working_direct_path() {
         let now = Instant::now();
-        let paths = working(now);
+        let mut paths = working(now);
         let direct = Some(Path::Direct(addr(1)));
         assert_eq!(paths.choose(direct, &relays(), now + 30 * MS), direct);
         assert_eq!(paths.choose(relay(), &relays(), now + 30 * MS), direct);
@@ -915,7 +1001,7 @@ mod tests {
     #[test]
     fn with_nothing_measured_the_current_relay_is_kept() {
         let now = Instant::now();
-        let paths = PeerPaths::default();
+        let mut paths = PeerPaths::default();
         let both = [relay_n(0), relay_n(1)];
         assert_eq!(paths.choose(None, &both, now), Some(relay_n(0)), "排第一的");
         let on_1 = Some(relay_n(1));
