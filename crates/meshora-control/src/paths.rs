@@ -15,7 +15,7 @@
 //! - 选路：通着的直连和通着的中继放在一起按分数比。中继要**明显**比直连好才选它 ——
 //!   它占着第三方的带宽，而且多绕一段；当前的路还通，别的路也要明显更好才换（免得来回跳）。
 //!   一条直连都不通，就走最好的那个通着的中继；中继也都没测通，就留在当前的中继上，
-//!   没有当前的就用排第一的
+//!   没有当前的就用排第一的。直连要测够 [`SETTLED_SAMPLES`] 次才和中继比分数 —— 头几个样本不准
 //! - 本机换了网络，所有直连一律作废：先走中继，重新探测，通了再切回来
 
 use std::collections::{BTreeMap, HashMap};
@@ -53,6 +53,13 @@ const LOSS_SMOOTHING: u32 = 8;
 const SWITCH_MARGIN: Duration = Duration::from_millis(10);
 /// ……而且至少好这么多分之一（当前分数的 1/4）。两个条件都要满足
 const SWITCH_FRACTION: u32 = 4;
+/// 一条直连测过这么多次，才拿它的分数和中继比。
+///
+/// 第一个样本把抖动设成往返时间的一半（RFC 6298 的初值），分数就是往返时间的三倍；而经过 NAT 的
+/// 第一个报文常常慢几毫秒（ARP、conntrack）。只测了一次的直连要是就这样输给测过很多次的中继，
+/// 没在用的直连 3 秒才探测一次，分数要半分钟以上才降得下来 —— e2e 里撞出来过：
+/// 一边早就直连了，另一边在中继上待满了 30 秒
+pub const SETTLED_SAMPLES: u32 = 5;
 
 #[derive(Clone, Debug, Default)]
 struct Candidate {
@@ -70,6 +77,8 @@ struct Candidate {
     srtt: Option<Duration>,
     /// 往返时间的平均偏差，也就是抖动
     rttvar: Duration,
+    /// 记过几个往返时间样本
+    samples: u32,
     /// 平滑后的丢包率，万分之几（0 到 10000）
     loss: u32,
 }
@@ -105,8 +114,12 @@ impl Candidate {
         self.loss = (self.loss * (LOSS_SMOOTHING - 1) + sample) / LOSS_SMOOTHING;
     }
 
-    /// 记一个往返时间样本（RFC 6298 的平滑办法）
+    /// 记一个往返时间样本（RFC 6298 的平滑办法）。
+    ///
+    /// 头几个样本改用算术平均（第 n 个占 1/n），到了 RFC 的权重（1/8、1/4）再按它来。
+    /// 不然第一个样本分量太重：经 NAT 的第一个报文慢几毫秒，要十几二十个样本才冲得淡
     fn sample(&mut self, rtt: Duration) {
+        self.samples = self.samples.saturating_add(1);
         match self.srtt {
             None => {
                 self.srtt = Some(rtt);
@@ -114,8 +127,10 @@ impl Candidate {
             }
             Some(srtt) => {
                 let deviation = srtt.abs_diff(rtt);
-                self.rttvar = (self.rttvar * 3 + deviation) / 4;
-                self.srtt = Some((srtt * 7 + rtt) / 8);
+                let var_weight = self.samples.min(4);
+                let rtt_weight = self.samples.min(8);
+                self.rttvar = (self.rttvar * (var_weight - 1) + deviation) / var_weight;
+                self.srtt = Some((srtt * (rtt_weight - 1) + rtt) / rtt_weight);
             }
         }
     }
@@ -261,6 +276,18 @@ impl PeerPaths {
         due
     }
 
+    /// 通着的直连里分数最好的那个。
+    ///
+    /// 正在走中继、却有通着的直连时（比如直连刚测出来、分数还没稳），控制面把它当"正在用的"那样
+    /// 每秒探测：要回到直连，得先把它测准，别按 3 秒一轮慢慢等
+    pub fn best_direct(&self, now: Instant) -> Option<SocketAddr> {
+        self.candidates
+            .iter()
+            .filter(|(_, c)| c.fresh(now))
+            .min_by_key(|(_, c)| c.score())
+            .map(|(addr, _)| *addr)
+    }
+
     /// 该不该经中继 `relay` 探测一次。`active` 表示正在走这个中继：和正在用的直连一样探测得更勤。
     pub fn relay_due(&mut self, relay: Path, now: Instant, active: bool) -> bool {
         let interval = if active {
@@ -339,7 +366,7 @@ impl PeerPaths {
             .iter()
             .filter(|(_, c)| c.fresh(now))
             .min_by_key(|(_, c)| c.score())
-            .map(|(addr, c)| (Path::Direct(*addr), c.score()));
+            .map(|(addr, c)| (Path::Direct(*addr), c.score(), c.samples >= SETTLED_SAMPLES));
         let relay_score = |path: &Path| {
             self.relays
                 .get(path)
@@ -352,10 +379,10 @@ impl PeerPaths {
             .filter_map(|path| relay_score(path).map(|score| (*path, score)))
             .min_by_key(|(_, score)| *score);
 
-        // 不考虑"当前走哪条"时的最佳：直连优先，中继要明显更好
+        // 不考虑"当前走哪条"时的最佳：直连优先，中继要明显更好 —— 而且直连得先测够了才比
         let best = match (best_direct, best_relay) {
-            (Some(direct), Some(relay)) if better(relay.1, direct.1) => Some(relay),
-            (Some(direct), _) => Some(direct),
+            (Some((_, direct, true)), Some(relay)) if better(relay.1, direct) => Some(relay),
+            (Some((path, score, _)), _) => Some((path, score)),
             (None, relay) => relay,
         };
 
@@ -696,6 +723,24 @@ mod tests {
         paths.candidates.get_mut(&addr(1)).unwrap().loss = 4_000;
         assert_eq!(paths.choose(direct, &relays(), now), relay());
         assert_eq!(paths.choose(None, &relays(), now), relay());
+    }
+
+    #[test]
+    fn a_barely_measured_direct_path_is_not_judged_against_the_relay() {
+        // e2e 里撞出来的：直连第一个样本 4ms（经 NAT 的第一个报文慢），分数 12ms；
+        // 中继测过很多次，0.5ms。不能就此认定中继明显更好
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        measure_relay(&mut paths, Duration::from_micros(500), now);
+        paths.set_advertised(&[addr(1)]);
+        paths.on_pong(addr(1), 4 * MS, now);
+        let direct = Some(Path::Direct(addr(1)));
+        assert_eq!(paths.choose(relay(), &relays(), now), direct);
+        // 测够了，直连其实很快：照样直连
+        for _ in 0..SETTLED_SAMPLES {
+            paths.on_pong(addr(1), Duration::from_micros(300), now);
+        }
+        assert_eq!(paths.choose(direct, &relays(), now), direct);
     }
 
     #[test]

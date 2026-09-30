@@ -791,10 +791,11 @@ impl Node {
             .peers
             .iter_mut()
             .flat_map(|(key, state)| {
-                // 正在用的直连探测得更勤：它断了要尽快发现
+                // 正在用的直连探测得更勤：它断了要尽快发现。正在走中继时，最好的那条通着的直连
+                // 也这样探测：要回到直连，得先把它测准
                 let active = match state.current {
                     Some(Path::Direct(addr)) => Some(addr),
-                    _ => None,
+                    _ => state.paths.best_direct(now),
                 };
                 state
                     .paths
