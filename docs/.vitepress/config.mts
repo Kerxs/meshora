@@ -33,7 +33,7 @@ function tokenize(text: string): string[] {
 
 export default defineConfig({
   title: 'Meshora',
-  description: '开源、跨平台的设备网络连接与能力编排平台',
+  description: '开源的异地局域网游戏联机工具。1.0.0 只做局域网联机，目前在开发中',
   lang: 'zh-CN',
   // 部署到 user.github.io/repo/ 时 base 必须是 /repo/
   base: '/meshora/',
@@ -65,8 +65,8 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#0E5C63' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'Meshora' }],
-    ['meta', { property: 'og:title', content: 'Meshora — Connect Everything.' }],
-    ['meta', { property: 'og:description', content: '开源、跨平台的设备网络连接与能力编排平台。目前处于设计阶段。' }],
+    ['meta', { property: 'og:title', content: 'Meshora — 异地好友，同一个局域网' }],
+    ['meta', { property: 'og:description', content: '开源的局域网游戏联机工具。1.0.0 只做 Windows 上的局域网联机，目前在开发中，暂无可用版本。' }],
     ['meta', { property: 'og:url', content: SITE }]
   ],
 
@@ -76,6 +76,7 @@ export default defineConfig({
 
     nav: [
       { text: '指南', link: '/guide/what-is-meshora', activeMatch: '/guide/' },
+      { text: '1.0.0 联机', link: '/guide/lan-play' },
       { text: '架构', link: '/guide/architecture' },
       { text: '路线图', link: '/guide/roadmap' },
       { text: '参与', link: '/guide/contributing' }
@@ -87,6 +88,7 @@ export default defineConfig({
           text: '认识 Meshora',
           items: [
             { text: '它解决什么问题', link: '/guide/what-is-meshora' },
+            { text: '局域网联机：1.0.0 做什么', link: '/guide/lan-play' },
             { text: '核心概念', link: '/guide/concepts' }
           ]
         },
@@ -95,7 +97,6 @@ export default defineConfig({
           items: [
             { text: '架构：控制面与数据面', link: '/guide/architecture' },
             { text: '自动网络：建连流水线', link: '/guide/connection-flow' },
-            { text: '六大能力', link: '/guide/capabilities' },
             { text: '接口契约', link: '/guide/interfaces' },
             { text: '威胁模型', link: '/guide/threat-model' }
           ]
@@ -103,7 +104,7 @@ export default defineConfig({
         {
           text: '参考',
           items: [
-            { text: '与同类方案对比', link: '/guide/comparison' },
+            { text: '与同类工具对比', link: '/guide/comparison' },
             { text: '路线图', link: '/guide/roadmap' },
             { text: '常见问题', link: '/guide/faq' },
             { text: '参与进来', link: '/guide/contributing' }
