@@ -184,20 +184,22 @@ impl Session {
             let mut last_heard = Instant::now();
             node.take_network_changed();
             loop {
-                let now = Instant::now();
+                // 时间在事件到了之后再取：select 可能等了将近一个节拍，拿等待之前的时刻去记
+                // Ping 的发出时间，量出来的往返时间会凭空多出这段等待
                 let outgoing = tokio::select! {
                     message = connection.inbox.recv() => match message {
                         Some(message) => {
+                            let now = Instant::now();
                             last_heard = now;
                             node.on_server_message(message, now)
                         }
                         None => break,
                     },
                     event = events.recv() => match event {
-                        Some(event) => node.on_event(event, now),
+                        Some(event) => node.on_event(event, Instant::now()),
                         None => return Ok(()),
                     },
-                    _ = tick.tick() => node.on_tick(now),
+                    _ = tick.tick() => node.on_tick(Instant::now()),
                 };
                 node.publish(&status, true);
                 for message in outgoing {
@@ -205,7 +207,7 @@ impl Session {
                         debug!(%err, "发往协调服务失败");
                     }
                 }
-                if now.duration_since(last_heard) > COORD_SILENCE {
+                if last_heard.elapsed() > COORD_SILENCE {
                     warn!(silence = ?COORD_SILENCE, "协调服务太久没有回音");
                     break;
                 }
@@ -227,14 +229,13 @@ impl Session {
                 };
                 tokio::pin!(reconnect);
                 let result = loop {
-                    let now = Instant::now();
                     tokio::select! {
                         result = &mut reconnect => break result,
                         event = events.recv() => match event {
-                            Some(event) => drop(node.on_event(event, now)),
+                            Some(event) => drop(node.on_event(event, Instant::now())),
                             None => return Ok(()),
                         },
-                        _ = tick.tick() => drop(node.on_tick(now)),
+                        _ = tick.tick() => drop(node.on_tick(Instant::now())),
                     }
                     node.publish(&status, false);
                 };

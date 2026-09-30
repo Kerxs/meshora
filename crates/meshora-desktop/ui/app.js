@@ -303,7 +303,7 @@ function peerRow(peer) {
         text = peer.route === "pending" ? "等待中" : "连接中";
         kind = "";
       } else if (peer.route === "direct") {
-        text = peer.rttMs === null ? "直连" : `直连 · ${peer.rttMs} ms`;
+        text = peer.rttMs === null ? "直连" : `直连 · ${peer.rttMs < 1 ? "<1" : peer.rttMs} ms`;
         kind = "direct";
       } else {
         text = "经中继";

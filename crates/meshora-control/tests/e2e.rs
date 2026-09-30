@@ -178,6 +178,24 @@ async fn two_nodes_find_each_other_and_talk_directly() {
         assert_eq!(status.peers.len(), 1);
         assert_eq!(status.peers[0].overlay_ip, other);
         assert!(matches!(status.peers[0].path, Some(Path::Direct(_))));
+
+        // 本机回环上的往返时间是微秒级。曾经把 select 空等的那段也算进了往返时间：
+        // 流量停下来之后，节拍发出的下一轮探测量出来是几百毫秒。所以等到下一轮（每 3 秒一轮）再看
+        let first = status.peers[0].rtt;
+        let later = tokio::time::timeout(
+            Duration::from_secs(10),
+            node.status
+                .wait_for(|s| s.peers.first().is_some_and(|p| p.rtt != first)),
+        )
+        .await
+        .expect("一直没有第二次测量")
+        .unwrap()
+        .clone();
+        let rtt = later.peers[0].rtt.unwrap();
+        assert!(
+            rtt < Duration::from_millis(100),
+            "回环上的往返时间是 {rtt:?}"
+        );
     }
 }
 
