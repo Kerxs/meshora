@@ -28,6 +28,7 @@ tracing-subscriber.workspace = true
 # 界面只做 Windows（1.0.0 只做 Windows）。别的平台上可执行文件只打一句话，
 # Linux 的 CI 也就不必为了编译它装 WebKit。节点的启停、状态汇总不依赖界面，在哪都能编译、能测
 [target.'cfg(windows)'.dependencies]
+meshora-tun.workspace = true
 tauri.workspace = true
 tauri-plugin-single-instance.workspace = true
 

@@ -497,6 +497,21 @@ function openSettings() {
       h("div", { class: "setting-text" }, h("strong", {}, "打开时自动连接"), h("span", {}, "启动客户端时自动连上次的网络。")),
       toggle(ov.autoConnect, (on) => invoke("set_auto_connect", { on })),
     ),
+    h(
+      "div",
+      { class: "setting" },
+      h(
+        "div",
+        { class: "setting-text" },
+        h("strong", {}, "把 Meshora 设为专用网络"),
+        h(
+          "span",
+          {},
+          "朋友连不进你开的房间时再打开。Windows 把 Meshora 当作公用网络，而很多游戏只被允许在专用网络上通信。代价：你电脑上对专用网络开放的东西（比如共享文件夹），网里的人也能访问。",
+        ),
+      ),
+      toggle(ov.privateNetwork, (on) => invoke("set_private_network", { on })),
+    ),
     ov.network
       ? h(
           "div",

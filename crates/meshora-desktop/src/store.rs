@@ -21,6 +21,9 @@ pub struct Settings {
     pub prefer_broadcast: bool,
     /// 打开客户端时自动连上次的网络。
     pub auto_connect: bool,
+    /// 把 Meshora 的网卡设成 Windows 的"专用网络"（见 `meshora_tun::set_network_private`）。
+    /// 有安全上的代价，默认关着，由用户决定。
+    pub private_network: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +32,7 @@ impl Default for Settings {
             network: None,
             prefer_broadcast: true,
             auto_connect: true,
+            private_network: false,
         }
     }
 }
@@ -148,6 +152,7 @@ pub(crate) mod tests {
             network: Some("code".into()),
             prefer_broadcast: false,
             auto_connect: true,
+            private_network: true,
         };
         store.save_settings(&settings).unwrap();
         assert_eq!(store.load_settings(), settings);
@@ -160,5 +165,6 @@ pub(crate) mod tests {
         let loaded = store.load_settings();
         assert_eq!(loaded.network.as_deref(), Some("x"));
         assert!(loaded.prefer_broadcast);
+        assert!(!loaded.private_network, "专用网络默认不开");
     }
 }

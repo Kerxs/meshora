@@ -2198,6 +2198,7 @@ dependencies = [
  "meshora-control",
  "meshora-coord",
  "meshora-dataplane",
+ "meshora-tun",
  "meshora-types",
  "meshorad",
  "serde",

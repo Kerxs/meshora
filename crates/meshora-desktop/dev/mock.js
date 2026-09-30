@@ -18,6 +18,7 @@
     network: null,
     preferBroadcast: true,
     autoConnect: true,
+    privateNetwork: false,
     phase: "idle",
     error: null,
     me: null,
@@ -84,6 +85,9 @@
     },
     set_auto_connect({ on }) {
       ov = { ...ov, autoConnect: on };
+    },
+    set_private_network({ on }) {
+      ov = { ...ov, privateNetwork: on };
     },
     logs() {
       return [

@@ -16,7 +16,7 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 wintun.workspace = true
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_SystemInformation"] }
 
 [lints]
 workspace = true

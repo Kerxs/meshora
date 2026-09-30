@@ -146,6 +146,58 @@ fn configure_interface(luid: NET_LUID_LH, config: &TunConfig) -> io::Result<()> 
     Ok(())
 }
 
+/// 把名叫 `name` 的网卡所在的网络设成"专用网络"（`private` 为假时设回"公用网络"）。
+///
+/// 没有调 COM 的 INetworkListManager：windows-sys 不带 COM 接口，为这一处拉进整个 windows crate 不值。
+/// 用系统自带的 `Set-NetConnectionProfile`：按系统目录的绝对路径起 powershell.exe（客户端以管理员身份运行，
+/// 不能按 PATH 找），不弹控制台窗口。
+///
+/// 网卡刚建好时系统还没把它归到哪个网络（网络位置识别要几秒），这时会失败，调用方要隔一会儿再试
+pub(crate) fn set_network_private(name: &str, private: bool) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let powershell = system_directory()?.join(r"WindowsPowerShell\v1.0\powershell.exe");
+    let output = std::process::Command::new(powershell)
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(profile_command(name, private))
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    // 输出是控制台代码页（中文系统上是 GBK），按 UTF-8 解会有乱码，只当作参考写进错误里
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(io::Error::other(format!(
+        "设置网络类别失败（{}）：{}",
+        output.status,
+        stderr.trim()
+    )))
+}
+
+/// 设网络类别的 PowerShell 命令。网卡名放进单引号字符串，里面的单引号按 PowerShell 的规矩写两个
+fn profile_command(name: &str, private: bool) -> String {
+    let category = if private { "Private" } else { "Public" };
+    let alias = name.replace('\'', "''");
+    format!(
+        "Set-NetConnectionProfile -InterfaceAlias '{alias}' -NetworkCategory {category} -ErrorAction Stop"
+    )
+}
+
+/// 系统目录（通常是 `C:\Windows\System32`）。向系统要，不看环境变量
+fn system_directory() -> io::Result<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+    let mut buf = [0u16; 260];
+    // SAFETY: 缓冲区是我们自己的，长度如实告诉函数；它最多写这么多个 u16
+    let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if len == 0 || len > buf.len() {
+        return Err(io::Error::other("拿不到系统目录"));
+    }
+    Ok(std::ffi::OsString::from_wide(&buf[..len]).into())
+}
+
 fn win32(what: &str, err: WIN32_ERROR) -> io::Error {
     let os = io::Error::from_raw_os_error(err as i32);
     io::Error::new(os.kind(), format!("{what}失败：{os}"))
@@ -153,4 +205,78 @@ fn win32(what: &str, err: WIN32_ERROR) -> io::Error {
 
 fn other(err: wintun::Error) -> io::Error {
     io::Error::other(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_profile_command_quotes_the_adapter_name() {
+        assert_eq!(
+            profile_command("Meshora", true),
+            "Set-NetConnectionProfile -InterfaceAlias 'Meshora' -NetworkCategory Private -ErrorAction Stop"
+        );
+        assert_eq!(
+            profile_command("it's; rm", false),
+            "Set-NetConnectionProfile -InterfaceAlias 'it''s; rm' -NetworkCategory Public -ErrorAction Stop"
+        );
+    }
+
+    #[test]
+    fn the_system_directory_holds_powershell() {
+        let dir = system_directory().unwrap();
+        assert!(
+            dir.join(r"WindowsPowerShell\v1.0\powershell.exe").is_file(),
+            "{}",
+            dir.display()
+        );
+    }
+
+    /// 真的建一块网卡，设成专用网络、读回来，再设回公用网络。要管理员权限和 wintun.dll，
+    /// 和 lib.rs 里的 `packets_flow_both_ways` 一样在 CI 的 Windows 虚拟机上跑
+    #[test]
+    #[ignore = "需要管理员权限和 wintun.dll。用 cargo test -p meshora-tun -- --ignored 跑"]
+    fn the_adapter_can_be_made_a_private_network() {
+        use std::time::{Duration, Instant};
+
+        let name = format!("mshprof{}", std::process::id() % 100_000);
+        let _tun = crate::Tun::open(&crate::TunConfig {
+            name: name.clone(),
+            address: std::net::Ipv4Addr::new(198, 18, 78, 1),
+            prefix_len: 24,
+            mtu: 1280,
+            metric: None,
+        })
+        .unwrap();
+
+        let category = || {
+            let script = format!(
+                "(Get-NetConnectionProfile -InterfaceAlias '{name}' -ErrorAction Stop).NetworkCategory"
+            );
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+
+        // 网络位置识别要几秒：没归到网络之前会失败，隔一会儿再试
+        let started = Instant::now();
+        let set = |private| loop {
+            match set_network_private(&name, private) {
+                Ok(()) => return,
+                Err(err) if started.elapsed() < Duration::from_secs(60) => {
+                    eprintln!("还不行，再试：{err}");
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+                Err(err) => panic!("60 秒内没设成：{err}"),
+            }
+        };
+        set(true);
+        eprintln!("用了 {:?} 设成专用网络", started.elapsed());
+        assert_eq!(category(), "Private");
+        set(false);
+        assert_eq!(category(), "Public");
+    }
 }

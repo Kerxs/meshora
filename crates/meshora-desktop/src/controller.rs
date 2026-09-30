@@ -35,6 +35,9 @@ const ONLINE_WINDOW: Duration = Duration::from_secs(180);
 const REFRESH: Duration = Duration::from_secs(1);
 /// 停一个节点最多等多久
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 设网络类别时，网卡刚建好、系统还没把它归到哪个网络，要隔一会儿再试。最多试这么久
+#[cfg(windows)]
+const PROFILE_PATIENCE: Duration = Duration::from_secs(60);
 
 /// 出了什么问题。界面按种类给出不同的提示。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -143,6 +146,8 @@ pub struct Overview {
     pub prefer_broadcast: bool,
     /// 见 [`Settings::auto_connect`]。
     pub auto_connect: bool,
+    /// 见 [`Settings::private_network`]。
+    pub private_network: bool,
     /// `idle`、`connecting`、`connected`、`failed`。
     pub phase: &'static str,
     /// 失败时的原因。
@@ -168,11 +173,22 @@ struct Runner {
     task: JoinHandle<()>,
 }
 
+/// 丢掉就停下的后台任务
+struct Background(JoinHandle<()>);
+
+impl Drop for Background {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct State {
     settings: Settings,
     phase: Phase,
     snapshot: Snapshot,
     runner: Option<Runner>,
+    /// 正在设网卡的网络类别的任务。换一个设置、断开时就停掉旧的
+    profile: Option<Background>,
 }
 
 struct Shared {
@@ -220,6 +236,7 @@ impl Controller {
                     phase: Phase::Idle,
                     snapshot: Snapshot::default(),
                     runner: None,
+                    profile: None,
                 }),
                 ops: tokio::sync::Mutex::new(()),
             }),
@@ -241,6 +258,7 @@ impl Controller {
             network: state.settings.network.clone(),
             prefer_broadcast: state.settings.prefer_broadcast,
             auto_connect: state.settings.auto_connect,
+            private_network: state.settings.private_network,
             phase,
             error,
             me: state.snapshot.me.clone(),
@@ -334,6 +352,23 @@ impl Controller {
         self.shared.save(&state.settings);
     }
 
+    /// 改"把 Meshora 设为专用网络"。连着的话马上按新设置改网卡，不用重连；
+    /// 关掉时把网卡改回公用网络。
+    pub fn set_private_network(&self, on: bool) {
+        let mut state = self.shared.state();
+        if state.settings.private_network == on {
+            return;
+        }
+        state.settings.private_network = on;
+        self.shared.save(&state.settings);
+        if state.phase == Phase::Connected
+            && let Some(me) = &state.snapshot.me
+        {
+            let tun = me.tun.clone();
+            state.profile = Some(set_profile(tun, on));
+        }
+    }
+
     /// 客户端刚打开：按设置自动连接上次的网络。
     pub async fn start_up(&self) {
         let wanted = {
@@ -347,7 +382,11 @@ impl Controller {
 
     /// 停掉后台任务并等它收拾完
     async fn stop_runner(&self) {
-        let runner = self.shared.state().runner.take();
+        let runner = {
+            let mut state = self.shared.state();
+            state.profile = None;
+            state.runner.take()
+        };
         if let Some(Runner { stop, mut task }) = runner {
             let _ = stop.send(());
             if tokio::time::timeout(STOP_TIMEOUT, &mut task).await.is_err() {
@@ -382,6 +421,10 @@ async fn run(
         let mut state = shared.state();
         state.phase = Phase::Connected;
         state.snapshot = snapshot(&node);
+        // 关着的时候什么都不动：网卡是新建的，本来就是系统默认的类别
+        if state.settings.private_network {
+            state.profile = Some(set_profile(node.tun_name().to_owned(), true));
+        }
     }
 
     let mut tick = tokio::time::interval(REFRESH);
@@ -440,6 +483,48 @@ async fn start(
         other => other,
     };
     started.map_err(Failure::from_start)
+}
+
+/// 在后台把网卡设成专用网络（或者设回公用网络），网卡还没归到网络时隔两秒再试
+fn set_profile(tun: String, private: bool) -> Background {
+    Background(tokio::spawn(async move {
+        #[cfg(windows)]
+        {
+            let started = Instant::now();
+            loop {
+                let name = tun.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    meshora_tun::set_network_private(&name, private)
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {
+                        let category = if private {
+                            "专用网络"
+                        } else {
+                            "公用网络"
+                        };
+                        info!(%tun, "网卡已设为{category}");
+                        return;
+                    }
+                    Ok(Err(err)) if started.elapsed() < PROFILE_PATIENCE => {
+                        tracing::debug!(%err, "网卡还没归到网络，稍后再试");
+                    }
+                    Ok(Err(err)) => {
+                        warn!(%err, "没能改网卡的网络类别");
+                        return;
+                    }
+                    Err(err) => {
+                        warn!(%err, "改网络类别的任务出错");
+                        return;
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+        #[cfg(not(windows))]
+        info!(%tun, private, "只有 Windows 有网络类别，不用设");
+    }))
 }
 
 fn snapshot(node: &Node) -> Snapshot {
@@ -736,9 +821,12 @@ mod tests {
         let controller = controller(&dir);
         controller.set_prefer_broadcast(false).await.unwrap();
         controller.set_auto_connect(false);
+        controller.set_private_network(true);
         let saved = Store::new(&dir.0).load_settings();
         assert!(!saved.prefer_broadcast);
         assert!(!saved.auto_connect);
+        assert!(saved.private_network);
+        assert!(controller.overview().private_network);
         let overview = controller.overview();
         assert!(!overview.prefer_broadcast);
         assert_eq!(overview.id.len(), 44);

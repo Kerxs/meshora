@@ -82,6 +82,19 @@ impl Tun {
     }
 }
 
+/// 把名叫 `name` 的网卡所在的网络设成 Windows 的"专用网络"（`private` 为假时设回"公用网络"）。
+/// 需要管理员权限。
+///
+/// Windows 多半把虚拟网卡归为"公用网络"，而很多游戏第一次运行时只被放行了"专用网络"：
+/// 朋友从 Meshora 连进来会被防火墙挡住。设成专用网络能解决，代价是专用网络的防火墙规则
+/// （文件共享、网络发现之类，如果开着）对网里的所有人都生效 —— 所以由用户决定要不要设。
+///
+/// 网卡刚建好的头几秒，系统还没把它归到哪个网络，这时会失败，要隔一会儿再试。
+#[cfg(windows)]
+pub fn set_network_private(name: &str, private: bool) -> io::Result<()> {
+    platform::set_network_private(name, private)
+}
+
 /// 网卡两个方向的 channel。
 pub struct Pipes {
     /// 从网卡读到的 IP 报文：系统要发进 overlay 的。
