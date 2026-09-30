@@ -4,7 +4,7 @@
 //! meshora-coord --key coord.key --listen 0.0.0.0:7443 \
 //!     --probe 0.0.0.0:7443 --probe-public 203.0.113.5:7443 \
 //!     --relay-listen 0.0.0.0:7444 --relay-public 203.0.113.5:7444 \
-//!     --node <节点公钥> --node <节点公钥>
+//!     --state coord.state
 //! ```
 
 use std::io::{self, Read};
@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use ipnet::Ipv4Net;
 use lexopt::prelude::*;
-use meshora_coord::Config;
+use meshora_coord::{Config, Coordinator};
 use meshora_proto::control::RelayInfo;
 use meshora_types::{NodeKey, NodeSecret};
 use tokio::net::{TcpListener, UdpSocket};
@@ -26,7 +26,10 @@ const USAGE: &str = "\
 
   --key <文件>              协调服务的私钥文件（必需）。meshorad genkey 可以生成
   --listen <地址:端口>      控制通道监听的 TCP 地址（必需）
-  --node <公钥>             允许加入的节点，可以写多次（至少一个）。overlay 地址按这个顺序分配
+  --state <文件>            状态文件：存邀请码和凭邀请码加入的成员。给了它，朋友拿着
+                            带邀请码的网络码就能自己加入，不用重启。第一次启动时生成邀请码
+  --node <公钥>             名单里的节点，可以写多次。overlay 地址按这个顺序分配。
+                            --state 和 --node 至少要有一个
   --overlay <网段>          overlay 网段，默认 100.64.0.0/10
   --probe <地址:端口>       端点探测监听的 UDP 地址
   --probe-public <地址:端口> 节点从外面访问探测端点用的地址，默认同 --probe
@@ -43,6 +46,7 @@ struct Args {
     key: PathBuf,
     listen: SocketAddr,
     nodes: Vec<NodeKey>,
+    state: Option<PathBuf>,
     overlay: Ipv4Net,
     probe: Option<SocketAddr>,
     probe_public: Option<SocketAddr>,
@@ -78,6 +82,7 @@ fn parse() -> Result<Command, lexopt::Error> {
         key: PathBuf::new(),
         listen: SocketAddr::from(([0, 0, 0, 0], 0)),
         nodes: Vec::new(),
+        state: None,
         overlay: "100.64.0.0/10".parse().expect("常量"),
         probe: None,
         probe_public: None,
@@ -102,6 +107,7 @@ fn parse() -> Result<Command, lexopt::Error> {
             Long("key") => key = Some(PathBuf::from(parser.value()?)),
             Long("listen") => listen = Some(parser.value()?.parse()?),
             Long("node") => args.nodes.push(parser.value()?.parse()?),
+            Long("state") => args.state = Some(PathBuf::from(parser.value()?)),
             Long("overlay") => args.overlay = parser.value()?.parse()?,
             Long("probe") => args.probe = Some(parser.value()?.parse()?),
             Long("probe-public") => args.probe_public = Some(parser.value()?.parse()?),
@@ -115,8 +121,8 @@ fn parse() -> Result<Command, lexopt::Error> {
     }
     args.key = key.ok_or("缺少 --key")?;
     args.listen = listen.ok_or("缺少 --listen")?;
-    if args.nodes.is_empty() {
-        return Err("至少要有一个 --node".into());
+    if args.nodes.is_empty() && args.state.is_none() {
+        return Err("--state 和 --node 至少要有一个：不然谁都加入不了".into());
     }
     Ok(Command::Serve(Box::new(args)))
 }
@@ -225,28 +231,47 @@ async fn run(args: Args) -> Result<(), String> {
     };
 
     let mut relays = args.relays;
-    if let Some(addr) = args.relay_listen {
-        let public = advertised(addr, args.relay_public, "--relay-public")?;
-        let relay_listener = TcpListener::bind(addr)
-            .await
-            .map_err(|err| format!("中继监听 {addr} 失败：{err}"))?;
-        // 中继用协调服务同一把密钥：两边的 Noise 前导不同（通道类型 C 和 R），握手互不相通
+    let relay = match args.relay_listen {
+        Some(addr) => {
+            let public = advertised(addr, args.relay_public, "--relay-public")?;
+            let relay_listener = TcpListener::bind(addr)
+                .await
+                .map_err(|err| format!("中继监听 {addr} 失败：{err}"))?;
+            relays.insert(
+                0,
+                RelayInfo {
+                    key: secret.public_key(),
+                    addr: public,
+                },
+            );
+            Some((relay_listener, addr, public))
+        }
+        None => None,
+    };
+
+    let coordinator = Coordinator::new(Config {
+        secret: secret.clone(),
+        nodes: args.nodes,
+        state: args.state,
+        overlay: args.overlay,
+        probe,
+        relays,
+    })
+    .map_err(|err| format!("启动失败：{err}"))?;
+
+    if let Some((relay_listener, addr, public)) = relay {
+        // 中继用协调服务同一把密钥：两边的 Noise 前导不同（通道类型 C 和 R），握手互不相通。
+        // 成员表和协调服务共用：凭邀请码新加入的成员马上也能用中继
         let relay_config = meshora_relay::Config {
             secret: secret.clone(),
-            nodes: args.nodes.clone(),
+            allow: coordinator.members(),
         };
         tokio::spawn(meshora_relay::serve(relay_config, relay_listener));
         info!(%addr, %public, "同一进程里的中继已启动");
-        relays.insert(
-            0,
-            RelayInfo {
-                key: secret.public_key(),
-                addr: public,
-            },
-        );
     }
 
-    // 朋友加入要的网络码：公钥@地址:端口。公网地址只有从 --probe-public 这类参数里才知道
+    // 朋友加入要的网络码：公钥@地址:端口，接受邀请加入时后面再跟 #邀请码。
+    // 公网地址只有从 --probe-public 这类参数里才知道
     let port = args.listen.port();
     let addr = probe
         .map(|addr| addr.ip())
@@ -255,17 +280,17 @@ async fn run(args: Args) -> Result<(), String> {
             || format!("<服务器的公网地址>:{port}"),
             |ip| SocketAddr::new(ip, port).to_string(),
         );
-    info!("网络码（发给要加入的朋友）：{}@{addr}", secret.public_key());
+    let invite = coordinator
+        .invite()
+        .map(|invite| format!("#{invite}"))
+        .unwrap_or_default();
+    info!(
+        "网络码（发给要加入的朋友）：{}@{addr}{invite}",
+        secret.public_key()
+    );
 
-    let config = Config {
-        secret,
-        nodes: args.nodes,
-        overlay: args.overlay,
-        probe,
-        relays,
-    };
     tokio::select! {
-        result = meshora_coord::serve(config, listener, probe_socket) => {
+        result = coordinator.serve(listener, probe_socket) => {
             result.map_err(|err| format!("协调服务退出：{err}"))
         }
         _ = tokio::signal::ctrl_c() => Ok(()),

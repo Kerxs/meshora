@@ -81,9 +81,11 @@ function avatarColor(id) {
   return `hsl(${hash % 360} 55% 48%)`;
 }
 
+// 网络码里给人看的部分：地址。邀请码是秘密，不往界面上摆
 function hostOf(code) {
-  const at = (code || "").lastIndexOf("@");
-  return at < 0 ? code : code.slice(at + 1);
+  const text = (code || "").split("#")[0];
+  const at = text.lastIndexOf("@");
+  return at < 0 ? text : text.slice(at + 1);
 }
 
 // ---------- 各个画面 ----------
@@ -94,7 +96,7 @@ const views = {};
 views.join = {
   mount(ov) {
     const area = h("textarea", {
-      placeholder: "粘贴网络码，形如  公钥@地址:端口",
+      placeholder: "粘贴网络码，形如  公钥@地址:端口#邀请码",
       spellcheck: "false",
       "aria-label": "网络码",
     });
@@ -185,7 +187,7 @@ function idCard(ov) {
       "div",
       {},
       h("h2", {}, "你的 ID"),
-      h("p", {}, "第一次加入前，把它发给建网络的人，由对方加进名单。它只代表这台电脑，不是密码，可以放心发。"),
+      h("p", {}, "网络码里带着邀请码的话用不着它。不带的话，把它发给建网络的人，由对方加进名单。它只代表这台电脑，不是密码，可以放心发。"),
     ),
     h("div", { class: "id-box" }, h("span", { class: "mono" }, ov.id), copyButton(() => ov.id, "ID")),
   );
@@ -324,8 +326,22 @@ function peerRow(peer) {
 const FAILURES = {
   rejected: {
     title: "还没被加进这个网络",
-    hint: "把下面的 ID 发给建网络的人，对方把它加进名单后，再点「重试」。",
+    hint: "这个网络码里没有邀请码，网络只认名单。向建网络的人要一个带邀请码的网络码；或者把下面的 ID 发给对方，加进名单后再点「重试」。",
     showId: true,
+  },
+  // 下面三种是 rejected 的细分，按协调服务给的原因认
+  rejectedInvite: {
+    title: "邀请码不对",
+    hint: "邀请码可能已经换过了。向建网络的人要一个最新的网络码，点「换一个网络」贴进去。",
+  },
+  rejectedClosed: {
+    title: "这个网络不接受邀请",
+    hint: "网络码里带着邀请码，但这个网络只认名单。把下面的 ID 发给建网络的人，加进名单后再点「重试」。",
+    showId: true,
+  },
+  rejectedFull: {
+    title: "网络已满",
+    hint: "这个网络的人数到上限了。联系建网络的人。",
   },
   unreachable: {
     title: "连不上协调服务",
@@ -391,6 +407,9 @@ views.failed = {
   },
   update(ov) {
     let kind = ov.error.kind;
+    if (kind === "rejected" && ov.error.message.includes("邀请码不对")) kind = "rejectedInvite";
+    else if (kind === "rejected" && ov.error.message.includes("不接受凭邀请码")) kind = "rejectedClosed";
+    else if (kind === "rejected" && ov.error.message.includes("网络已满")) kind = "rejectedFull";
     if (kind === "tun" && /wintun\.dll/i.test(ov.error.message)) kind = "tunDriver";
     else if (kind === "tun" && /拒绝访问|access is denied|\(os error 5\)/i.test(ov.error.message)) kind = "tunAdmin";
     const info = FAILURES[kind] || FAILURES.other;
@@ -479,6 +498,9 @@ function openSettings() {
             { class: "setting-text" },
             h("strong", {}, "网络码"),
             h("span", { class: "mono" }, ov.network),
+            ov.network.includes("#")
+              ? h("span", {}, "带着邀请码：发给谁，谁就能加入这个网络。只发给要一起玩的人。")
+              : null,
             h(
               "div",
               { class: "row" },

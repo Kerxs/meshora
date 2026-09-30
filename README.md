@@ -174,6 +174,8 @@ sudo scripts/e2e-netns.sh target/debug
    ```
 
    协调服务启动时会打出**网络码**（`公钥@地址:端口`），`--coord` 加 `--coord-key` 也可以换成 `--join <网络码>`。
+   协调服务带上 `--state coord.state` 的话，网络码末尾还有 `#邀请码`：拿着它的节点不用先进名单，
+   直接就能加入，地址自动分配。见[桌面客户端 · 给建网络的人](https://kerxs.github.io/meshora/guide/desktop#给建网络的人-起一个协调服务)。
 
 然后 A 上 `ping 100.64.0.2`，B 上 `ping 100.64.0.1`。节点日志里的 `切换路径` 说明走的是哪条路：
 `path=Direct(...)` 是直连，`path=Relay {...}` 是经中继。

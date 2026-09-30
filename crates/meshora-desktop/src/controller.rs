@@ -416,6 +416,7 @@ async fn start(
         secret: secret.clone(),
         coord,
         coord_key: network.coord_key,
+        invite: network.invite,
         port,
         tun: TUN_NAME.into(),
         mtu: MTU,
@@ -630,6 +631,7 @@ mod tests {
                 secret: coord_secret.clone(),
                 // 名单里只有别人
                 nodes: vec![key(1)],
+                state: None,
                 overlay: "100.64.0.0/10".parse().unwrap(),
                 probe: None,
                 relays: vec![],
@@ -647,6 +649,43 @@ mod tests {
         let overview = controller.overview();
         assert_eq!(overview.phase, "idle");
         assert_eq!(overview.network, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_network_code_with_an_invite_gets_past_registration() {
+        let dir = TempDir::new("invite");
+        let controller = controller(&dir);
+        let coord_secret = NodeSecret::generate();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // 名单是空的：只能凭邀请码进
+        let coordinator = meshora_coord::Coordinator::new(meshora_coord::Config {
+            secret: coord_secret.clone(),
+            nodes: vec![],
+            state: Some(dir.0.join("coord.state")),
+            overlay: "100.64.0.0/10".parse().unwrap(),
+            probe: None,
+            relays: vec![],
+        })
+        .unwrap();
+        let invite = coordinator.invite().unwrap();
+        tokio::spawn(coordinator.serve(listener, None));
+
+        let mut code = NetworkCode::new(coord_secret.public_key(), addr);
+        code.invite = Some(invite);
+        controller.connect(Some(code.to_string())).await.unwrap();
+        let overview = phase_settles(&controller).await;
+        // 过了注册这一关。之后建不建得起网卡取决于有没有管理员权限和 wintun.dll：
+        // 普通用户跑测试时停在建网卡，CI 的 Windows 机器上能一直连通
+        match overview.error {
+            None => assert_eq!(overview.phase, "connected"),
+            Some(failure) => assert_eq!(failure.kind, FailureKind::Tun, "{}", failure.message),
+        }
+        assert!(
+            overview.network.unwrap().ends_with(&format!("#{invite}")),
+            "存下的网络码带着邀请码，下次自动连也用得上"
+        );
+        controller.forget().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -29,7 +29,7 @@ const USAGE: &str = "\
 
 up 的选项：
   --key <文件>          私钥文件（必需）
-  --join <网络码>       要加入的网络：协调服务的 公钥@地址:端口（网络码，建网络的人给你的）
+  --join <网络码>       要加入的网络：公钥@地址:端口，可能还带着 #邀请码（建网络的人给你的）
   --coord <地址:端口>   协调服务的地址。和 --coord-key 一起用，可以代替 --join
   --coord-key <公钥>    协调服务的公钥
   --port <端口>         WireGuard 和控制报文共用的 UDP 端口，默认 41641，0 表示让系统挑
@@ -256,6 +256,7 @@ async fn run(up: Up) -> Result<(), String> {
         secret,
         coord,
         coord_key: up.network.coord_key,
+        invite: up.network.invite,
         port: up.port,
         tun: up.tun,
         mtu: up.mtu,

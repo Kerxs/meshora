@@ -8,10 +8,12 @@
 //! [`Path`] 是[路径](https://kerxs.github.io/meshora/guide/concepts#路径)。第三个概念"能力"
 //! 属于 M3 的能力声明与授权模型，等那边的设计定下来再进来。
 
+mod invite;
 mod key;
 mod path;
 mod secret;
 
+pub use invite::{Invite, ParseInviteError};
 pub use key::{NodeKey, ParseNodeKeyError};
 pub use path::Path;
 pub use secret::NodeSecret;

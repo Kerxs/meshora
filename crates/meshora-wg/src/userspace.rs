@@ -406,7 +406,7 @@ mod tests {
         tokio::spawn(meshora_relay::serve(
             meshora_relay::Config {
                 secret: relay_secret,
-                nodes: vec![a.key, b.key],
+                allow: meshora_relay::allow_list(vec![a.key, b.key]),
             },
             listener,
         ));

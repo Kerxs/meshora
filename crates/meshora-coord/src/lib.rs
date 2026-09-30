@@ -4,17 +4,35 @@
 //! 被攻陷的后果见[威胁模型](https://kerxs.github.io/meshora/guide/threat-model#恶意或被攻陷的控制面)。
 //! 它可以自建。
 //!
-//! M1 的取舍：
+//! 取舍：
 //!
-//! - **节点名单就是白名单**，写在配置里。overlay 地址按名单顺序分配：第 n 个节点拿网段里
-//!   第 n 个地址。名单顺序不变，协调服务重启后地址也不变，不需要持久化
+//! - **成员有两种来源**。一是配置里的名单（`--node`），overlay 地址按名单顺序分配：第 n 个节点拿网段里
+//!   第 n 个地址，名单顺序不变地址就不变。二是**凭邀请码加入**的：节点在 Hello 里带上邀请码，
+//!   核对无误就分给它最小的空闲地址，写进状态文件（[`Config::state`]），重启后地址不变。
+//!   邀请码也存在状态文件里，第一次启动时生成。见[状态文件](#状态文件)
+//! - **只能加人，不能在运行时踢人**：要移出一个成员，从状态文件里删掉它那一行、换掉邀请码、重启
 //! - **NetMap 是整个名单**（声明式），带上每个节点最近上报的端点。节点的控制连接断了，
 //!   它仍然在网里 —— 控制面抖一下，不该把已经通了的数据面也拆掉
 //! - **收到第一条加密消息（Hello）之前不做任何有副作用的事**：IK 的首个握手包可以被重放（R1）
+//!
+//! # 状态文件
+//!
+//! 纯文本，一行一项，`#` 开头的是注释。人可以直接改（改完重启）：
+//!
+//! ```text
+//! invite 3q2-7wEYkQ6n0Cf8Hs5VYA
+//! member mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY= 100.64.0.3
+//! ```
+//!
+//! - `invite`：邀请码。删掉这一行再启动，会生成一个新的 —— 旧的网络码随之失效，
+//!   已经加入的成员不受影响
+//! - `member`：凭邀请码加入的成员和它的地址。删掉一行，这个成员就不在网里了
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -24,7 +42,7 @@ use meshora_proto::admission::Admission;
 use meshora_proto::control::{ClientMessage, PeerInfo, RelayInfo, ServerMessage};
 use meshora_proto::disco::{self, DiscoMessage};
 use meshora_proto::noise::{Channel, NoiseStream};
-use meshora_types::{NodeKey, NodeSecret};
+use meshora_types::{Invite, NodeKey, NodeSecret};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{Notify, mpsc};
 use tracing::{debug, info, warn};
@@ -51,13 +69,18 @@ const QUEUE: usize = 64;
 const NET_MAP_INTERVAL: Duration = Duration::from_secs(1);
 /// 探测端点每秒最多回应多少条。
 const PROBE_RATE: u32 = 200;
+/// 网里最多多少个成员（名单里的加上凭邀请码加入的）。NetMap 要发给每个人，
+/// 成员数没有上限的话，一份邀请码泄漏出去就能把协调服务拖垮
+pub const MAX_MEMBERS: usize = 1024;
 
 /// 协调服务的配置。
 pub struct Config {
     /// 协调服务自己的身份。节点事先知道它的公钥，靠它认证协调服务。
     pub secret: NodeSecret,
-    /// 允许加入的节点。overlay 地址按这个顺序分配。
+    /// 名单里的节点。overlay 地址按这个顺序分配。
     pub nodes: Vec<NodeKey>,
+    /// 状态文件：邀请码和凭它加入的成员存在这里。`None` 表示不接受邀请加入，只认名单。
+    pub state: Option<PathBuf>,
     /// overlay 网段，比如 `100.64.0.0/10`。
     pub overlay: Ipv4Net,
     /// 告诉节点的端点探测地址：本服务的探测 socket 在公网上的地址。
@@ -76,16 +99,37 @@ struct Conn {
     net_map: Arc<Notify>,
 }
 
-#[derive(Default)]
+/// 一个成员
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Member {
+    key: NodeKey,
+    ip: Ipv4Addr,
+    /// 凭邀请码加入的（存在状态文件里），不是名单里的
+    joined: bool,
+}
+
 struct State {
+    /// 所有成员，同时是地址表
+    members: Vec<Member>,
     online: HashMap<NodeKey, Conn>,
     endpoints: HashMap<NodeKey, Vec<SocketAddr>>,
 }
 
+impl State {
+    fn address_of(&self, key: &NodeKey) -> Option<Ipv4Addr> {
+        self.members
+            .iter()
+            .find(|member| member.key == *key)
+            .map(|member| member.ip)
+    }
+}
+
 struct Shared {
     secret: NodeSecret,
-    /// 白名单，同时是地址表。顺序就是分配顺序
-    members: Vec<(NodeKey, Ipv4Addr)>,
+    /// 邀请码。`None` 表示不接受邀请加入
+    invite: Option<Invite>,
+    /// 状态文件，有邀请码时才有
+    state_file: Option<PathBuf>,
     overlay: Ipv4Net,
     probe: Option<SocketAddr>,
     relays: Vec<RelayInfo>,
@@ -99,30 +143,66 @@ impl Shared {
         self.state.lock().expect("协调服务的状态在持锁时 panic 过")
     }
 
-    fn address_of(&self, key: &NodeKey) -> Option<Ipv4Addr> {
-        self.members
-            .iter()
-            .find(|(member, _)| member == key)
-            .map(|(_, ip)| *ip)
-    }
-
     fn is_member(&self, key: &NodeKey) -> bool {
-        self.address_of(key).is_some()
+        self.state().address_of(key).is_some()
     }
 
     /// 发给 `recipient` 的 NetMap：除它自己以外的所有成员
     fn net_map_for(&self, state: &State, recipient: &NodeKey) -> ServerMessage {
-        let peers = self
+        let peers = state
             .members
             .iter()
-            .filter(|(key, _)| key != recipient)
-            .map(|(key, ip)| PeerInfo {
-                key: *key,
-                overlay_ip: *ip,
-                endpoints: state.endpoints.get(key).cloned().unwrap_or_default(),
+            .filter(|member| member.key != *recipient)
+            .map(|member| PeerInfo {
+                key: member.key,
+                overlay_ip: member.ip,
+                endpoints: state
+                    .endpoints
+                    .get(&member.key)
+                    .cloned()
+                    .unwrap_or_default(),
             })
             .collect();
         ServerMessage::NetMap { peers }
+    }
+
+    /// 刚发来 Hello 的节点能不能进：在网里的直接进；不在的核对邀请码，对了就加进来。
+    /// 不能进时返回给它看的原因
+    fn admit(&self, key: &NodeKey, invite: Option<Invite>) -> Result<Ipv4Addr, String> {
+        let mut state = self.state();
+        if let Some(ip) = state.address_of(key) {
+            return Ok(ip);
+        }
+        let (ours, theirs) = match (&self.invite, invite) {
+            (Some(ours), Some(theirs)) => (ours, theirs),
+            (None, Some(_)) => return Err("这个网络不接受凭邀请码加入".into()),
+            (_, None) => return Err("这把公钥不在协调服务的节点名单里".into()),
+        };
+        if !ours.matches(&theirs) {
+            return Err("邀请码不对，可能已经换过了：向建网络的人要一个新的网络码".into());
+        }
+        if state.members.len() >= MAX_MEMBERS {
+            return Err(format!("网络已满（最多 {MAX_MEMBERS} 个成员）"));
+        }
+        let ip = free_address(&state.members, self.overlay)
+            .ok_or_else(|| format!("overlay 网段 {} 没有空闲地址了", self.overlay))?;
+        state.members.push(Member {
+            key: *key,
+            ip,
+            joined: true,
+        });
+        // 先写进文件再算加入：否则重启之后这个地址可能分给别人
+        if let Some(path) = &self.state_file
+            && let Err(err) = save_state(path, ours, &state.members)
+        {
+            state.members.pop();
+            warn!(%err, path = %path.display(), "写状态文件失败，拒绝新成员");
+            return Err("协调服务存不下新成员，请联系建网络的人".into());
+        }
+        info!(node = %key, %ip, "新成员凭邀请码加入");
+        // 其他人的 NetMap 里要多出这个新成员
+        self.broadcast_net_maps(&state, Some(key));
+        Ok(ip)
     }
 
     /// 网里有变化：通知每个在线节点的连接，发一份新的 NetMap
@@ -140,6 +220,13 @@ impl Shared {
 fn usable_endpoint(addr: &SocketAddr) -> bool {
     let broadcast = matches!(addr.ip(), IpAddr::V4(ip) if ip.is_broadcast());
     addr.port() != 0 && !addr.ip().is_unspecified() && !addr.ip().is_multicast() && !broadcast
+}
+
+/// 网段里最小的、还没分出去的地址
+fn free_address(members: &[Member], overlay: Ipv4Net) -> Option<Ipv4Addr> {
+    overlay
+        .hosts()
+        .find(|ip| !members.iter().any(|member| member.ip == *ip))
 }
 
 /// 按名单分配地址：第 n 个节点拿网段里第 n 个可用地址（从 .1 开始）
@@ -162,28 +249,188 @@ fn assign(nodes: &[NodeKey], overlay: Ipv4Net) -> io::Result<Vec<(NodeKey, Ipv4A
     Ok(members)
 }
 
-/// 运行协调服务，直到监听的 socket 出错。
-///
-/// `probe` 是端点探测用的 UDP socket；`config.probe` 是它在公网上的地址（告诉节点往哪发）。
+fn invalid_data(path: &Path, line: usize, what: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("状态文件 {} 第 {line} 行：{what}", path.display()),
+    )
+}
+
+/// 状态文件里的东西
+#[derive(Default)]
+struct Stored {
+    invite: Option<Invite>,
+    joined: Vec<(NodeKey, Ipv4Addr)>,
+}
+
+/// 读状态文件：邀请码和凭它加入的成员。文件不在就是还没有
+fn load_state(path: &Path) -> io::Result<Stored> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Stored::default()),
+        Err(err) => return Err(err),
+    };
+    let mut invite = None;
+    let mut joined = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line_no = index + 1;
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            ["invite", code] => {
+                invite = Some(
+                    code.parse()
+                        .map_err(|_| invalid_data(path, line_no, "邀请码格式不对"))?,
+                );
+            }
+            ["member", key, ip] => joined.push((
+                key.parse()
+                    .map_err(|_| invalid_data(path, line_no, "公钥格式不对"))?,
+                ip.parse()
+                    .map_err(|_| invalid_data(path, line_no, "地址格式不对"))?,
+            )),
+            _ => return Err(invalid_data(path, line_no, "认不出这一行")),
+        }
+    }
+    Ok(Stored { invite, joined })
+}
+
+/// 整个重写状态文件：先写临时文件再改名，写到一半断电也不会留下半个文件
+fn save_state(path: &Path, invite: &Invite, members: &[Member]) -> io::Result<()> {
+    let mut text = String::from("# Meshora 协调服务的状态文件。可以手改，改完重启协调服务。\n");
+    text.push_str(
+        "# invite：邀请码，拿到它的人都能加入。删掉这一行再启动会换一个新的，旧的网络码随之失效\n",
+    );
+    let _ = writeln!(text, "invite {invite}");
+    text.push_str("# member：凭邀请码加入的成员（公钥 地址）。删掉一行，这个成员就不在网里了\n");
+    for member in members.iter().filter(|member| member.joined) {
+        let _ = writeln!(text, "member {} {}", member.key, member.ip);
+    }
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let temp = path.with_extension("tmp");
+    std::fs::write(&temp, text)?;
+    std::fs::rename(&temp, path)
+}
+
+/// 一个准备好的协调服务：成员表、邀请码都已经就位，还没开始接受连接。
+pub struct Coordinator {
+    shared: Arc<Shared>,
+}
+
+impl Coordinator {
+    /// 按配置建好成员表。有状态文件时读它；里面还没有邀请码就生成一个写回去。
+    pub fn new(config: Config) -> io::Result<Self> {
+        let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
+        let mut members: Vec<Member> = assign(&config.nodes, config.overlay)?
+            .into_iter()
+            .map(|(key, ip)| Member {
+                key,
+                ip,
+                joined: false,
+            })
+            .collect();
+
+        let mut invite = None;
+        if let Some(path) = &config.state {
+            let stored = load_state(path)?;
+            for (key, ip) in stored.joined {
+                if members.iter().any(|member| member.key == key) {
+                    // 后来又写进了名单：以名单为准，这一条下次存的时候自然消失
+                    continue;
+                }
+                if !config.overlay.contains(&ip) {
+                    return Err(invalid(format!(
+                        "状态文件里 {key} 的地址 {ip} 不在 overlay 网段 {} 里",
+                        config.overlay
+                    )));
+                }
+                if let Some(other) = members.iter().find(|member| member.ip == ip) {
+                    return Err(invalid(format!(
+                        "状态文件里 {key} 的地址 {ip} 已经分给了 {}（名单加长之后撞上了）。\
+                         把名单里的这个节点挪到最后，或者从状态文件里删掉那一行",
+                        other.key
+                    )));
+                }
+                members.push(Member {
+                    key,
+                    ip,
+                    joined: true,
+                });
+            }
+            let invite = *invite.insert(stored.invite.unwrap_or_else(Invite::generate));
+            // 写回去：新生成的邀请码要存下来；已经写进名单的成员也顺带从文件里去掉
+            save_state(path, &invite, &members)?;
+        }
+        if members.is_empty() && invite.is_none() {
+            return Err(invalid(
+                "既没有名单也没有状态文件：谁都加入不了".to_string(),
+            ));
+        }
+        if members.len() > MAX_MEMBERS {
+            return Err(invalid(format!("成员超过了上限 {MAX_MEMBERS}")));
+        }
+
+        Ok(Self {
+            shared: Arc::new(Shared {
+                secret: config.secret,
+                invite,
+                state_file: config.state,
+                overlay: config.overlay,
+                probe: config.probe,
+                relays: config.relays,
+                state: Mutex::new(State {
+                    members,
+                    online: HashMap::new(),
+                    endpoints: HashMap::new(),
+                }),
+                next_conn: AtomicU64::new(0),
+                admission: Admission::new(PENDING_PER_SOURCE),
+            }),
+        })
+    }
+
+    /// 邀请码。没有状态文件时是 `None`：不接受邀请加入。
+    pub fn invite(&self) -> Option<Invite> {
+        self.shared.invite
+    }
+
+    /// 判断一把公钥是不是成员。同一个进程里的中继用它：凭邀请码新加入的成员也马上能用中继。
+    pub fn members(&self) -> Arc<dyn Fn(&NodeKey) -> bool + Send + Sync> {
+        let shared = Arc::clone(&self.shared);
+        Arc::new(move |key| shared.is_member(key))
+    }
+
+    /// 运行，直到监听的 socket 出错。
+    ///
+    /// `probe` 是端点探测用的 UDP socket；[`Config::probe`] 是它在公网上的地址（告诉节点往哪发）。
+    pub async fn serve(self, listener: TcpListener, probe: Option<UdpSocket>) -> io::Result<()> {
+        run(self.shared, listener, probe).await
+    }
+}
+
+/// 按配置建好协调服务并运行，直到监听的 socket 出错。见 [`Coordinator`]。
 pub async fn serve(
     config: Config,
     listener: TcpListener,
     probe: Option<UdpSocket>,
 ) -> io::Result<()> {
-    let members = assign(&config.nodes, config.overlay)?;
-    let shared = Arc::new(Shared {
-        secret: config.secret,
-        members,
-        overlay: config.overlay,
-        probe: config.probe,
-        relays: config.relays,
-        state: Mutex::new(State::default()),
-        next_conn: AtomicU64::new(0),
-        admission: Admission::new(PENDING_PER_SOURCE),
-    });
+    Coordinator::new(config)?.serve(listener, probe).await
+}
+
+async fn run(
+    shared: Arc<Shared>,
+    listener: TcpListener,
+    probe: Option<UdpSocket>,
+) -> io::Result<()> {
     info!(
         key = %shared.secret.public_key(),
-        nodes = shared.members.len(),
+        nodes = shared.state().members.len(),
+        invite = shared.invite.is_some(),
         "协调服务启动"
     );
 
@@ -242,17 +489,19 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
                 return;
             }
         };
-    if hello != Ok(ClientMessage::Hello) {
+    let Ok(ClientMessage::Hello { invite }) = hello else {
         debug!(%from, node = %key, "握手后第一条不是 Hello");
         return;
-    }
-    let Some(overlay_ip) = shared.address_of(&key) else {
-        info!(%from, node = %key, "拒绝不在名单里的节点");
-        let reason = "这把公钥不在协调服务的节点名单里".to_string();
-        let _ = writer
-            .send(&ServerMessage::Rejected { reason }.encode())
-            .await;
-        return;
+    };
+    let overlay_ip = match shared.admit(&key, invite) {
+        Ok(ip) => ip,
+        Err(reason) => {
+            info!(%from, node = %key, %reason, "拒绝节点");
+            let _ = writer
+                .send(&ServerMessage::Rejected { reason }.encode())
+                .await;
+            return;
+        }
     };
 
     drop(pending);
@@ -343,7 +592,7 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
             Ok(ClientMessage::Ping) => {
                 let _ = tx.try_send(ServerMessage::Pong);
             }
-            Ok(ClientMessage::Hello) => {}
+            Ok(ClientMessage::Hello { .. }) => {}
             Err(err) => {
                 debug!(node = %key, %err, "消息解不开，断开");
                 break;

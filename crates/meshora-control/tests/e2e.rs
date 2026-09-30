@@ -31,6 +31,7 @@ async fn start_coord(nodes: &[&NodeSecret], relays: Vec<RelayInfo>) -> Coord {
     let config = meshora_coord::Config {
         secret,
         nodes: nodes.iter().map(|n| n.public_key()).collect(),
+        state: None,
         overlay: "100.64.0.0/10".parse().unwrap(),
         probe: Some(probe.local_addr().unwrap()),
         relays,
@@ -46,7 +47,7 @@ async fn start_relay(nodes: &[&NodeSecret]) -> RelayInfo {
     let addr = listener.local_addr().unwrap();
     let config = meshora_relay::Config {
         secret,
-        nodes: nodes.iter().map(|n| n.public_key()).collect(),
+        allow: meshora_relay::allow_list(nodes.iter().map(|n| n.public_key()).collect()),
     };
     tokio::spawn(meshora_relay::serve(config, listener));
     RelayInfo { key, addr }
@@ -65,6 +66,7 @@ fn config(secret: &NodeSecret, coord: &Coord, local_port: u16) -> Config {
         secret: secret.clone(),
         coord: coord.addr,
         coord_key: coord.key,
+        invite: None,
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: false,

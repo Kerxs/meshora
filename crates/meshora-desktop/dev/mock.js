@@ -1,12 +1,12 @@
 // 在普通浏览器里看界面用的假后端：不需要管理员权限、不建网卡。
 // 用法：在 crates/meshora-desktop 下起一个静态服务器，打开 dev/index.html?s=<场景>
-// 场景：join、saved、connecting、connected、empty、rejected、tun、unreachable
+// 场景：join、saved、connecting、connected、empty、rejected、invite、tun、unreachable
 "use strict";
 
 (() => {
   const scenario = new URLSearchParams(location.search).get("s") || "join";
   const id = "mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY=";
-  const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443";
+  const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443#3q2-7wEYkQ6n0Cf8Hs5VYA";
   const peers = [
     { id: "Kx81ZrT0pQv3Yb7Nc2Lw5Df8Gh1Jk4Ms6Aa9Ee0Ii2U=", ip: "100.64.0.1", route: "direct", rttMs: 14, online: true, rx: 18_734_112, tx: 9_201_554 },
     { id: "Pm42VcX9sB1nQ7rT3yH5jK8lZ0wE2dF4gA6uI9oO1eU=", ip: "100.64.0.2", route: "relay", rttMs: null, online: true, rx: 2_048_331, tx: 1_530_227 },
@@ -35,6 +35,11 @@
       network: code,
       phase: "failed",
       error: { kind: "rejected", message: "注册失败：协调服务拒绝了本机：不在名单里" },
+    },
+    invite: {
+      network: code,
+      phase: "failed",
+      error: { kind: "rejected", message: "注册失败：协调服务拒绝了本机：邀请码不对，可能已经换过了：向建网络的人要一个新的网络码" },
     },
     tun: {
       network: code,

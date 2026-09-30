@@ -30,7 +30,7 @@ use meshora_proto::codec::DecodeError;
 use meshora_proto::control::{ClientMessage, PeerInfo, RelayInfo, ServerMessage};
 use meshora_proto::disco::{self, DiscoMessage, TxId};
 use meshora_proto::noise::{Channel, NoiseError, NoiseStream, NoiseWriter};
-use meshora_types::{NodeKey, NodeSecret, Path};
+use meshora_types::{Invite, NodeKey, NodeSecret, Path};
 use rand_core::{OsRng, RngCore};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
@@ -70,6 +70,8 @@ pub struct Config {
     pub coord: SocketAddr,
     /// 协调服务的公钥。事先知道它，才能认证协调服务（IK 的 K）。
     pub coord_key: NodeKey,
+    /// 邀请码：本机还不在网里时，凭它加入。已经在网里的话带不带都一样。
+    pub invite: Option<Invite>,
     /// 数据面 socket 的本地端口，用来拼出本机的局域网端点。
     pub local_port: u16,
     /// 给每个 peer 的 persistent keepalive，NAT 后面的节点靠它维持映射。
@@ -276,7 +278,10 @@ async fn connect_once(config: &Config) -> Result<(Welcome, Connection), ControlE
     .await
     .map_err(timeout("和协调服务握手"))??;
     let (mut reader, mut writer) = stream.into_split();
-    writer.send(&ClientMessage::Hello.encode()).await?;
+    let hello = ClientMessage::Hello {
+        invite: config.invite,
+    };
+    writer.send(&hello.encode()).await?;
 
     let first = tokio::time::timeout(CONNECT_TIMEOUT, reader.recv())
         .await
