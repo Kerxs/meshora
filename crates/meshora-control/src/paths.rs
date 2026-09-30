@@ -341,6 +341,10 @@ impl PeerPaths {
             _ => None,
         };
         match (current, current_score, best) {
+            // 正在走中继、有了通着的直连，而中继又没有明显更好（best 已经这样比过了）：
+            // 回到直连。这里不能再要求直连"明显更好" —— 两条路都很快时（比如直连 0.1ms、
+            // 中继 0.5ms），直连永远好不出那么多，一旦落到中继就再也回不来
+            (Some(Path::Relay { .. }), _, Some((path @ Path::Direct(_), _))) => Some(path),
             // 当前的路还通：别的路明显更好才换
             (Some(current), Some(ours), Some((path, score))) => {
                 if path != current && better(score, ours) {
@@ -644,8 +648,27 @@ mod tests {
             paths.choose(None, relay(), now),
             Some(Path::Direct(addr(1)))
         );
-        // 已经在走中继、直连也只是差不多：不来回跳
-        assert_eq!(paths.choose(relay(), relay(), now), relay());
+        // 正在走中继（比如直连刚恢复）：中继没有明显更好，就回到直连
+        assert_eq!(
+            paths.choose(relay(), relay(), now),
+            Some(Path::Direct(addr(1)))
+        );
+    }
+
+    #[test]
+    fn comes_back_to_direct_when_both_paths_are_fast() {
+        // e2e 里撞出来的：直连 0.1ms、中继 0.5ms，落到中继后要能回到直连
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        for _ in 0..30 {
+            paths.on_pong(addr(1), Duration::from_micros(100), now);
+        }
+        measure_relay(&mut paths, Duration::from_micros(500), now);
+        assert_eq!(
+            paths.choose(relay(), relay(), now),
+            Some(Path::Direct(addr(1)))
+        );
     }
 
     #[test]
