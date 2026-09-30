@@ -7,7 +7,8 @@
 //! - 通不通：[`FRESH`] 之内收到过 Pong，而且没有连着 [`MAX_MISSES`] 次在 [`PONG_WAIT`] 内没回应。
 //!   正在用的直连断了，大约两三秒就能发现、回落中继
 //! - 延迟看两样：平滑后的往返时间和抖动（算法同 TCP 估算重传超时，RFC 6298）。
-//!   打分是"往返时间 + 4 × 抖动"：对联机游戏，忽快忽慢比稳定地慢一点更难受
+//!   打分是"往返时间 + 4 × 抖动 + 丢包罚分"：对联机游戏，忽快忽慢、时不时丢包，
+//!   都比稳定地慢一点更难受。丢包率是探测的丢失比例，平滑过；每 1% 记 [`LOSS_PENALTY_PER_PERCENT`]
 //! - 选路：当前的直连还通，只有别的直连分数**明显**更好才换（免得在两条差不多的路之间来回跳）；
 //!   当前的不通了就挑分数最好的；一条都不通就走中继
 //! - 本机换了网络，所有直连一律作废：先走中继，重新探测，通了再切回来
@@ -39,6 +40,10 @@ pub const LEARNED_TTL: Duration = Duration::from_secs(60);
 /// 要是每学到一个就在 [`LEARNED_TTL`] 里一直探测，一个重放的报文就能换来我们向任意地址
 /// 发二十来个探测报文。真的对端会每一轮都再发 Ping 过来，学到的时刻随之刷新，不受影响
 pub const UNVERIFIED_TTL: Duration = Duration::from_secs(5);
+/// 丢包率每 1%，分数加这么多。丢 10% 的路相当于慢了 50ms：游戏里丢一个包就是一次瞬移或者卡顿。
+pub const LOSS_PENALTY_PER_PERCENT: Duration = Duration::from_millis(5);
+/// 丢包率的平滑：每次探测的结果（丢或没丢）占这么多分之一
+const LOSS_SMOOTHING: u32 = 8;
 /// 当前的直连还通时，别的直连的分数要比它好这么多才换过去……
 const SWITCH_MARGIN: Duration = Duration::from_millis(10);
 /// ……而且至少好这么多分之一（当前分数的 1/4）。两个条件都要满足
@@ -60,6 +65,8 @@ struct Candidate {
     srtt: Option<Duration>,
     /// 往返时间的平均偏差，也就是抖动
     rttvar: Duration,
+    /// 平滑后的丢包率，万分之几（0 到 10000）
+    loss: u32,
 }
 
 impl Candidate {
@@ -81,9 +88,16 @@ impl Candidate {
             .is_some_and(|learned| now.duration_since(learned) < ttl)
     }
 
-    /// 选路用的分数，越小越好：往返时间加上四倍抖动
+    /// 选路用的分数，越小越好：往返时间加上四倍抖动，再加丢包罚分
     fn score(&self) -> Duration {
-        self.srtt.unwrap_or(Duration::MAX / 8) + 4 * self.rttvar
+        let loss = LOSS_PENALTY_PER_PERCENT * self.loss / 100;
+        self.srtt.unwrap_or(Duration::MAX / 8) + 4 * self.rttvar + loss
+    }
+
+    /// 记一次探测的结果：丢了还是回来了
+    fn record_loss(&mut self, lost: bool) {
+        let sample = if lost { 10_000 } else { 0 };
+        self.loss = (self.loss * (LOSS_SMOOTHING - 1) + sample) / LOSS_SMOOTHING;
     }
 
     /// 记一个往返时间样本（RFC 6298 的平滑办法）
@@ -167,6 +181,10 @@ impl PeerPaths {
             {
                 candidate.awaiting = None;
                 candidate.misses = candidate.misses.saturating_add(1);
+                // 只算通过的路：从没回应过的候选丢了不说明什么，它可能根本不存在
+                if candidate.last_pong.is_some() {
+                    candidate.record_loss(true);
+                }
             }
             let working = candidate
                 .last_pong
@@ -197,8 +215,12 @@ impl PeerPaths {
     /// 而能回应我们这次 Ping 的只有持有对方私钥的人。
     pub fn on_pong(&mut self, addr: SocketAddr, rtt: Duration, now: Instant) {
         if let Some(candidate) = self.candidates.get_mut(&addr) {
+            // 还在等的那个 Ping 按时回来了，记一次"没丢"。迟到的 Pong（那次已经记成丢了）
+            // 不再记：一次探测只记一个结果
+            if candidate.awaiting.take().is_some() {
+                candidate.record_loss(false);
+            }
             candidate.last_pong = Some(now);
-            candidate.awaiting = None;
             candidate.misses = 0;
             candidate.sample(rtt);
         }
@@ -207,6 +229,13 @@ impl PeerPaths {
     /// 这个候选平滑后的往返时间。没探测通过为 `None`。
     pub fn rtt(&self, addr: SocketAddr) -> Option<Duration> {
         self.candidates.get(&addr).and_then(|c| c.srtt)
+    }
+
+    /// 这个候选平滑后的丢包率（0.0 到 1.0）。没探测通过为 `None`。
+    pub fn loss(&self, addr: SocketAddr) -> Option<f32> {
+        self.candidates
+            .get(&addr)
+            .and_then(|c| c.srtt.map(|_| c.loss as f32 / 10_000.0))
     }
 
     /// 这个候选往返时间的抖动（平均偏差）。没探测通过为 `None`。
@@ -397,6 +426,62 @@ mod tests {
             paths.choose(None, relay(), now),
             Some(Path::Direct(addr(2)))
         );
+    }
+
+    #[test]
+    fn loss_is_smoothed() {
+        let mut candidate = Candidate::default();
+        for _ in 0..100 {
+            candidate.record_loss(true);
+            candidate.record_loss(false);
+        }
+        let loss = candidate.loss;
+        assert!(
+            (4_000..6_000).contains(&loss),
+            "一半一半应接近 50%，实际万分之 {loss}"
+        );
+        for _ in 0..100 {
+            candidate.record_loss(false);
+        }
+        assert!(candidate.loss < 100, "不再丢包，丢包率降回去");
+    }
+
+    #[test]
+    fn a_lossy_path_loses_to_a_clean_slower_one() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1), addr(2)]);
+        for _ in 0..30 {
+            paths.on_pong(addr(1), 20 * MS, now);
+            paths.on_pong(addr(2), 35 * MS, now);
+        }
+        assert_eq!(
+            paths.choose(None, relay(), now),
+            Some(Path::Direct(addr(1)))
+        );
+        // addr(1) 丢 30% 的包：罚 150ms
+        paths.candidates.get_mut(&addr(1)).unwrap().loss = 3_000;
+        assert_eq!(
+            paths.choose(None, relay(), now),
+            Some(Path::Direct(addr(2)))
+        );
+    }
+
+    #[test]
+    fn a_missed_probe_counts_as_loss_and_a_late_pong_does_not_undo_it() {
+        let now = Instant::now();
+        let mut paths = working(now);
+        assert_eq!(paths.loss(addr(1)), Some(0.0));
+        let active = Some(addr(1));
+        paths.due_pings(now + SEC, active);
+        // 1 秒没回：记一次丢
+        paths.due_pings(now + 2 * SEC, active);
+        let after_miss = paths.loss(addr(1)).unwrap();
+        assert!(after_miss > 0.1, "{after_miss}");
+        // 第一次的 Pong 迟到了，补探的那个还在等：迟到的不算"没丢"，补探的回来才算
+        paths.candidates.get_mut(&addr(1)).unwrap().awaiting = None;
+        paths.on_pong(addr(1), 1200 * MS, now + 2 * SEC + 200 * MS);
+        assert_eq!(paths.loss(addr(1)), Some(after_miss));
     }
 
     #[test]
