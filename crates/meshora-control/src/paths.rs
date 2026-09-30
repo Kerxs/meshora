@@ -8,7 +8,8 @@
 //!   正在用的直连断了，大约两三秒就能发现、回落中继
 //! - 延迟看两样：平滑后的往返时间和抖动（算法同 TCP 估算重传超时，RFC 6298）。
 //!   打分是"往返时间 + 4 × 抖动 + 丢包罚分"：对联机游戏，忽快忽慢、时不时丢包，
-//!   都比稳定地慢一点更难受。丢包率是探测的丢失比例，平滑过；每 1% 记 [`LOSS_PENALTY_PER_PERCENT`]
+//!   都比稳定地慢一点更难受。丢包率是探测的丢失比例，平滑过；每 1% 记 [`LOSS_PENALTY_PER_PERCENT`]。
+//!   只算一条通着的路偶尔丢的：连丢到判定断开的是断线，不算丢包
 //! - 中继那条路也探测（经中继发 Ping），同样记往返时间、抖动、丢包
 //! - 选路：通着的直连和测过的中继放在一起按分数比。中继要**明显**比直连好才选它 ——
 //!   它占着第三方的带宽，而且多绕一段；当前的路还通，别的路也要明显更好才换（免得来回跳）。
@@ -125,12 +126,10 @@ impl Candidate {
         if let Some(sent) = self.awaiting
             && now.duration_since(sent) >= PONG_WAIT
         {
+            // 先不记进丢包率：这次丢失是"偶尔丢一个"还是"整条路断了"，要等下文。
+            // 见 pong()
             self.awaiting = None;
             self.misses = self.misses.saturating_add(1);
-            // 只算通过的路：从没回应过的候选丢了不说明什么，它可能根本不存在
-            if self.last_pong.is_some() {
-                self.record_loss(true);
-            }
         }
         let working = self
             .last_pong
@@ -151,8 +150,15 @@ impl Candidate {
 
     /// 收到了回应
     fn pong(&mut self, rtt: Duration, now: Instant) {
-        // 还在等的那个 Ping 按时回来了，记一次"没丢"。迟到的 Pong（那次已经记成丢了）
-        // 不再记：一次探测只记一个结果
+        // 丢过几次、路又没断（没到 MAX_MISSES）：那几次是偶尔丢包，记进丢包率。
+        // 到了 MAX_MISSES 的是断线，由"通不通"管，不算丢包 —— 不然断了几十秒的直连恢复之后，
+        // 丢包率高得吓人、要一两分钟才降下来，这期间一直输给中继
+        if self.misses < MAX_MISSES {
+            for _ in 0..self.misses {
+                self.record_loss(true);
+            }
+        }
+        // 还在等的那个 Ping 按时回来了，记一次"没丢"。迟到的 Pong 不再记：一次探测只记一个结果
         if self.awaiting.take().is_some() {
             self.record_loss(false);
         }
@@ -555,20 +561,34 @@ mod tests {
     }
 
     #[test]
-    fn a_missed_probe_counts_as_loss_and_a_late_pong_does_not_undo_it() {
+    fn an_occasional_miss_counts_as_loss() {
         let now = Instant::now();
         let mut paths = working(now);
         assert_eq!(paths.loss(addr(1)), Some(0.0));
         let active = Some(addr(1));
         paths.due_pings(now + SEC, active);
-        // 1 秒没回：记一次丢
-        paths.due_pings(now + 2 * SEC, active);
-        let after_miss = paths.loss(addr(1)).unwrap();
-        assert!(after_miss > 0.1, "{after_miss}");
-        // 第一次的 Pong 迟到了，补探的那个还在等：迟到的不算"没丢"，补探的回来才算
-        paths.candidates.get_mut(&addr(1)).unwrap().awaiting = None;
-        paths.on_pong(addr(1), 1200 * MS, now + 2 * SEC + 200 * MS);
-        assert_eq!(paths.loss(addr(1)), Some(after_miss));
+        // 1 秒没回：丢了一次，补探
+        assert_eq!(paths.due_pings(now + 2 * SEC, active), [addr(1)]);
+        // 补探的回来了：那一次算偶尔丢包
+        paths.on_pong(addr(1), 20 * MS, now + 2 * SEC + 20 * MS);
+        let loss = paths.loss(addr(1)).unwrap();
+        assert!(loss > 0.05, "{loss}");
+    }
+
+    #[test]
+    fn an_outage_is_not_counted_as_loss() {
+        // e2e 里撞出来的：直连断了几十秒，恢复后丢包率要是记着那几十秒，就一直输给中继
+        let now = Instant::now();
+        let mut paths = working(now);
+        let active = Some(addr(1));
+        for second in 1..30 {
+            paths.due_pings(now + second * SEC, active);
+        }
+        assert!(!paths.has_fresh(now + 30 * SEC), "断了");
+        paths.due_pings(now + 30 * SEC, active);
+        paths.on_pong(addr(1), 20 * MS, now + 30 * SEC + 20 * MS);
+        assert_eq!(paths.loss(addr(1)), Some(0.0), "恢复了，丢包率还是干净的");
+        assert!(paths.has_fresh(now + 30 * SEC + 20 * MS));
     }
 
     #[test]
