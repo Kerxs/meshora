@@ -535,10 +535,15 @@ async fn run(
     listener: TcpListener,
     probe: Option<UdpSocket>,
 ) -> io::Result<()> {
+    // 先取出来再打日志：同一条语句里两次 state() 会在同一个线程上重复加锁，卡死
+    let (nodes, invite) = {
+        let state = shared.state();
+        (state.members.len(), state.invite.is_some())
+    };
     info!(
         key = %shared.secret.public_key(),
-        nodes = shared.state().members.len(),
-        invite = shared.state().invite.is_some(),
+        nodes,
+        invite,
         "协调服务启动"
     );
 
@@ -738,13 +743,18 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     info!(node = %key, "节点下线");
 }
 
-/// 状态文件的样子：修改时间和大小。文件不在是 `None`
-type Stamp = (Option<std::time::SystemTime>, u64);
+/// 状态文件的样子：内容的哈希。文件不在是 `None`
+///
+/// 不用修改时间：Windows 上文件时间的精度可能只有十几毫秒，紧挨着的两次写、长度又一样
+/// （比如换了个邀请码），修改时间可能根本不变。文件很小，每轮读一遍不算什么
+type Stamp = u64;
 
 fn file_stamp(path: &Path) -> Option<Stamp> {
-    std::fs::metadata(path)
-        .ok()
-        .map(|meta| (meta.modified().ok(), meta.len()))
+    use std::hash::{Hash, Hasher};
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 /// 盯着状态文件：和上次读写之后的样子不一样了，就重新读
