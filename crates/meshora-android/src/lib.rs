@@ -13,6 +13,7 @@ mod logcat;
 
 use meshora_desktop::controller::{AdminAction, Controller, CreateAt, Overview};
 use meshora_desktop::logs::LogBuffer;
+use meshora_desktop::update::UpdateView;
 use tauri::{Manager, State};
 
 #[tauri::command]
@@ -82,6 +83,28 @@ fn set_name(controller: State<'_, Controller>, name: String) -> String {
 #[tauri::command]
 fn logs(controller: State<'_, Controller>) -> Vec<String> {
     controller.logs()
+}
+
+#[tauri::command]
+async fn check_update(controller: State<'_, Controller>) -> Result<UpdateView, String> {
+    Ok(controller.check_update().await)
+}
+
+#[tauri::command]
+fn set_check_updates(controller: State<'_, Controller>, on: bool) {
+    controller.set_check_updates(on);
+}
+
+/// 安卓上 App 不能自己装别的 APK：把下载地址交给浏览器，下载完由系统安装器装
+#[tauri::command]
+async fn apply_update(
+    controller: State<'_, Controller>,
+    vpn: State<'_, tauri_plugin_meshora_vpn::Vpn<tauri::Wry>>,
+) -> Result<(), String> {
+    match controller.apply_update().await? {
+        Some(url) => vpn.open_url(&url),
+        None => Ok(()),
+    }
 }
 
 /// 安卓上的虚拟网卡：先要 VPN 权限，再请 VpnService 建，描述符交给数据面
@@ -161,7 +184,10 @@ pub fn run() {
             set_onboarded,
             add_server,
             remove_server,
-            logs
+            logs,
+            check_update,
+            set_check_updates,
+            apply_update
         ])
         .run(tauri::generate_context!())
         .expect("Meshora 启动失败");

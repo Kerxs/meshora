@@ -127,9 +127,6 @@ jobs:
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      # 打包工具的版本钉死：它会被拿来执行，供应链的账要算清
-      TAURI_CLI: "@tauri-apps/cli@2.12.0"
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install --no-self-update && rustup target add aarch64-linux-android x86_64-linux-android
@@ -140,9 +137,12 @@ jobs:
         run: |
           export JAVA_HOME="$JAVA_HOME_17_X64"
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          npx --yes "$TAURI_CLI" android init --ci
-          npx --yes "$TAURI_CLI" icon ../meshora-desktop/icons/icon.png
-          npx --yes "$TAURI_CLI" android build --ci --apk --target aarch64 --target x86_64
+          # 打包工具的版本钉在 package-lock.json 里：它会被拿来执行，供应链的账要算清。
+          # Gradle 编 Rust 时还会回调 npm run tauri，所以得是装在这里的，不能用 npx 临时拉
+          npm ci --no-audit --no-fund
+          npm run tauri -- android init --ci
+          npm run tauri -- icon ../meshora-desktop/icons/icon.png
+          npm run tauri -- android build --ci --apk --target aarch64 --target x86_64
           find gen/android/app/build/outputs -name '*.apk' -exec ls -la {} \;
 
       # 签名。安卓只让同一把钥匙签的新版本覆盖安装：发版用仓库里存着的那把（ANDROID_KEYSTORE），
@@ -230,6 +230,40 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # 客户端的自动更新读它（crates/meshora-desktop/src/update.rs）。每个平台签一段
+      # "meshora-update\n平台\n版本\nSHA-256"：私钥只在仓库的 Secret 里，公钥写在客户端里
+      - name: 更新清单
+        working-directory: dist
+        env:
+          KEY: ${{ secrets.MESHORA_UPDATE_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z $KEY ]]; then
+            echo "仓库里没有 MESHORA_UPDATE_KEY：发出去的版本没法被客户端自动更新" >&2
+            exit 1
+          fi
+          version=${TAG#v}
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/update-key.pem"
+          entry() {
+            local platform=$1 file=$2 sha sig
+            sha=$(sha256sum "$file" | cut -d' ' -f1)
+            printf 'meshora-update\n%s\n%s\n%s' "$platform" "$version" "$sha" > "$RUNNER_TEMP/message"
+            sig=$(openssl pkeyutl -sign -inkey "$RUNNER_TEMP/update-key.pem" -rawin -in "$RUNNER_TEMP/message" | base64 -w0)
+            jq -n --arg url "$base/$file" --arg sha256 "$sha" --arg signature "$sig" \
+              '{url: $url, sha256: $sha256, signature: $signature}'
+          }
+          windows=$(ls Meshora-*-setup.exe)
+          android=$(ls Meshora-*-android.apk)
+          jq -n --arg version "$version" \
+            --arg notes "Meshora $version：见 https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --argjson windows "$(entry windows "$windows")" \
+            --argjson android "$(entry android "$android")" \
+            '{version: $version, notes: $notes, windows: $windows, android: $android}' > latest.json
+          rm -f "$RUNNER_TEMP/update-key.pem" "$RUNNER_TEMP/message"
+          cat latest.json
+
       - name: 哈希
         working-directory: dist
         run: sha256sum -- * | tee SHA256SUMS.txt
@@ -252,6 +286,16 @@ jobs:
           - 没有免安装版，理由见[威胁模型](https://kerxs.github.io/meshora/guide/threat-model)
 
           用法见[桌面客户端](https://kerxs.github.io/meshora/guide/desktop)。
+
+          ## 玩家：安卓客户端
+
+          `Meshora-*-android.apk`：和桌面端同一个界面，靠系统的 VPN 功能组网（只接管网里的地址，上网不受影响）。
+          第一次连接时系统会问"是否允许 Meshora 设置 VPN 连接"。还没在真的手机上试过。
+
+          ## 自动更新
+
+          客户端每 6 小时查一次 `latest.json`（设置里可以关）。新版本的安装包有 Ed25519 签名，核对过才装：
+          Windows 上点一下就装好、自动重新打开；安卓上交给浏览器下载，系统安装器会核对 APK 的签名。
 
           ## 自己架服务器：Linux 服务端
 

@@ -34,6 +34,8 @@ pub struct Settings {
     pub official_server: Option<String>,
     /// 现在的网络是本机当主机建的：连之前先把本机的协调服务、中继起起来。
     pub hosting: bool,
+    /// 自动查有没有新版本（向 GitHub 要更新清单）。
+    pub check_updates: bool,
 }
 
 /// 这台电脑的名字，取不到是空串。安卓上没有计算机名可取，叫"我的手机"
@@ -62,6 +64,7 @@ impl Default for Settings {
             servers: Vec::new(),
             official_server: None,
             hosting: false,
+            check_updates: true,
         }
     }
 }
@@ -201,6 +204,7 @@ pub(crate) mod tests {
             servers: vec!["key@play.example.com:7443".into()],
             official_server: None,
             hosting: true,
+            check_updates: false,
         };
         store.save_settings(&settings).unwrap();
         assert_eq!(store.load_settings(), settings);

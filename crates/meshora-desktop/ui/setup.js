@@ -193,6 +193,13 @@ async function installed(launch) {
   );
 }
 
+// ---------- 更新（客户端发起，带 --update）----------
+
+/** 不用点：直接装，桌面快捷方式照旧，装完把 Meshora 打开 */
+function updatePage(info) {
+  work(`正在更新到 ${info.version}`, "install", { desktop: null }, () => installed(true));
+}
+
 // ---------- 卸 ----------
 
 function uninstallPage(info) {
@@ -226,6 +233,7 @@ async function start() {
   await tauri().event.listen("progress", (event) => progress.set(event.payload));
   const info = await invoke("info");
   if (info.mode === "uninstall") uninstallPage(info);
+  else if (info.mode === "update") updatePage(info);
   else installPage(info);
 }
 

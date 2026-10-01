@@ -242,10 +242,11 @@ const pass = {
     this.navKey = "";
 
     this.leave = h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("disconnect") }, "断开");
+    this.updateChip = h("button", { class: "update-chip", type: "button", hidden: true, onclick: () => applyUpdate(state.overview.update.version) });
     this.el = h(
       "aside",
       { class: "pass", glass: "tinted", "glass-tint": "#1b2a66", "glass-corner-radius": "26" },
-      h("div", { class: "brand" }, LOGO(), "Meshora", this.state),
+      h("div", { class: "brand" }, LOGO(), "Meshora", this.updateChip, this.state),
       this.online,
       this.offline,
       this.net,
@@ -273,6 +274,11 @@ const pass = {
     this.coord.textContent = connected ? `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}` : ov.phase === "connecting" ? "正在连接" : "没连上";
     this.leave.hidden = !(connected || ov.phase === "connecting");
     this.version.textContent = `Meshora ${ov.version}`;
+    const u = ov.update;
+    this.updateChip.hidden = !(u.status === "available" || u.status === "downloading");
+    this.updateChip.disabled = u.status === "downloading";
+    this.updateChip.textContent = u.status === "downloading" ? "下载中…" : "可更新";
+    this.updateChip.title = u.version ? `新版本 ${u.version}：点一下更新` : "";
     this.updateNav(ov);
   },
 
@@ -629,6 +635,34 @@ views.friends = {
 
 // ---------- 设置 ----------
 
+/** 装新版本：先问一句。Windows 上客户端会退出、装好再打开；安卓上交给浏览器下载 */
+async function applyUpdate(version) {
+  const ok = await confirmBox(
+    `更新到 ${version}？`,
+    PHONE ? "用浏览器下载新版本的安装包，下载完点开它安装。设置和私钥都留着。" : "下载、核对新版本，装好后 Meshora 会自己重新打开。连接会断开几秒，设置和私钥都留着。",
+    PHONE ? "下载" : "更新",
+  );
+  if (!ok) return;
+  if (!PHONE) toast("正在下载新版本…");
+  try {
+    await invoke("apply_update");
+  } catch (err) {
+    toast(String(err));
+  }
+  refresh();
+}
+
+/** 更新的状态说成一句话 */
+function updateText(ov) {
+  const u = ov.update;
+  if (u.status === "checking") return "正在检查…";
+  if (u.status === "available") return `有新版本 ${u.version}`;
+  if (u.status === "downloading") return `正在下载 ${u.version}…`;
+  if (u.status === "upToDate") return "已经是最新的";
+  if (u.status === "failed") return `检查失败：${u.error}`;
+  return ov.checkUpdates ? "还没检查过" : "自动检查关着";
+}
+
 function settingRow(title, desc, ...controls) {
   return h("div", { class: "set" }, h("div", { class: "t" }, h("b", {}, title), desc ? h("span", {}, desc) : null), ...controls);
 }
@@ -671,6 +705,26 @@ views.settings = {
     this.broadcast = toggle("set_prefer_broadcast", ov.preferBroadcast);
     this.private = toggle("set_private_network", ov.privateNetwork);
     this.auto = toggle("set_auto_connect", ov.autoConnect);
+    this.checkUpdates = toggle("set_check_updates", ov.checkUpdates);
+    this.updateStatus = h("span");
+    this.updateButton = h("button", {
+      class: "btn sm",
+      glass: "clear",
+      type: "button",
+      onclick: async () => {
+        const u = state.overview.update;
+        if (u.status === "available") return applyUpdate(u.version);
+        this.updateButton.disabled = true;
+        try {
+          await invoke("check_update");
+        } catch (err) {
+          toast(String(err));
+        }
+        this.updateButton.disabled = false;
+        refresh();
+      },
+    });
+    this.versionRow = h("div", { class: "set" }, h("div", { class: "t" }, h("b", {}, `Meshora ${ov.version}`), this.updateStatus), this.updateButton);
 
     this.code = h("span", { class: "code" });
     this.codeNote = h("span");
@@ -744,6 +798,9 @@ views.settings = {
         settingRow("打开时自动连接", "启动客户端时自动连上次的网络", this.auto),
         this.network,
         this.serverGroup,
+        h("div", { class: "group" }, "更新"),
+        settingRow("自动检查更新", "每 6 小时问一次 GitHub 有没有新版本。新版本有签名，核对过才装", this.checkUpdates),
+        this.versionRow,
         h("div", { class: "group" }, "排查"),
         settingRow("日志", "出问题时复制下来，发给帮你排查的人。里面有 IP 地址，没有密钥", showLogs, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: async () => copy((await invoke("logs")).join("\n"), "日志") }, "复制")),
         this.logs,
@@ -771,6 +828,12 @@ views.settings = {
         ),
       );
     }
+    if (this.checkUpdates.checked !== ov.checkUpdates) this.checkUpdates.checked = ov.checkUpdates;
+    this.updateStatus.textContent = updateText(ov);
+    const u = ov.update;
+    this.updateButton.textContent = u.status === "available" ? `更新到 ${u.version}` : u.status === "checking" ? "检查中…" : "检查更新";
+    if (u.status === "downloading" || u.status === "checking") this.updateButton.disabled = true;
+    else if (!this.updateButton.matches(":active")) this.updateButton.disabled = false;
     this.network.hidden = !ov.network;
     this.code.textContent = ov.network ? ov.network.replace(/#.*$/, "#••••••") : "";
     this.codeNote.textContent = ov.network && ov.network.includes("#") ? "带着邀请码：发给谁，谁就能加入这个网络。只发给要一起玩的人" : "";

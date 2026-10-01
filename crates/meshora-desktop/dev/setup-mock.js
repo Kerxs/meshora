@@ -1,5 +1,5 @@
 // 在普通浏览器里看安装程序界面用的假后端。打开 dev/setup.html?s=<场景>
-// 场景：fresh（新装）、upgrade（升级）、fail（装到一半出错）、uninstall
+// 场景：fresh（新装）、upgrade（升级）、update（客户端发起的更新）、fail（装到一半出错）、uninstall
 "use strict";
 
 (() => {
@@ -14,10 +14,10 @@
   };
   const handlers = {
     info: () => ({
-      mode: scenario === "uninstall" ? "uninstall" : "install",
+      mode: scenario === "uninstall" ? "uninstall" : scenario === "update" ? "update" : "install",
       version: "1.1.0",
       dir: "C:\\Program Files\\Meshora",
-      installed: scenario === "upgrade" || scenario === "uninstall" ? "1.0.0" : null,
+      installed: ["upgrade", "update", "uninstall"].includes(scenario) ? "1.0.0" : null,
     }),
     install: async () => {
       await steps([["关掉正在运行的 Meshora", 5], ["卸掉旧版本", 12], ["复制文件", 20], ["复制文件", 55], ["复制文件", 80]]);

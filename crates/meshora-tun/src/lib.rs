@@ -8,7 +8,7 @@
 //! | --- | --- | --- |
 //! | Linux | `/dev/net/tun` + ioctl | 实测过 |
 //! | Windows | wintun | CI 的 Windows 虚拟机上实测过 |
-//! | 安卓 | VpnService 交出的文件描述符（[`Tun::from_fd`]） | 在模拟器上跑过 |
+//! | 安卓 | VpnService 交出的文件描述符（`Tun::from_fd`，只在安卓上有） | 还没在真手机上试过 |
 //!
 //! 平台相关的 unsafe 代码集中在这个 crate 里，每一处都写了 SAFETY。
 

@@ -1,2 +1,4 @@
 # tauri-build 生成的权限 schema；tauri android init 生成的 Android 工程（CI 里每次重新生成）
 /gen/
+
+/node_modules/

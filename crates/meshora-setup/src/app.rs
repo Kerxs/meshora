@@ -9,7 +9,7 @@ use crate::install;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Info {
-    /// `install` 或 `uninstall`
+    /// `install`、`update`（客户端发起的更新：不用点，装完打开）或 `uninstall`
     mode: &'static str,
     /// 要装的版本
     version: &'static str,
@@ -25,15 +25,17 @@ struct Progress {
     percent: u8,
 }
 
-fn uninstalling() -> bool {
-    std::env::args().any(|arg| arg == "--uninstall")
+fn has_flag(flag: &str) -> bool {
+    std::env::args().any(|arg| arg == flag)
 }
 
 #[tauri::command]
 fn info() -> Info {
     Info {
-        mode: if uninstalling() {
+        mode: if has_flag("--uninstall") {
             "uninstall"
+        } else if has_flag("--update") {
+            "update"
         } else {
             "install"
         },
@@ -65,9 +67,10 @@ async fn background(
 }
 
 #[tauri::command]
-async fn install(app: AppHandle, desktop: bool) -> Result<(), String> {
+async fn install(app: AppHandle, desktop: Option<bool>) -> Result<(), String> {
+    let update = has_flag("--update");
     background(app, move |progress| {
-        install::install(&install::Options { desktop }, progress)
+        install::install(&install::Options { desktop, update }, progress)
     })
     .await
 }

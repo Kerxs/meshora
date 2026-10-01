@@ -1,7 +1,7 @@
 //! 安卓的 VpnService：安卓上 App 没有 root，建不了网卡，要请系统建。
 //!
 //! 1. [`Vpn::prepare`]：要 VPN 权限。第一次会弹系统对话框"Meshora 想要设置 VPN 连接"，等用户点
-//! 2. [`Vpn::establish`]：按协调服务分的地址建网卡，拿回文件描述符，交给 `meshora_tun::Tun::from_fd`
+//! 2. `Vpn::establish`（只在安卓上有）：按协调服务分的地址建网卡，拿回文件描述符，交给 `meshora_tun::Tun::from_fd`
 //!
 //! 网卡只接管 overlay 网段（加上广播、组播），上网的流量不经过它；Meshora 自己的流量也排除在外。
 //! 描述符关掉，网卡就没了。Kotlin 那一半在 `android/` 下。
@@ -88,6 +88,26 @@ impl<R: Runtime> Vpn<R> {
         // 之后只有我们会关它
         #[allow(unsafe_code)]
         Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// 用浏览器（或者别的能打开它的 App）打开一个 https 地址：下载新版本的 APK 用。
+    pub fn open_url(&self, url: &str) -> Result<(), String> {
+        if !url.starts_with("https://") {
+            return Err("只打开 https 地址".into());
+        }
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Serialize)]
+            struct Open<'a> {
+                url: &'a str,
+            }
+            self.handle
+                .run_mobile_plugin::<serde_json::Value>("open", Open { url })
+                .map(drop)
+                .map_err(|err| err.to_string())
+        }
+        #[cfg(not(target_os = "android"))]
+        Err("只有安卓上能这样打开".into())
     }
 
     /// 停掉 VpnService（网卡已经随描述符关掉了，这里只是让服务退出）。

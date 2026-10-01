@@ -2,6 +2,7 @@ package io.github.kerxs.meshora.vpn
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.net.VpnService
 import androidx.activity.result.ActivityResult
 import app.tauri.annotation.ActivityCallback
@@ -11,6 +12,11 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+
+@InvokeArg
+class OpenArgs {
+    lateinit var url: String
+}
 
 @InvokeArg
 class EstablishArgs {
@@ -61,6 +67,20 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.reject(e.message ?: e.toString())
             }
         }.start()
+    }
+
+    /** 交给浏览器打开（下载新版本的 APK）。下载完由系统安装器装，它会核对签名和装着的是同一把钥匙 */
+    @Command
+    fun open(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenArgs::class.java)
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(args.url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            activity.startActivity(intent)
+            invoke.resolve()
+        } catch (e: Exception) {
+            invoke.reject("打不开下载地址：${e.message}")
+        }
     }
 
     @Command

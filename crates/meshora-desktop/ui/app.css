@@ -322,6 +322,7 @@ glass-switch {
 .state {
   margin-left: auto;
   display: inline-flex;
+  white-space: nowrap;
   align-items: center;
   gap: 6px;
   height: 24px;
@@ -1168,6 +1169,37 @@ td.spark-cell .spark {
     grid-template-columns: 1fr;
     width: min(520px, 100%);
   }
+}
+
+/* 通行证上"有新版本"的小胶囊 */
+.update-chip {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(79, 240, 166, 0.18);
+  color: var(--good);
+  font-size: var(--fs-cap);
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.update-chip:hover {
+  background: rgba(79, 240, 166, 0.28);
+}
+
+.update-chip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.brand .update-chip {
+  margin-left: auto;
+}
+
+.brand .update-chip:not([hidden]) + .state {
+  margin-left: var(--sp-2);
 }
 
 /* ---------- 手机（安卓客户端，html.phone） ----------

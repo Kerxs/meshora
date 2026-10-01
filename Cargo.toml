@@ -64,6 +64,11 @@ tauri-plugin-single-instance = "2"
 # 桌面端存设置、和界面之间传数据。tauri 本来就依赖它们
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 客户端的自动更新（crates/meshora-desktop/src/update.rs）：从 GitHub 拿更新清单和安装包。
+# 同步的小客户端，TLS 用 rustls + ring（ring 本来就在依赖树里），根证书编进去，不靠系统
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+# 核对更新清单的 Ed25519 签名、算安装包的 SHA-256。依赖树里本来就有它
+ring = "0.17"
 # 安装程序（crates/meshora-setup）：载荷压缩、快捷方式、卸载项
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 mslnk = "0.1"

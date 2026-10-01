@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
 use crate::controller::{AdminAction, Controller, CreateAt, Overview};
 use crate::logs::LogBuffer;
+use crate::update::UpdateView;
 
 #[tauri::command]
 fn overview(controller: State<'_, Controller>) -> Overview {
@@ -86,6 +87,25 @@ fn set_private_network(controller: State<'_, Controller>, on: bool) {
 #[tauri::command]
 fn logs(controller: State<'_, Controller>) -> Vec<String> {
     controller.logs()
+}
+
+#[tauri::command]
+async fn check_update(controller: State<'_, Controller>) -> Result<UpdateView, String> {
+    Ok(controller.check_update().await)
+}
+
+#[tauri::command]
+fn set_check_updates(controller: State<'_, Controller>, on: bool) {
+    controller.set_check_updates(on);
+}
+
+/// 下载、核对新版本，运行安装程序，然后退出：安装程序装好会再把客户端打开
+#[tauri::command]
+async fn apply_update(app: AppHandle, controller: State<'_, Controller>) -> Result<(), String> {
+    controller.apply_update().await?;
+    // 退出时照常把节点停干净（RunEvent::Exit）；安装程序会等客户端退出再动文件
+    app.exit(0);
+    Ok(())
 }
 
 /// 托盘提示多久刷新一次
@@ -208,7 +228,10 @@ pub fn run() {
             set_onboarded,
             add_server,
             remove_server,
-            logs
+            logs,
+            check_update,
+            set_check_updates,
+            apply_update
         ])
         .build(tauri::generate_context!())
         .expect("客户端启动失败");

@@ -70,7 +70,12 @@ fn running() -> bool {
 }
 
 /// 关掉正在跑的 Meshora（它的虚拟网卡随进程一起消失）。等它真的退出
-fn stop_running() -> Result<(), String> {
+fn stop_running(patience: Duration) -> Result<(), String> {
+    // 更新时客户端是自己退出的（退出时把网卡收拾干净）：先等它一会儿，等不到再强行结束
+    let waiting = Instant::now() + patience;
+    while running() && Instant::now() < waiting {
+        std::thread::sleep(Duration::from_millis(200));
+    }
     if !running() {
         return Ok(());
     }
@@ -141,8 +146,10 @@ fn shortcut(target: &Path, link: &Path) -> Result<(), String> {
 
 /// 装的时候怎么选。
 pub struct Options {
-    /// 桌面上放一个快捷方式。
-    pub desktop: bool,
+    /// 桌面上放不放快捷方式。`None` 是照旧（更新时：原来有就留着，没有也不加）。
+    pub desktop: Option<bool>,
+    /// 是客户端自己发起的更新：先等它退出。
+    pub update: bool,
 }
 
 /// 装。`progress(说明, 百分比)` 报进度
@@ -154,7 +161,11 @@ pub fn install(options: &Options, progress: &dyn Fn(&str, u8)) -> Result<(), Str
     let dir = install_dir();
 
     progress("关掉正在运行的 Meshora", 5);
-    stop_running()?;
+    stop_running(if options.update {
+        Duration::from_secs(15)
+    } else {
+        Duration::ZERO
+    })?;
     progress("卸掉旧版本", 12);
     remove_nsis_install(&dir)?;
 
@@ -181,10 +192,13 @@ pub fn install(options: &Options, progress: &dyn Fn(&str, u8)) -> Result<(), Str
     let exe = dir.join("meshora.exe");
     shortcut(&exe, &start_menu_link())?;
     let desktop = desktop_link();
-    if options.desktop {
-        shortcut(&exe, &desktop)?;
-    } else {
-        let _ = std::fs::remove_file(&desktop);
+    match options.desktop {
+        Some(true) => shortcut(&exe, &desktop)?,
+        Some(false) => {
+            let _ = std::fs::remove_file(&desktop);
+        }
+        // 照旧：原来的快捷方式指着同一个位置，不用动
+        None => {}
     }
 
     progress("登记到“应用和功能”", 92);
@@ -215,7 +229,7 @@ pub fn install(options: &Options, progress: &dyn Fn(&str, u8)) -> Result<(), Str
 pub fn uninstall(purge: bool, progress: &dyn Fn(&str, u8)) -> Result<(), String> {
     let dir = install_dir();
     progress("关掉正在运行的 Meshora", 10);
-    stop_running()?;
+    stop_running(Duration::ZERO)?;
 
     progress("删快捷方式", 25);
     let _ = std::fs::remove_file(start_menu_link());

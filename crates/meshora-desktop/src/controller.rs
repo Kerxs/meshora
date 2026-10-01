@@ -21,6 +21,7 @@ use tracing::{info, warn};
 use crate::host::{self, Host, HostInfo};
 use crate::logs::LogBuffer;
 use crate::store::{MAX_NAME_CHARS, Settings, Store};
+use crate::update::{self, UpdateView, Updater};
 
 /// 先试这个端口，被占了（比如同时开着 meshorad）就让系统挑一个。固定端口方便在路由器上做端口转发
 const PORT: u16 = 41641;
@@ -36,6 +37,10 @@ const ONLINE_WINDOW: Duration = Duration::from_secs(180);
 const REFRESH: Duration = Duration::from_secs(1);
 /// 停一个节点最多等多久
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 打开后多久第一次查更新：先让连接起来
+const UPDATE_FIRST_CHECK: Duration = Duration::from_secs(10);
+/// 之后隔多久查一次
+const UPDATE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 /// 官方服务器：托管很多网络的协调服务，客户端"建网络"默认用它。`公钥@地址:端口`。
 ///
 /// 部署在一台阿里云的服务器上（`scripts/deploy-hub.sh`），换服务器或换私钥时改这里。
@@ -271,6 +276,10 @@ pub struct Overview {
     pub roster: Option<RosterView>,
     /// 本机当主机时：朋友连不连得进来、公网地址。
     pub hosting: Option<HostInfo>,
+    /// 见 [`Settings::check_updates`]。
+    pub check_updates: bool,
+    /// 有没有新版本。
+    pub update: UpdateView,
 }
 
 /// 连上之后的快照
@@ -316,6 +325,7 @@ struct Shared {
     open_tun: Option<TunOpener>,
     store: Store,
     logs: LogBuffer,
+    updater: Updater,
     state: Mutex<State>,
     /// 连接、断开、改设置排队做，免得两个操作交错着起停节点
     ops: tokio::sync::Mutex<()>,
@@ -362,6 +372,7 @@ impl Controller {
                 open_tun,
                 store,
                 logs,
+                updater: Updater::default(),
                 state: Mutex::new(State {
                     settings,
                     phase: Phase::Idle,
@@ -405,6 +416,8 @@ impl Controller {
             servers: state.settings.servers.clone(),
             roster: roster_view(&state),
             hosting: state.host.as_ref().map(|host| host.info.clone()),
+            check_updates: state.settings.check_updates,
+            update: self.shared.updater.view(),
         }
     }
 
@@ -667,6 +680,8 @@ impl Controller {
 
     /// 客户端刚打开：按设置自动连接上次的网络。
     pub async fn start_up(&self) {
+        let checking = self.clone();
+        tokio::spawn(async move { checking.update_loop().await });
         let wanted = {
             let state = self.shared.state();
             state.settings.auto_connect && state.settings.network.is_some()
@@ -674,6 +689,62 @@ impl Controller {
         if wanted && let Err(err) = self.connect(None).await {
             warn!(%err, "自动连接失败");
         }
+    }
+
+    /// 隔一阵查一次更新（设置里关了就不查）
+    async fn update_loop(&self) {
+        tokio::time::sleep(UPDATE_FIRST_CHECK).await;
+        loop {
+            if self.shared.state().settings.check_updates {
+                self.shared.updater.check().await;
+            }
+            tokio::time::sleep(UPDATE_INTERVAL).await;
+        }
+    }
+
+    /// 现在就查一次更新。
+    pub async fn check_update(&self) -> UpdateView {
+        self.shared.updater.check().await;
+        self.shared.updater.view()
+    }
+
+    /// 打开、关掉自动查更新。
+    pub fn set_check_updates(&self, on: bool) {
+        let mut state = self.shared.state();
+        state.settings.check_updates = on;
+        self.shared.save(&state.settings);
+    }
+
+    /// 装查到的新版本。
+    ///
+    /// - Windows：下载、核对，运行安装程序，交回 `None`：调用方随后退出，安装程序装好再把它打开
+    /// - 安卓：交回下载地址，交给浏览器下载、系统安装器装
+    pub async fn apply_update(&self) -> Result<Option<String>, String> {
+        let update::Status::Available(available) = self.shared.updater.status() else {
+            return Err("没有可以装的新版本：先检查一次更新".into());
+        };
+        #[cfg(windows)]
+        {
+            let updater = self.shared.updater.clone();
+            updater.set(update::Status::Downloading(available.clone()));
+            info!(version = %available.version, "下载新版本");
+            let result = tokio::task::spawn_blocking(move || {
+                let path = update::download(&available)?;
+                update::launch_installer(&path)
+            })
+            .await
+            .unwrap_or_else(|err| Err(format!("下载任务出错：{err}")));
+            match result {
+                Ok(()) => Ok(None),
+                Err(err) => {
+                    warn!(%err, "更新失败");
+                    updater.set(update::Status::Failed(err.clone()));
+                    Err(err)
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        Ok(Some(available.package.url))
     }
 
     /// 停掉后台任务并等它收拾完

@@ -1,6 +1,6 @@
 // 在普通浏览器里看界面用的假后端：不需要管理员权限、不建网卡。
 // 用法：在 crates/meshora-desktop 下起一个静态服务器，打开 dev/index.html?s=<场景>
-// 场景：onboarding、join、saved、connecting、connected、owner、host、empty、rejected、invite、deleted、tun、unreachable
+// 场景：onboarding、join、saved、connecting、connected、owner、host、update、empty、rejected、invite、deleted、tun、unreachable
 "use strict";
 
 (() => {
@@ -26,6 +26,8 @@
     servers: [server],
     roster: null,
     hosting: null,
+    checkUpdates: true,
+    update: { status: "upToDate", version: null, notes: null, error: null },
     phase: "idle",
     error: null,
     me: null,
@@ -71,6 +73,14 @@
       phase: "failed",
       error: { kind: "tun", message: "创建虚拟网卡 Meshora 失败：加载 C:\\Program Files\\Meshora\\wintun.dll 失败：找不到指定的模块。" },
     },
+    update: {
+      network: code,
+      phase: "connected",
+      me,
+      coordConnected: true,
+      peers,
+      update: { status: "available", version: "1.0.1", notes: "修了一些东西", error: null },
+    },
     unreachable: {
       network: code,
       phase: "failed",
@@ -115,6 +125,18 @@
     },
     set_auto_connect({ on }) {
       ov = { ...ov, autoConnect: on };
+    },
+    set_check_updates({ on }) {
+      ov = { ...ov, checkUpdates: on };
+    },
+    async check_update() {
+      ov = { ...ov, update: { ...ov.update, status: "checking" } };
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      ov = { ...ov, update: { status: "available", version: "1.0.1", notes: "修了一些东西", error: null } };
+      return ov.update;
+    },
+    apply_update() {
+      ov = { ...ov, update: { ...ov.update, status: "downloading" } };
     },
     set_private_network({ on }) {
       ov = { ...ov, privateNetwork: on };
