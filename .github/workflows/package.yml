@@ -2,7 +2,7 @@ name: Package
 
 # 出要发布的东西：Windows 桌面客户端的安装程序（自己的液态玻璃安装程序 meshora-setup，
 # 带着核对过哈希和签名的 wintun.dll），
-# 和给建网络的人用的 Linux 服务端（meshora-coord、meshorad，静态链接）。
+# 和自己架服务器用的 Linux 服务端（meshora-coord、meshorad，静态链接）。
 # 编译和 lint 在 Rust 那个工作流里已经做了，这里只管出包 —— 改到代码时、打标签时、手动触发时才跑。
 # 打 v* 标签时再建一个草稿 Release，把这些都附上
 on:
@@ -160,11 +160,11 @@ jobs:
 
           用法见[桌面客户端](https://kerxs.github.io/meshora/guide/desktop)。
 
-          ## 建网络的人：Linux 服务端
+          ## 自己架服务器：Linux 服务端
 
           `meshora-server-*-linux-x86_64.tar.gz`、`…-aarch64.tar.gz`：协调服务（带中继）`meshora-coord`，
-          和命令行的节点 `meshorad`。静态链接，哪个发行版都能跑。怎么起见
-          [桌面客户端 · 给建网络的人](https://kerxs.github.io/meshora/guide/desktop#给建网络的人-起一个协调服务)。
+          和命令行的节点 `meshorad`。静态链接，哪个发行版都能跑。`scripts/deploy-hub.sh` 一步装好，见
+          [桌面客户端 · 自己架服务器](https://kerxs.github.io/meshora/guide/desktop#自己架服务器)。
 
           ## 核对
 

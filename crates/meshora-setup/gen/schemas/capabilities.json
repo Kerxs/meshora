@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"安装程序的窗口：只能调安装程序自己的命令，加上自绘标题栏要的拖动、最小化","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging","core:window:allow-minimize"]}}
