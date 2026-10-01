@@ -694,3 +694,127 @@ async fn a_real_hub_creates_relays_and_deletes() {
         .await
         .expect("解散网络");
 }
+
+/// 校验和对的 ICMP echo request（真的系统会丢掉校验和不对的报文）
+fn icmp_echo(src: Ipv4Addr, dst: Ipv4Addr, seq: u16) -> Vec<u8> {
+    fn checksum(data: &[u8]) -> u16 {
+        let mut sum: u32 = data
+            .chunks(2)
+            .map(|pair| u32::from(u16::from_be_bytes([pair[0], *pair.get(1).unwrap_or(&0)])))
+            .sum();
+        while sum > 0xffff {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+        !(sum as u16)
+    }
+    let mut icmp = vec![8, 0, 0, 0, 0x4d, 0x53];
+    icmp.extend_from_slice(&seq.to_be_bytes());
+    icmp.extend_from_slice(b"meshora ping");
+    let sum = checksum(&icmp);
+    icmp[2..4].copy_from_slice(&sum.to_be_bytes());
+    let mut packet = ipv4(src, dst, &icmp);
+    let sum = checksum(&packet[..20]);
+    packet[10..12].copy_from_slice(&sum.to_be_bytes());
+    packet
+}
+
+/// 一台安卓（CI 里是模拟器，scripts/android-smoke.sh 去点界面）凭网络码加入一个建在真 hub 上的网络，
+/// 然后 ping 它：安卓那边的 VpnService 网卡、Rust 数据面、经服务器的那条路都通，系统才会回。最后解散网络。
+///
+/// ```text
+/// MESHORA_HUB=<服务器公钥>@<地址>:7443 MESHORA_CODE_FILE=code.txt \
+///     cargo test -p meshora-control --test e2e -- --ignored an_android_phone
+/// ```
+#[tokio::test]
+#[ignore = "要一台真的 hub 和一台去加入的安卓：设 MESHORA_HUB、MESHORA_CODE_FILE"]
+async fn an_android_phone_joins_and_answers_a_ping() {
+    let hub = std::env::var("MESHORA_HUB").expect("设 MESHORA_HUB=公钥@地址:端口");
+    let code_file = std::env::var("MESHORA_CODE_FILE").expect("设 MESHORA_CODE_FILE");
+    let (key, addr) = hub
+        .split_once('@')
+        .expect("MESHORA_HUB 的格式是 公钥@地址:端口");
+    let coord = Coord {
+        addr: addr.parse().expect("地址:端口"),
+        key: key.parse().expect("服务器公钥"),
+    };
+    let me = NodeSecret::generate();
+    let mut node = start_with(
+        &me,
+        &coord,
+        true,
+        "CI",
+        Entry::Create {
+            name: "安卓冒烟测试".into(),
+        },
+    )
+    .await;
+    let network = node.welcome.network.expect("建好的网络有 ID");
+    let invite = node.welcome.created.expect("建好的网络有邀请码");
+    std::fs::write(&code_file, format!("{key}@{addr}/{network}#{invite}")).unwrap();
+    println!("网络码写进了 {code_file}，等安卓加入");
+
+    // 安卓那边要等模拟器开机、装 App、点界面：多给点时间
+    let mut roster = node.admin.roster();
+    let phone_ip = tokio::time::timeout(Duration::from_secs(900), async {
+        loop {
+            if let Some(list) = roster.borrow_and_update().as_ref()
+                && let Some(phone) = list
+                    .members
+                    .iter()
+                    .find(|m| m.key != me.public_key() && m.online)
+            {
+                return phone.overlay_ip;
+            }
+            roster.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("安卓一直没加入");
+    println!("安卓加入了：{phone_ip}");
+
+    let reply = tokio::time::timeout(Duration::from_secs(90), async {
+        let mut seq = 0u16;
+        loop {
+            seq = seq.wrapping_add(1);
+            node.tun_in
+                .send(icmp_echo(node.ip, phone_ip, seq))
+                .await
+                .unwrap();
+            if let Ok(Some(packet)) =
+                tokio::time::timeout(Duration::from_millis(500), node.tun_out.recv()).await
+                && packet.len() >= 28
+                && packet[9] == 1
+                && packet[20] == 0
+            {
+                return packet;
+            }
+        }
+    })
+    .await;
+    let _ = node.admin.request(AdminRequest::Delete).await;
+    let reply = reply.expect("安卓没回 ping");
+    assert_eq!(&reply[12..16], &phone_ip.octets());
+    println!("安卓回了 ping");
+}
+
+#[test]
+fn icmp_echo_checksums_are_valid() {
+    // 校验和对的报文，连同校验和字段一起求反码和，结果是 0
+    fn folds_to_zero(data: &[u8]) -> bool {
+        let mut sum: u32 = data
+            .chunks(2)
+            .map(|pair| u32::from(u16::from_be_bytes([pair[0], *pair.get(1).unwrap_or(&0)])))
+            .sum();
+        while sum > 0xffff {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+        sum == 0xffff
+    }
+    let packet = icmp_echo(
+        Ipv4Addr::new(100, 64, 0, 1),
+        Ipv4Addr::new(100, 64, 0, 2),
+        7,
+    );
+    assert!(folds_to_zero(&packet[..20]));
+    assert!(folds_to_zero(&packet[20..]));
+}

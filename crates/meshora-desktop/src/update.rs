@@ -447,6 +447,21 @@ mod tests {
         }
     }
 
+    /// 发版之后对着 GitHub 上真的 latest.json 验一遍：两个平台的签名都对得上、下载地址是 https。
+    /// `cargo test -p meshora-desktop -- --ignored the_live_manifest`
+    #[test]
+    #[ignore = "要联网，读 GitHub 上最新 Release 的 latest.json"]
+    fn the_live_manifest_is_signed_by_the_release_key() {
+        let manifest = fetch(MANIFEST_URL, Duration::from_secs(30), MAX_MANIFEST).unwrap();
+        // 当成 0.0.0 来查：不管最新是哪一版，都会走到验签
+        for platform in ["windows", "android"] {
+            let found = evaluate(&manifest, "0.0.0", platform, PUBLIC_KEY)
+                .unwrap()
+                .unwrap_or_else(|| panic!("清单里没有 {platform}"));
+            println!("{platform}: {} {}", found.version, found.package.url);
+        }
+    }
+
     #[test]
     fn the_shipped_public_key_is_a_valid_ed25519_key() {
         assert_eq!(BASE64.decode(PUBLIC_KEY).unwrap().len(), 32);

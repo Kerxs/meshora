@@ -185,17 +185,27 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-  # 在模拟器里装上、打开：起得来、不崩，日志和截图留下来看
+  # 在模拟器里装上、打开，再真的连一次：CI 这边在官方服务器上建一个网络，模拟器里点界面凭网络码加入，
+  # 这边 ping 它，系统回了就说明 VpnService 的网卡、Rust 数据面、经服务器的那条路都通。最后解散网络
   android-emulator:
     needs: android
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
+    env:
+      MESHORA_HUB: "3hxhTS9dwMrNCqPzJzqOheZMk8qYepYn9QMmxKhPkgU=@39.108.210.40:7443"
+      MESHORA_CODE_FILE: ${{ github.workspace }}/code.txt
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
           name: meshora-android
           path: apk
+      - name: 另一边（后台）：建网络、等安卓加入、ping 它
+        run: |
+          rustup toolchain install --no-self-update
+          cargo test -p meshora-control --test e2e --locked --no-run
+          nohup cargo test -p meshora-control --test e2e --locked -- --ignored an_android_phone --nocapture             > peer.log 2>&1 &
+          echo $! > peer.pid
       # 模拟器要 KVM
       - run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -207,7 +217,14 @@ jobs:
           arch: x86_64
           target: google_apis
           disable-animations: true
-          script: bash scripts/android-smoke.sh apk/*.apk smoke
+          script: bash scripts/android-smoke.sh apk/*.apk smoke code.txt
+      - name: 另一边收到了回应
+        if: always()
+        run: |
+          for _ in $(seq 1 150); do kill -0 "$(cat peer.pid)" 2>/dev/null || break; sleep 2; done
+          cat peer.log
+          cp peer.log smoke/ 2>/dev/null || true
+          grep -q "安卓回了 ping" peer.log
       - if: always()
         uses: actions/upload-artifact@v7
         with:
