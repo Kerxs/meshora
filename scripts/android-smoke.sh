@@ -68,8 +68,9 @@ try:
 except Exception:
     sys.exit(0)
 for node in root.iter("node"):
-    label = node.get("text") or node.get("content-desc") or ""
-    if label.strip() == wanted:
+    label = (node.get("text") or node.get("content-desc") or "").strip()
+    # 按钮里有标题和说明时，无障碍文字是两段连在一起的："加入朋友的网络 朋友已经发给我一个网络码"
+    if label == wanted or label.split(" ")[0] == wanted:
         x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.get("bounds", "")))
         if x2 > x1 and y2 > y1:
             print((x1 + x2) // 2, (y1 + y2) // 2)
