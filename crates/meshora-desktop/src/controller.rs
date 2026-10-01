@@ -38,8 +38,10 @@ const REFRESH: Duration = Duration::from_secs(1);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 /// 官方服务器：托管很多网络的协调服务，客户端"建网络"默认用它。`公钥@地址:端口`。
 ///
-/// 还没上线，先空着；设置里的 [`Settings::official_server`] 可以填一个。
-pub const OFFICIAL_SERVER: Option<&str> = None;
+/// 部署在一台阿里云的服务器上（`scripts/deploy-hub.sh`），换服务器或换私钥时改这里。
+/// 设置里的 [`Settings::official_server`] 可以填另一个顶替它。
+pub const OFFICIAL_SERVER: Option<&str> =
+    Some("3hxhTS9dwMrNCqPzJzqOheZMk8qYepYn9QMmxKhPkgU=@39.108.210.40:7443");
 
 /// 设网络类别时，网卡刚建好、系统还没把它归到哪个网络，要隔一会儿再试。最多试这么久
 #[cfg(windows)]
@@ -1034,6 +1036,13 @@ mod tests {
     }
 
     #[test]
+    fn the_official_server_is_a_server_address() {
+        // 写错了的话，"建网络 · 官方服务器"一点就报错
+        let code: NetworkCode = OFFICIAL_SERVER.unwrap().parse().unwrap();
+        assert!(code.network.is_none() && code.invite.is_none());
+    }
+
+    #[test]
     fn rows_combine_control_and_data_plane() {
         let now = Instant::now();
         let relay = Path::Relay {
@@ -1277,13 +1286,6 @@ mod tests {
                     },
                     "x".into()
                 )
-                .await
-                .is_err()
-        );
-        // 官方服务器还没上线
-        assert!(
-            controller
-                .create(CreateAt::Official, "x".into())
                 .await
                 .is_err()
         );

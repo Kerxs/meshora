@@ -80,7 +80,7 @@ install -m 755 "$work_bin/meshora-coord" "$work_bin/meshorad" /usr/local/bin/
 id meshora >/dev/null 2>&1 || useradd --system --home-dir /var/lib/meshora --shell /usr/sbin/nologin meshora
 install -d -o meshora -g meshora -m 700 /var/lib/meshora
 if [[ ! -f /var/lib/meshora/coord.key ]]; then
-  runuser -u meshora -- /usr/local/bin/meshorad genkey /var/lib/meshora/coord.key >/dev/null
+  runuser -u meshora -- /usr/local/bin/meshorad genkey /var/lib/meshora/coord.key >/dev/null 2>&1
   echo "==> 生成了服务器私钥 /var/lib/meshora/coord.key（换了它，所有网络码都要重发）"
 fi
 

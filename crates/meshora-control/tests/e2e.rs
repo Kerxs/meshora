@@ -629,3 +629,68 @@ async fn a_member_removed_from_the_state_file_is_told_and_stops() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 对一台真的 hub（比如刚部署好的官方服务器）走一遍：建网、凭网络码加入、经它的中继互发报文、
+/// 网主看得到名单，最后解散，服务器上不留东西。两个节点都只走中继：本机的 UDP 绑在回环上，
+/// 测的就是服务器的协调服务和中继。
+///
+/// ```text
+/// MESHORA_HUB=<服务器公钥>@<地址>:7443 cargo test -p meshora-control --test e2e -- --ignored a_real_hub
+/// ```
+#[tokio::test]
+#[ignore = "要一台真的 hub：设 MESHORA_HUB=公钥@地址:端口"]
+async fn a_real_hub_creates_relays_and_deletes() {
+    let hub = std::env::var("MESHORA_HUB").expect("设 MESHORA_HUB=公钥@地址:端口");
+    let (key, addr) = hub
+        .split_once('@')
+        .expect("MESHORA_HUB 的格式是 公钥@地址:端口");
+    let coord = Coord {
+        addr: addr.parse().expect("地址:端口"),
+        key: key.parse().expect("服务器公钥"),
+    };
+    let (a, b) = (NodeSecret::generate(), NodeSecret::generate());
+
+    let mut node_a = start_with(
+        &a,
+        &coord,
+        true,
+        "冒烟测试 A",
+        Entry::Create {
+            name: "冒烟测试".into(),
+        },
+    )
+    .await;
+    let network = node_a.welcome.network.expect("建好的网络有 ID");
+    let invite = node_a.welcome.created.expect("建好的网络有邀请码");
+    let mut node_b = start_with(
+        &b,
+        &coord,
+        true,
+        "冒烟测试 B",
+        Entry::Join {
+            network,
+            invite: Some(invite),
+        },
+    )
+    .await;
+
+    let received = deliver(&node_a, &mut node_b, b"over the real relay").await;
+    assert_eq!(&received[20..], b"over the real relay");
+    let received = deliver(&node_b, &mut node_a, b"and back").await;
+    assert_eq!(&received[20..], b"and back");
+
+    let mut roster = node_a.admin.roster();
+    tokio::time::timeout(
+        CONVERGE,
+        roster.wait_for(|r| r.as_ref().is_some_and(|r| r.members.len() == 2)),
+    )
+    .await
+    .expect("网主没收到两个人的名单")
+    .unwrap();
+
+    node_a
+        .admin
+        .request(AdminRequest::Delete)
+        .await
+        .expect("解散网络");
+}
