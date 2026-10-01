@@ -67,7 +67,9 @@ if [[ ! -x ${dirs[0]}/meshora-coord ]]; then
 fi
 name=$(basename "${dirs[0]}")
 work_bin="$work/$name"
-if ! "$work_bin/meshora-coord" --help 2>&1 | grep -q -- '--hub'; then
+# --help 打完用法后以非零退出（和别的参数错误一样）：先存下来再查，免得 pipefail 把它当成失败
+usage=$("$work_bin/meshora-coord" --help 2>&1 || true)
+if ! grep -q -- '--hub' <<<"$usage"; then
   echo "$tag 的 meshora-coord 还不支持 --hub（托管很多网络）：换一个更新的版本" >&2
   exit 1
 fi
