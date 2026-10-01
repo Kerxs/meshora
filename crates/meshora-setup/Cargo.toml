@@ -1,0 +1,39 @@
+[package]
+name = "meshora-setup"
+description = "Meshora 的安装程序：和客户端同一个液态玻璃界面，一页装完；装好后它自己就是卸载程序"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "meshora-setup"
+path = "src/main.rs"
+# 可执行文件内嵌了"要求管理员权限"的清单：它的测试程序在普通用户下起不来。要测的在库里
+test = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# 载荷在编译时压成 deflate，运行时解开。纯 Rust 的实现，不用 C 编译器
+flate2 = { workspace = true }
+
+# 只做 Windows：别的平台上只打一句话
+[target.'cfg(windows)'.dependencies]
+tauri.workspace = true
+mslnk.workspace = true
+winreg.workspace = true
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_SystemInformation"] }
+
+[build-dependencies]
+flate2 = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-build = { workspace = true }
+
+[lints]
+workspace = true

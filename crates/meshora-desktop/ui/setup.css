@@ -1,0 +1,151 @@
+/* 安装程序。尺寸、颜色、按钮、标题栏都来自 app.css，这里只摆版面。窗口固定 600×460 */
+
+#setup {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: var(--sp-4);
+}
+
+#setup .titlebar {
+  margin-top: calc(var(--sp-2) * -1);
+}
+
+#setup main {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+
+.setup-panel {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-panel);
+  padding: var(--sp-5) var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  text-align: center;
+  animation: page 280ms var(--ease) both;
+}
+
+@keyframes page {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+.setup-logo svg {
+  width: 44px;
+  height: 44px;
+}
+
+.setup-panel h1 {
+  margin: 0;
+  font-size: var(--fs-head);
+}
+
+.setup-panel .sub {
+  margin: 0;
+  max-width: 420px;
+  color: var(--dim);
+  user-select: text;
+}
+
+.setup-panel .sub.err {
+  color: var(--bad);
+}
+
+.setup-panel .warn {
+  margin: 0;
+  max-width: 420px;
+  font-size: var(--fs-cap);
+  color: var(--mid);
+}
+
+.opts {
+  width: 100%;
+  max-width: 440px;
+  margin-top: var(--sp-1);
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--well);
+  text-align: left;
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 48px;
+  border-bottom: 1px solid var(--line);
+}
+
+.opt:last-child {
+  border-bottom: 0;
+}
+
+.opt .t {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.opt .t span {
+  font-size: var(--fs-cap);
+  color: var(--faint);
+}
+
+.opt .t .dir {
+  font-size: var(--fs-sec);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+/* 进度条：填充宽度由脚本按百分比设（CSSOM，不写内联样式） */
+.meter {
+  width: 100%;
+  max-width: 420px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--well);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #3d6bff, #5ff0c0);
+  transition: width 240ms var(--ease);
+}
+
+.pct {
+  font-size: var(--fs-cap);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 键盘焦点：细白圈，别用浏览器默认的黑框 */
+.setup-panel .btn:focus-visible,
+.tb-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+}
+
+.setup-panel .btn:focus:not(:focus-visible) {
+  outline: none;
+}

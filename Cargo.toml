@@ -64,6 +64,10 @@ tauri-plugin-single-instance = "2"
 # 桌面端存设置、和界面之间传数据。tauri 本来就依赖它们
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 安装程序（crates/meshora-setup）：载荷压缩、快捷方式、卸载项
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+mslnk = "0.1"
+winreg = "0.55"
 
 [workspace.lints.rust]
 # M1 接 wintun 时免不了 FFI：届时在具体模块上 allow，并写清 SAFETY

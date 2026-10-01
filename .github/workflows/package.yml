@@ -1,6 +1,7 @@
 name: Package
 
-# 出要发布的东西：Windows 桌面客户端的安装包（NSIS，带着核对过哈希和签名的 wintun.dll），
+# 出要发布的东西：Windows 桌面客户端的安装程序（自己的液态玻璃安装程序 meshora-setup，
+# 带着核对过哈希和签名的 wintun.dll），
 # 和给建网络的人用的 Linux 服务端（meshora-coord、meshorad，静态链接）。
 # 编译和 lint 在 Rust 那个工作流里已经做了，这里只管出包 —— 改到代码时、打标签时、手动触发时才跑。
 # 打 v* 标签时再建一个草稿 Release，把这些都附上
@@ -24,8 +25,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # 打包工具的版本钉死：它会被拿来执行，供应链的账要算清
-  TAURI_CLI: "@tauri-apps/cli@2.12.0"
 
 jobs:
   desktop:
@@ -35,7 +34,7 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install --no-self-update
 
-      # 安装包的文件名和"程序和功能"里的版本号都取自 Cargo.toml，标签对不上就会发出一个名不副实的版本
+      # 安装程序的文件名和"应用和功能"里的版本号都取自 Cargo.toml，标签对不上就会发出一个名不副实的版本
       - name: 核对版本
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
@@ -49,24 +48,37 @@ jobs:
             exit 1
           }
 
+      # 载荷目录：安装程序要装的全部文件。wintun.dll 核对过哈希和 WireGuard LLC 的签名
       - name: wintun.dll
         shell: pwsh
-        run: scripts/fetch-wintun.ps1 -Destination crates\meshora-desktop\wintun
+        run: scripts/fetch-wintun.ps1 -Destination payload
 
-      # tauri.bundle.json 叠在 tauri.conf.json 上：打开打包，装到 Program Files（只有管理员能写，
-      # wintun.dll 放在那里才可信），把 wintun.dll 放到 meshora.exe 旁边。
-      # 平时的 cargo build 不读它，所以本地编译不需要 wintun.dll
+      - name: 客户端
+        run: cargo build --release --locked -p meshora-desktop
+
+      # 安装程序把载荷目录整个编进自己（MESHORA_SETUP_PAYLOAD，见 crates/meshora-setup/build.rs），
+      # 装到 Program Files（只有管理员能写，wintun.dll 放在那里才可信）。
       #
       # 不出免安装的 zip：客户端以管理员身份运行、从自己旁边加载 wintun.dll，
       # 解压到"下载"这类普通用户可写的目录，就等于把管理员权限交给了能写那个目录的任何进程
-      - name: 安装包
-        working-directory: crates/meshora-desktop
-        run: npx --yes ${{ env.TAURI_CLI }} build --ci --config tauri.bundle.json
+      - name: 安装程序
+        shell: pwsh
+        run: |
+          Copy-Item target\release\meshora.exe, LICENSE, THIRD-PARTY-NOTICES.md payload\
+          Get-ChildItem payload | Format-Table Name, Length
+          $env:MESHORA_SETUP_PAYLOAD = (Resolve-Path payload).Path
+          cargo build --release --locked -p meshora-setup
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $version = ((cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'meshora-setup').version
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\meshora-setup.exe "dist\Meshora-$version-setup.exe"
+          Get-ChildItem dist | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v7
         with:
           name: meshora-windows-x64
-          path: target/release/bundle/nsis/*.exe
+          path: dist/*.exe
           if-no-files-found: error
 
   # 建网络的人要在一台有公网 IP 的服务器上跑协调服务，多半是 Linux 云主机。
@@ -110,7 +122,7 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
-  # 打标签时建 Release。建成草稿：安装包没有代码签名、发布前要有人真装一遍，由人检查过再点发布。
+  # 打标签时建 Release。建成草稿：安装程序没有代码签名、发布前要有人真装一遍，由人检查过再点发布。
   # 0.x 和带 "-" 的版本标成预发布
   release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -139,9 +151,11 @@ jobs:
 
           ## 玩家：Windows 桌面客户端
 
-          `Meshora_*_x64-setup.exe`：装到 `Program Files`，运行时需要管理员权限（要建虚拟网卡）。
+          `Meshora-*-setup.exe`：装到 `Program Files`，运行时需要管理员权限（要建虚拟网卡）。
+          装过旧版本的直接运行它就是升级，网络、名字、私钥都留着。卸载在"设置 → 应用"里。
 
-          - **安装包没有代码签名**，SmartScreen 会提示"未知发布者"
+          - **安装程序没有代码签名**，SmartScreen 会提示"未知发布者"
+          - 要有 Microsoft Edge WebView2 运行时（Windows 11 自带；没有时安装程序会给出下载地址）
           - 没有免安装版，理由见[威胁模型](https://kerxs.github.io/meshora/guide/threat-model)
 
           用法见[桌面客户端](https://kerxs.github.io/meshora/guide/desktop)。
@@ -157,7 +171,7 @@ jobs:
           下载后核对 SHA-256，和 `SHA256SUMS.txt` 里的对得上再用：
 
           ```powershell
-          Get-FileHash -Algorithm SHA256 .\Meshora_*_x64-setup.exe
+          Get-FileHash -Algorithm SHA256 .\Meshora-*-setup.exe
           ```
 
           ```bash

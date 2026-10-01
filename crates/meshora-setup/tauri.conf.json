@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Meshora 安装程序",
+  "identifier": "io.github.kerxs.meshora.setup",
+  "build": {
+    "frontendDist": "../meshora-desktop/ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "安装 Meshora",
+        "url": "setup.html",
+        "width": 600,
+        "height": 460,
+        "resizable": false,
+        "maximizable": false,
+        "center": true,
+        "decorations": false,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["../meshora-desktop/icons/icon.ico", "../meshora-desktop/icons/icon.png"]
+  }
+}
