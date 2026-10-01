@@ -79,3 +79,10 @@ winreg = "0.55"
 unsafe_code = "deny"
 # 契约本身就是文档。CI 开着 -D warnings，所以这条等于强制
 missing_docs = "warn"
+
+# 开发编译只留行号：完整的调试信息让 target/ 涨到几十 GB，栈回溯有行号就够了。依赖的库不要调试信息
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
