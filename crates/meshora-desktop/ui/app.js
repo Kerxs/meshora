@@ -1073,7 +1073,12 @@ views.start = {
     // 引导里选了哪个，就先把光标放在哪
     const tab = state.startTab;
     state.startTab = null;
-    setTimeout(() => (tab === "create" ? this.netName : area).focus(), 50);
+    setTimeout(() => {
+      const target = tab === "create" ? this.netName : area;
+      target.focus();
+      // 手机上两张卡上下排，加入那张在下面：滚过去，不然弹出来的键盘正好把它挡住
+      target.scrollIntoView({ block: "center" });
+    }, 50);
     return el;
   },
   update(ov) {

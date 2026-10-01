@@ -78,6 +78,21 @@ for node in root.iter("node"):
 PY
 )
     if [[ -n $point ]]; then
+      local y=${point#* } height
+      height=$(adb shell wm size | tr -d '' | grep -oE '[0-9]+$' | tail -1)
+      # 被键盘挡住、或者在屏幕下面：收起键盘、往上滑一点再找
+      if adb shell dumpsys input_method | grep -q "mInputShown=true"; then
+        echo "收起键盘"
+        adb shell input keyevent 4
+        sleep 1
+        continue
+      fi
+      if [[ -n $height ]] && (( y > height * 85 / 100 )); then
+        echo "「$wanted」在屏幕下面（y=$y），往上滑"
+        adb shell input swipe $((height / 4)) $((height * 7 / 10)) $((height / 4)) $((height * 3 / 10)) 300
+        sleep 1
+        continue
+      fi
       echo "点「$wanted」：$point"
       adb shell input tap $point
       return 0
@@ -102,9 +117,6 @@ tap "加入朋友的网络"
 sleep 2
 # 引导里选了"加入"，网络码的框已经拿到焦点
 adb shell input text "'$code'"
-sleep 1
-# 收起软键盘（有的话），免得挡住按钮
-adb shell input keyevent 111 || true
 sleep 1
 adb exec-out screencap -p > "$out/code.png"
 tap "加入"
