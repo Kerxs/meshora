@@ -22,7 +22,8 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-[target.'cfg(any(windows, target_os = "android"))'.build-dependencies]
+# 构建脚本自己判断目标平台（见 build.rs），这里不能按 target 挑
+[build-dependencies]
 tauri-build = { workspace = true }
 
 [lints]
