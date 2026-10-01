@@ -779,6 +779,7 @@ mod tests {
                 overlay: "100.64.0.0/10".parse().unwrap(),
                 probe: None,
                 relays: vec![],
+                hub: None,
             },
             listener,
             None,
@@ -810,6 +811,7 @@ mod tests {
             overlay: "100.64.0.0/10".parse().unwrap(),
             probe: None,
             relays: vec![],
+            hub: None,
         })
         .unwrap();
         let invite = coordinator.invite().unwrap();

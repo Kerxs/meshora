@@ -521,6 +521,10 @@ impl Node {
                 vec![]
             }
             ServerMessage::Pong => vec![],
+            // 建网、网主管理的消息：下一步接上
+            ServerMessage::Created { .. }
+            | ServerMessage::Roster(_)
+            | ServerMessage::AdminReply(_) => vec![],
             ServerMessage::Welcome { .. } | ServerMessage::Rejected { .. } => {
                 // Rejected 在 Session::run 里就处理了，走不到这里
                 debug!("注册之后又收到了 Welcome，忽略");

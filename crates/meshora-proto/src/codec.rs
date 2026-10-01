@@ -30,6 +30,27 @@ impl Writer {
         self.buf.extend_from_slice(&value.to_be_bytes());
     }
 
+    /// 四个字节，大端。
+    pub fn u32(&mut self, value: u32) {
+        self.buf.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// 八个字节，大端。
+    pub fn u64(&mut self, value: u64) {
+        self.buf.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// 可有可无的值：先一个标记字节（0 没有、1 有），有的话再写值。
+    pub fn option<T>(&mut self, value: Option<&T>, write: impl FnOnce(&mut Self, &T)) {
+        match value {
+            Some(value) => {
+                self.u8(1);
+                write(self, value);
+            }
+            None => self.u8(0),
+        }
+    }
+
     /// 原样写入定长字节。
     pub fn bytes(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
@@ -119,6 +140,28 @@ impl<'a> Reader<'a> {
     /// 两个字节，大端。
     pub fn u16(&mut self) -> Result<u16, DecodeError> {
         Ok(u16::from_be_bytes(self.array()?))
+    }
+
+    /// 四个字节，大端。
+    pub fn u32(&mut self) -> Result<u32, DecodeError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+
+    /// 八个字节，大端。
+    pub fn u64(&mut self) -> Result<u64, DecodeError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+
+    /// 可有可无的值，见 [`Writer::option`]。标记字节只能是 0 或 1。
+    pub fn option<T>(
+        &mut self,
+        read: impl FnOnce(&mut Self) -> Result<T, DecodeError>,
+    ) -> Result<Option<T>, DecodeError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => read(self).map(Some),
+            _ => Err(DecodeError::Invalid("可选值的标记只能是 0 或 1")),
+        }
     }
 
     /// 节点公钥。

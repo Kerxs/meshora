@@ -6,6 +6,8 @@
 //!
 //! - 节点用自己的节点密钥握手，中继确切知道每条连接属于谁（R6）
 //! - 只服务名单里的节点：转发的带宽是实打实要付钱的
+//! - 可以只在"同一个网络"的节点之间转发（[`Config::links`]）、给每个节点限速（[`Config::rate`]）——
+//!   一台服务器托管很多网络时要用
 //! - 收到第一帧（Hello）之前不登记连接（R1）
 //! - 转发像 UDP 一样不保证送达：目标不在线、或者它的队列满了，报文就丢掉
 
@@ -14,7 +16,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use meshora_proto::admission::Admission;
 use meshora_proto::noise::{Channel, NoiseStream};
@@ -47,12 +49,23 @@ pub fn allow_list(nodes: Vec<NodeKey>) -> Allow {
     Arc::new(move |key| nodes.contains(key))
 }
 
+/// 两个节点之间能不能经这个中继通信（发送方，接收方）。见 [`Config::links`]。
+pub type Links = Arc<dyn Fn(&NodeKey, &NodeKey) -> bool + Send + Sync>;
+
+/// [`Links`] 的判断结果在一条连接里记多久。成员表变了（有人被移出），最多这么久之后生效
+const LINK_CACHE: Duration = Duration::from_secs(10);
+
 /// 中继服务的配置。
 pub struct Config {
     /// 中继自己的身份。节点事先知道它的公钥（协调服务在 Welcome 里告诉节点）。
     pub secret: NodeSecret,
     /// 允许使用这个中继的节点。
     pub allow: Allow,
+    /// 两个节点之间能不能转发。`None` 是只要都在 `allow` 里就行；托管很多网络时，
+    /// 只在同一个网络的成员之间转发。
+    pub links: Option<Links>,
+    /// 每个节点每秒最多让中继转发多少字节，超了就丢（像 UDP 一样）。`None` 是不限。
+    pub rate: Option<u64>,
 }
 
 struct Client {
@@ -63,6 +76,8 @@ struct Client {
 struct Shared {
     secret: NodeSecret,
     allow: Allow,
+    links: Option<Links>,
+    rate: Option<u64>,
     clients: Mutex<HashMap<NodeKey, Client>>,
     next_id: AtomicU64,
     admission: Arc<Admission>,
@@ -79,6 +94,8 @@ pub async fn serve(config: Config, listener: TcpListener) -> io::Result<()> {
     let shared = Arc::new(Shared {
         secret: config.secret,
         allow: config.allow,
+        links: config.links,
+        rate: config.rate,
         clients: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(0),
         admission: Admission::new(PENDING_PER_SOURCE),
@@ -151,6 +168,8 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
         }
     });
 
+    let mut links: HashMap<NodeKey, (bool, Instant)> = HashMap::new();
+    let mut budget = shared.rate.map(ByteBucket::new);
     loop {
         let bytes = match tokio::time::timeout(IDLE_TIMEOUT, reader.recv()).await {
             Ok(Ok(bytes)) => bytes,
@@ -158,6 +177,28 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
         };
         match ClientFrame::decode(&bytes) {
             Ok(ClientFrame::Send { dst, datagram }) => {
+                if let Some(bucket) = &mut budget
+                    && !bucket.take(datagram.len())
+                {
+                    continue;
+                }
+                if let Some(check) = &shared.links {
+                    let now = Instant::now();
+                    let allowed = match links.get(&dst) {
+                        Some((allowed, at)) if now.duration_since(*at) < LINK_CACHE => *allowed,
+                        _ => {
+                            let allowed = check(&key, &dst);
+                            if links.len() > 1024 {
+                                links.clear();
+                            }
+                            links.insert(dst, (allowed, now));
+                            allowed
+                        }
+                    };
+                    if !allowed {
+                        continue;
+                    }
+                }
                 let clients = shared.clients();
                 if let Some(target) = clients.get(&dst) {
                     // 满了就丢：一个读得慢的节点不能拖住别人
@@ -185,6 +226,39 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
     debug!(node = %key, "节点离开中继");
 }
 
+/// 按字节的令牌桶：每秒补 `rate` 个，最多攒一秒的量
+struct ByteBucket {
+    rate: u64,
+    tokens: u64,
+    refilled: Instant,
+}
+
+impl ByteBucket {
+    fn new(rate: u64) -> Self {
+        Self {
+            rate,
+            tokens: rate,
+            refilled: Instant::now(),
+        }
+    }
+
+    fn take(&mut self, bytes: usize) -> bool {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.refilled);
+        let refill = (self.rate as u128 * elapsed.as_micros() / 1_000_000) as u64;
+        if refill > 0 {
+            self.tokens = (self.tokens + refill).min(self.rate);
+            self.refilled = now;
+        }
+        let bytes = bytes as u64;
+        if self.tokens < bytes {
+            return false;
+        }
+        self.tokens -= bytes;
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use meshora_proto::noise::{NoiseReader, NoiseWriter};
@@ -196,6 +270,14 @@ mod tests {
     type Conn = (NoiseReader<TcpStream>, NoiseWriter<TcpStream>);
 
     async fn start(nodes: &[&NodeSecret]) -> (SocketAddr, NodeKey) {
+        start_with(nodes, None, None).await
+    }
+
+    async fn start_with(
+        nodes: &[&NodeSecret],
+        links: Option<Links>,
+        rate: Option<u64>,
+    ) -> (SocketAddr, NodeKey) {
         let secret = NodeSecret::generate();
         let key = secret.public_key();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -203,9 +285,76 @@ mod tests {
         let config = Config {
             secret,
             allow: allow_list(nodes.iter().map(|n| n.public_key()).collect()),
+            links,
+            rate,
         };
         tokio::spawn(serve(config, listener));
         (addr, key)
+    }
+
+    #[tokio::test]
+    async fn only_nodes_of_the_same_network_reach_each_other() {
+        let (a, b, c) = (
+            NodeSecret::generate(),
+            NodeSecret::generate(),
+            NodeSecret::generate(),
+        );
+        // a 和 b 在一个网络，c 在另一个
+        let (ka, kb) = (a.public_key(), b.public_key());
+        let links: Links = Arc::new(move |x, y| (*x == ka && *y == kb) || (*x == kb && *y == ka));
+        let (addr, relay) = start_with(&[&a, &b, &c], Some(links), None).await;
+        let mut conn_a = connect(addr, &relay, &a, true).await;
+        let mut conn_b = connect(addr, &relay, &b, true).await;
+        let mut conn_c = connect(addr, &relay, &c, true).await;
+        sync(&mut conn_b).await;
+        sync(&mut conn_c).await;
+
+        for dst in [c.public_key(), b.public_key()] {
+            send(
+                &mut conn_a,
+                ClientFrame::Send {
+                    dst,
+                    datagram: vec![9],
+                },
+            )
+            .await;
+        }
+        assert_eq!(
+            recv(&mut conn_b).await,
+            ServerFrame::Recv {
+                src: a.public_key(),
+                datagram: vec![9]
+            }
+        );
+        sync(&mut conn_a).await;
+        let nothing = tokio::time::timeout(Duration::from_millis(200), conn_c.0.recv()).await;
+        assert!(nothing.is_err(), "别的网络的节点收不到");
+    }
+
+    #[tokio::test]
+    async fn a_node_over_its_rate_is_dropped() {
+        let (a, b) = (NodeSecret::generate(), NodeSecret::generate());
+        // 每秒 1000 字节：一次发 3 个 600 字节的，只有第一个过得去
+        let (addr, relay) = start_with(&[&a, &b], None, Some(1000)).await;
+        let mut conn_a = connect(addr, &relay, &a, true).await;
+        let mut conn_b = connect(addr, &relay, &b, true).await;
+        sync(&mut conn_b).await;
+        for n in 0..3u8 {
+            send(
+                &mut conn_a,
+                ClientFrame::Send {
+                    dst: b.public_key(),
+                    datagram: vec![n; 600],
+                },
+            )
+            .await;
+        }
+        sync(&mut conn_a).await;
+        assert!(
+            matches!(recv(&mut conn_b).await, ServerFrame::Recv { datagram, .. } if datagram[0] == 0)
+        );
+        let nothing = tokio::time::timeout(Duration::from_millis(200), conn_b.0.recv()).await;
+        assert!(nothing.is_err(), "超出速率的被丢掉");
     }
 
     async fn connect(addr: SocketAddr, relay: &NodeKey, secret: &NodeSecret, hello: bool) -> Conn {

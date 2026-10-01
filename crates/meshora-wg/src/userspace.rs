@@ -426,6 +426,8 @@ mod tests {
             meshora_relay::Config {
                 secret: relay_secret,
                 allow: meshora_relay::allow_list(vec![a.key, b.key]),
+                links: None,
+                rate: None,
             },
             listener,
         ));

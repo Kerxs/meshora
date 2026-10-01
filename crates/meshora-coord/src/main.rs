@@ -6,6 +6,8 @@
 //!     --relay-listen 0.0.0.0:7444 --relay-public 203.0.113.5:7444 \
 //!     --state coord.state
 //! ```
+//!
+//! 托管很多网络（客户端里"建网络"连的就是这种）：把 `--state` 换成 `--hub /var/lib/meshora`。
 
 use std::io::{self, Read};
 use std::net::SocketAddr;
@@ -14,7 +16,7 @@ use std::process::ExitCode;
 
 use ipnet::Ipv4Net;
 use lexopt::prelude::*;
-use meshora_coord::{Config, Coordinator};
+use meshora_coord::{Config, Coordinator, HubConfig, HubLimits};
 use meshora_proto::control::RelayInfo;
 use meshora_types::{NodeKey, NodeSecret};
 use tokio::net::{TcpListener, UdpSocket};
@@ -29,7 +31,11 @@ const USAGE: &str = "\
   --state <文件>            状态文件：存邀请码和凭邀请码加入的成员。给了它，朋友拿着
                             带邀请码的网络码就能自己加入，不用重启。第一次启动时生成邀请码
   --node <公钥>             名单里的节点，可以写多次。overlay 地址按这个顺序分配。
-                            --state 和 --node 至少要有一个
+  --hub <目录>              托管很多网络：谁都能用客户端来建网络、自己当网主，每个网络一个状态文件
+                            存在这个目录里。--state、--node、--hub 至少要有一个
+  --hub-networks-per-owner <个数>  一个人最多建几个网络，默认 3
+  --hub-members <人数>      一个网络最多多少人，默认 64
+  --hub-relay-rate <KB/s>   同一进程里的中继给每个节点的转发速率上限，默认 4096
   --overlay <网段>          overlay 网段，默认 100.64.0.0/10
   --probe <地址:端口>       端点探测监听的 UDP 地址
   --probe-public <地址:端口> 节点从外面访问探测端点用的地址，默认同 --probe
@@ -60,6 +66,8 @@ struct Args {
     relay_listen: Option<SocketAddr>,
     relay_public: Option<SocketAddr>,
     relays: Vec<RelayInfo>,
+    hub: Option<PathBuf>,
+    limits: HubLimits,
     verbose: bool,
 }
 
@@ -127,6 +135,8 @@ fn parse() -> Result<Command, lexopt::Error> {
         relay_listen: None,
         relay_public: None,
         relays: Vec::new(),
+        hub: None,
+        limits: HubLimits::default(),
         verbose: false,
     };
     while let Some(arg) = parser.next()? {
@@ -153,6 +163,14 @@ fn parse() -> Result<Command, lexopt::Error> {
             Long("relay-listen") => args.relay_listen = Some(parser.value()?.parse()?),
             Long("relay-public") => args.relay_public = Some(parser.value()?.parse()?),
             Long("relay") => args.relays.push(parse_relay(&parser.value()?.string()?)?),
+            Long("hub") => args.hub = Some(PathBuf::from(parser.value()?)),
+            Long("hub-networks-per-owner") => {
+                args.limits.networks_per_owner = parser.value()?.parse()?;
+            }
+            Long("hub-members") => args.limits.members_per_network = parser.value()?.parse()?,
+            Long("hub-relay-rate") => {
+                args.limits.relay_rate = parser.value()?.parse::<u64>()? * 1024;
+            }
             Short('v') | Long("verbose") => args.verbose = true,
             Long("help") | Short('h') => return Err(USAGE.into()),
             _ => return Err(arg.unexpected()),
@@ -160,8 +178,8 @@ fn parse() -> Result<Command, lexopt::Error> {
     }
     args.key = key.ok_or("缺少 --key")?;
     args.listen = listen.ok_or("缺少 --listen")?;
-    if args.nodes.is_empty() && args.state.is_none() {
-        return Err("--state 和 --node 至少要有一个：不然谁都加入不了".into());
+    if args.nodes.is_empty() && args.state.is_none() && args.hub.is_none() {
+        return Err("--state、--node、--hub 至少要有一个：不然谁都加入不了".into());
     }
     Ok(Command::Serve(Box::new(args)))
 }
@@ -337,6 +355,12 @@ async fn run(args: Args) -> Result<(), String> {
         None => None,
     };
 
+    let hub = args.hub.map(|dir| HubConfig {
+        dir,
+        limits: args.limits.clone(),
+    });
+    let hosting = hub.is_some();
+    let legacy = !args.nodes.is_empty() || args.state.is_some();
     let coordinator = Coordinator::new(Config {
         secret: secret.clone(),
         nodes: args.nodes,
@@ -344,15 +368,19 @@ async fn run(args: Args) -> Result<(), String> {
         overlay: args.overlay,
         probe,
         relays,
+        hub,
     })
     .map_err(|err| format!("启动失败：{err}"))?;
 
     if let Some((relay_listener, addr, public)) = relay {
         // 中继用协调服务同一把密钥：两边的 Noise 前导不同（通道类型 C 和 R），握手互不相通。
         // 成员表和协调服务共用：凭邀请码新加入的成员马上也能用中继
+        // 托管很多网络时：只在同一个网络的成员之间转发，每个节点限速
         let relay_config = meshora_relay::Config {
             secret: secret.clone(),
             allow: coordinator.members(),
+            links: hosting.then(|| coordinator.links()),
+            rate: hosting.then_some(args.limits.relay_rate),
         };
         tokio::spawn(meshora_relay::serve(relay_config, relay_listener));
         info!(%addr, %public, "同一进程里的中继已启动");
@@ -368,14 +396,22 @@ async fn run(args: Args) -> Result<(), String> {
             || format!("<服务器的公网地址>:{port}"),
             |ip| SocketAddr::new(ip, port).to_string(),
         );
-    let invite = coordinator
-        .invite()
-        .map(|invite| format!("#{invite}"))
-        .unwrap_or_default();
-    info!(
-        "网络码（发给要加入的朋友）：{}@{addr}{invite}",
-        secret.public_key()
-    );
+    if legacy {
+        let invite = coordinator
+            .invite()
+            .map(|invite| format!("#{invite}"))
+            .unwrap_or_default();
+        info!(
+            "网络码（发给要加入的朋友）：{}@{addr}{invite}",
+            secret.public_key()
+        );
+    }
+    if hosting {
+        info!(
+            "服务器地址（填进客户端的「建网络 · 用我的服务器」）：{}@{addr}",
+            secret.public_key()
+        );
+    }
 
     tokio::select! {
         result = coordinator.serve(listener, probe_socket) => {

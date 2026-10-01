@@ -35,6 +35,7 @@ async fn start_coord(nodes: &[&NodeSecret], relays: Vec<RelayInfo>) -> Coord {
         overlay: "100.64.0.0/10".parse().unwrap(),
         probe: Some(probe.local_addr().unwrap()),
         relays,
+        hub: None,
     };
     tokio::spawn(meshora_coord::serve(config, listener, Some(probe)));
     Coord { addr, key }
@@ -48,6 +49,8 @@ async fn start_relay(nodes: &[&NodeSecret]) -> RelayInfo {
     let config = meshora_relay::Config {
         secret,
         allow: meshora_relay::allow_list(nodes.iter().map(|n| n.public_key()).collect()),
+        links: None,
+        rate: None,
     };
     tokio::spawn(meshora_relay::serve(config, listener));
     RelayInfo { key, addr }
@@ -408,6 +411,7 @@ async fn a_member_removed_from_the_state_file_is_told_and_stops() {
         overlay: "100.64.0.0/10".parse().unwrap(),
         probe: None,
         relays: vec![],
+        hub: None,
     })
     .unwrap();
     let invite = coordinator.invite();

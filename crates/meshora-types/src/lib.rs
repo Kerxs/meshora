@@ -10,11 +10,13 @@
 
 mod invite;
 mod key;
+mod network;
 mod path;
 mod secret;
 
 pub use invite::{Invite, ParseInviteError};
 pub use key::{NodeKey, ParseNodeKeyError};
+pub use network::{NetworkId, ParseNetworkIdError};
 pub use path::Path;
 pub use secret::NodeSecret;
 

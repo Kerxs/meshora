@@ -16,7 +16,7 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 
-use meshora_types::{Invite, NodeKey};
+use meshora_types::{Invite, NetworkId, NodeKey};
 
 use crate::codec::{DecodeError, Reader, Writer};
 
@@ -65,6 +65,76 @@ pub struct RelayInfo {
     pub addr: SocketAddr,
 }
 
+/// 网主管理自己的网络（hub 模式）。只有网主发得动，别人发了会收到错误。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdminRequest {
+    /// 把一个成员移出网络。移不了网主自己。
+    Kick {
+        /// 要移出的成员。
+        member: NodeKey,
+    },
+    /// 新建一个带限制的邀请码：只能用几次，或者几小时后过期（至少给一个）。
+    NewInvite {
+        /// 能用几次。
+        uses: Option<u32>,
+        /// 多少小时后过期。
+        hours: Option<u32>,
+    },
+    /// 作废一个带限制的邀请码。
+    RevokeInvite {
+        /// 要作废的邀请码。
+        code: Invite,
+    },
+    /// 换掉长期有效的邀请码：旧的网络码随之失效，已经加入的人不受影响。
+    RotateInvite,
+    /// 改网络的名字。
+    Rename {
+        /// 新名字，协调服务会整理（见 [`clean_name`]）。
+        name: String,
+    },
+    /// 解散网络：所有成员被断开，网络删掉。
+    Delete,
+}
+
+/// 网主看到的一个成员。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RosterMember {
+    /// 公钥。
+    pub key: NodeKey,
+    /// overlay 地址。
+    pub overlay_ip: Ipv4Addr,
+    /// 它给自己起的名字。
+    pub name: String,
+    /// 此刻连着协调服务。
+    pub online: bool,
+    /// 是网主。
+    pub owner: bool,
+}
+
+/// 网主看到的一个带限制的邀请码。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RosterInvite {
+    /// 邀请码。
+    pub code: Invite,
+    /// 还能用几次，`None` 是不限次数。
+    pub uses_left: Option<u32>,
+    /// 过期时间（UNIX 秒），`None` 是不过期。
+    pub expires: Option<u64>,
+}
+
+/// 网主看到的整个网络：成员、邀请码。有变化就推一份新的。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Roster {
+    /// 网络的名字。
+    pub name: String,
+    /// 长期有效的邀请码。
+    pub invite: Option<Invite>,
+    /// 全部成员。
+    pub members: Vec<RosterMember>,
+    /// 带限制的邀请码。
+    pub invites: Vec<RosterInvite>,
+}
+
 /// 节点发给协调服务的消息。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientMessage {
@@ -87,6 +157,21 @@ pub enum ClientMessage {
     Ping,
     /// 本机给别人看的名字（整个替换，空串是不起名字）。协调服务会整理它，见 [`clean_name`]。
     SetName(String),
+    /// 握手后的第一条消息（代替 [`Hello`](Self::Hello)）：进 hub 里的某个网络。
+    Join {
+        /// 哪个网络。
+        network: NetworkId,
+        /// 邀请码。已经在网里的带不带都一样。
+        invite: Option<Invite>,
+    },
+    /// 握手后的第一条消息（代替 [`Hello`](Self::Hello)）：在 hub 里新建一个网络，自己当网主。
+    /// 协调服务回 [`ServerMessage::Created`]，接着和加入一样回 Welcome、NetMap。
+    Create {
+        /// 网络的名字。
+        name: String,
+    },
+    /// 网主管理网络。回 [`ServerMessage::AdminReply`]。
+    Admin(AdminRequest),
 }
 
 /// 协调服务发给节点的消息。
@@ -122,6 +207,17 @@ pub enum ServerMessage {
         /// 原因，给人看的。
         reason: String,
     },
+    /// 网络建好了（回应 [`ClientMessage::Create`]）。紧接着是 Welcome。
+    Created {
+        /// 新网络的 ID。
+        network: NetworkId,
+        /// 新网络长期有效的邀请码。
+        invite: Invite,
+    },
+    /// 给网主的成员和邀请码清单。
+    Roster(Roster),
+    /// 管理请求的结果：成功时可能带一个新邀请码（新建、换码），失败时是原因。
+    AdminReply(Result<Option<Invite>, String>),
 }
 
 mod tag {
@@ -130,12 +226,128 @@ mod tag {
     pub const CALL_ME_MAYBE: u8 = 3;
     pub const PING: u8 = 4;
     pub const SET_NAME: u8 = 5;
+    pub const JOIN: u8 = 6;
+    pub const CREATE: u8 = 7;
+    pub const ADMIN: u8 = 8;
 
     pub const WELCOME: u8 = 1;
     pub const NET_MAP: u8 = 2;
     pub const SERVER_CALL_ME_MAYBE: u8 = 3;
     pub const PONG: u8 = 4;
     pub const REJECTED: u8 = 5;
+    pub const CREATED: u8 = 6;
+    pub const ROSTER: u8 = 7;
+    pub const ADMIN_REPLY: u8 = 8;
+
+    pub const KICK: u8 = 1;
+    pub const NEW_INVITE: u8 = 2;
+    pub const REVOKE_INVITE: u8 = 3;
+    pub const ROTATE_INVITE: u8 = 4;
+    pub const RENAME: u8 = 5;
+    pub const DELETE: u8 = 6;
+}
+
+fn write_invite(w: &mut Writer, invite: &Invite) {
+    w.bytes(invite.as_bytes());
+}
+
+fn read_invite(r: &mut Reader) -> Result<Invite, DecodeError> {
+    Ok(Invite::from_bytes(r.array()?))
+}
+
+fn read_network(r: &mut Reader) -> Result<NetworkId, DecodeError> {
+    Ok(NetworkId::from_bytes(r.array()?))
+}
+
+impl AdminRequest {
+    fn write(&self, w: &mut Writer) {
+        match self {
+            Self::Kick { member } => {
+                w.u8(tag::KICK);
+                w.key(member);
+            }
+            Self::NewInvite { uses, hours } => {
+                w.u8(tag::NEW_INVITE);
+                w.option(uses.as_ref(), |w, n| w.u32(*n));
+                w.option(hours.as_ref(), |w, n| w.u32(*n));
+            }
+            Self::RevokeInvite { code } => {
+                w.u8(tag::REVOKE_INVITE);
+                write_invite(w, code);
+            }
+            Self::RotateInvite => w.u8(tag::ROTATE_INVITE),
+            Self::Rename { name } => {
+                w.u8(tag::RENAME);
+                w.string(name);
+            }
+            Self::Delete => w.u8(tag::DELETE),
+        }
+    }
+
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        Ok(match r.u8()? {
+            tag::KICK => Self::Kick { member: r.key()? },
+            tag::NEW_INVITE => Self::NewInvite {
+                uses: r.option(|r| r.u32())?,
+                hours: r.option(|r| r.u32())?,
+            },
+            tag::REVOKE_INVITE => Self::RevokeInvite {
+                code: read_invite(r)?,
+            },
+            tag::ROTATE_INVITE => Self::RotateInvite,
+            tag::RENAME => Self::Rename { name: r.string()? },
+            tag::DELETE => Self::Delete,
+            other => return Err(DecodeError::UnknownType(other)),
+        })
+    }
+}
+
+impl Roster {
+    fn write(&self, w: &mut Writer) {
+        w.string(&self.name);
+        w.option(self.invite.as_ref(), write_invite);
+        w.list(&self.members, |w, m| {
+            w.key(&m.key);
+            w.ipv4(m.overlay_ip);
+            w.string(&m.name);
+            w.u8(u8::from(m.online) | (u8::from(m.owner) << 1));
+        });
+        w.list(&self.invites, |w, i| {
+            write_invite(w, &i.code);
+            w.option(i.uses_left.as_ref(), |w, n| w.u32(*n));
+            w.option(i.expires.as_ref(), |w, n| w.u64(*n));
+        });
+    }
+
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            name: r.string()?,
+            invite: r.option(read_invite)?,
+            members: r.list(|r| {
+                let key = r.key()?;
+                let overlay_ip = r.ipv4()?;
+                let name = r.string()?;
+                let flags = r.u8()?;
+                if flags > 3 {
+                    return Err(DecodeError::Invalid("成员标记只有两位"));
+                }
+                Ok(RosterMember {
+                    key,
+                    overlay_ip,
+                    name,
+                    online: flags & 1 != 0,
+                    owner: flags & 2 != 0,
+                })
+            })?,
+            invites: r.list(|r| {
+                Ok(RosterInvite {
+                    code: read_invite(r)?,
+                    uses_left: r.option(|r| r.u32())?,
+                    expires: r.option(|r| r.u64())?,
+                })
+            })?,
+        })
+    }
 }
 
 fn write_endpoints(w: &mut Writer, endpoints: &[SocketAddr]) {
@@ -170,6 +382,19 @@ impl ClientMessage {
                 w.u8(tag::SET_NAME);
                 w.string(name);
             }
+            Self::Join { network, invite } => {
+                w.u8(tag::JOIN);
+                w.bytes(network.as_bytes());
+                w.option(invite.as_ref(), write_invite);
+            }
+            Self::Create { name } => {
+                w.u8(tag::CREATE);
+                w.string(name);
+            }
+            Self::Admin(request) => {
+                w.u8(tag::ADMIN);
+                request.write(&mut w);
+            }
         }
         w.finish()
     }
@@ -191,6 +416,12 @@ impl ClientMessage {
             tag::CALL_ME_MAYBE => Self::CallMeMaybe { peer: r.key()? },
             tag::PING => Self::Ping,
             tag::SET_NAME => Self::SetName(r.string()?),
+            tag::JOIN => Self::Join {
+                network: read_network(&mut r)?,
+                invite: r.option(read_invite)?,
+            },
+            tag::CREATE => Self::Create { name: r.string()? },
+            tag::ADMIN => Self::Admin(AdminRequest::read(&mut r)?),
             other => return Err(DecodeError::UnknownType(other)),
         };
         r.finish()?;
@@ -243,6 +474,28 @@ impl ServerMessage {
                 w.u8(tag::REJECTED);
                 w.string(reason);
             }
+            Self::Created { network, invite } => {
+                w.u8(tag::CREATED);
+                w.bytes(network.as_bytes());
+                write_invite(&mut w, invite);
+            }
+            Self::Roster(roster) => {
+                w.u8(tag::ROSTER);
+                roster.write(&mut w);
+            }
+            Self::AdminReply(result) => {
+                w.u8(tag::ADMIN_REPLY);
+                match result {
+                    Ok(invite) => {
+                        w.u8(0);
+                        w.option(invite.as_ref(), write_invite);
+                    }
+                    Err(reason) => {
+                        w.u8(1);
+                        w.string(reason);
+                    }
+                }
+            }
         }
         w.finish()
     }
@@ -293,6 +546,16 @@ impl ServerMessage {
             tag::REJECTED => Self::Rejected {
                 reason: r.string()?,
             },
+            tag::CREATED => Self::Created {
+                network: read_network(&mut r)?,
+                invite: read_invite(&mut r)?,
+            },
+            tag::ROSTER => Self::Roster(Roster::read(&mut r)?),
+            tag::ADMIN_REPLY => Self::AdminReply(match r.u8()? {
+                0 => Ok(r.option(read_invite)?),
+                1 => Err(r.string()?),
+                _ => return Err(DecodeError::Invalid("管理结果的标记只能是 0 或 1")),
+            }),
             other => return Err(DecodeError::UnknownType(other)),
         };
         r.finish()?;
@@ -328,6 +591,34 @@ mod tests {
             ClientMessage::Ping,
             ClientMessage::SetName("阿杰的台式机".into()),
             ClientMessage::SetName(String::new()),
+            ClientMessage::Join {
+                network: NetworkId::from_bytes([4; 16]),
+                invite: Some(Invite::from_bytes([5; 16])),
+            },
+            ClientMessage::Join {
+                network: NetworkId::from_bytes([4; 16]),
+                invite: None,
+            },
+            ClientMessage::Create {
+                name: "周末开黑".into(),
+            },
+            ClientMessage::Admin(AdminRequest::Kick { member: key(2) }),
+            ClientMessage::Admin(AdminRequest::NewInvite {
+                uses: Some(1),
+                hours: None,
+            }),
+            ClientMessage::Admin(AdminRequest::NewInvite {
+                uses: None,
+                hours: Some(24),
+            }),
+            ClientMessage::Admin(AdminRequest::RevokeInvite {
+                code: Invite::from_bytes([6; 16]),
+            }),
+            ClientMessage::Admin(AdminRequest::RotateInvite),
+            ClientMessage::Admin(AdminRequest::Rename {
+                name: "新名字".into(),
+            }),
+            ClientMessage::Admin(AdminRequest::Delete),
         ];
         for message in messages {
             assert_eq!(ClientMessage::decode(&message.encode()), Ok(message));
@@ -368,6 +659,38 @@ mod tests {
             ServerMessage::Rejected {
                 reason: "这把公钥不在白名单里".into(),
             },
+            ServerMessage::Created {
+                network: NetworkId::from_bytes([4; 16]),
+                invite: Invite::from_bytes([5; 16]),
+            },
+            ServerMessage::Roster(Roster {
+                name: "周末开黑".into(),
+                invite: Some(Invite::from_bytes([5; 16])),
+                members: vec![
+                    RosterMember {
+                        key: key(1),
+                        overlay_ip: Ipv4Addr::new(100, 64, 0, 1),
+                        name: "阿杰".into(),
+                        online: true,
+                        owner: true,
+                    },
+                    RosterMember {
+                        key: key(2),
+                        overlay_ip: Ipv4Addr::new(100, 64, 0, 2),
+                        name: String::new(),
+                        online: false,
+                        owner: false,
+                    },
+                ],
+                invites: vec![RosterInvite {
+                    code: Invite::from_bytes([6; 16]),
+                    uses_left: Some(1),
+                    expires: Some(1_790_000_000),
+                }],
+            }),
+            ServerMessage::AdminReply(Ok(None)),
+            ServerMessage::AdminReply(Ok(Some(Invite::from_bytes([7; 16])))),
+            ServerMessage::AdminReply(Err("只有网主能管理网络".into())),
         ];
         for message in messages {
             assert_eq!(ServerMessage::decode(&message.encode()), Ok(message));

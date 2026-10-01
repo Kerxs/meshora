@@ -1,6 +1,11 @@
 use std::time::Duration;
 
+use std::net::Ipv4Addr;
+use std::time::UNIX_EPOCH;
+
+use meshora_proto::control::PeerInfo;
 use meshora_proto::noise::{NoiseReader, NoiseWriter};
+use meshora_types::NetworkId;
 
 use super::*;
 
@@ -26,6 +31,7 @@ async fn start(nodes: &[&NodeSecret]) -> Coord {
         overlay: "100.64.0.0/10".parse().unwrap(),
         probe: Some(probe),
         relays: vec![],
+        hub: None,
     };
     tokio::spawn(serve(config, listener, Some(probe_socket)));
     Coord { addr, probe, key }
@@ -356,7 +362,7 @@ async fn probe_answers_members_with_their_observed_address() {
 fn addresses_follow_the_member_list() {
     let keys: Vec<NodeKey> = (1..=3).map(|n| NodeKey::from_bytes([n; 32])).collect();
     let members = assign(&keys, "100.64.0.0/10".parse().unwrap()).unwrap();
-    let ips: Vec<Ipv4Addr> = members.iter().map(|(_, ip)| *ip).collect();
+    let ips: Vec<Ipv4Addr> = members.iter().map(|member| member.ip).collect();
     assert_eq!(
         ips,
         [
@@ -407,6 +413,7 @@ fn state_config(secret: NodeSecret, nodes: Vec<NodeKey>, state: &TempState) -> C
         overlay: "100.64.0.0/10".parse().unwrap(),
         probe: None,
         relays: vec![],
+        hub: None,
     }
 }
 
@@ -615,6 +622,9 @@ fn the_member_check_for_the_relay_sees_new_members() {
     let invite = coordinator.invite().unwrap();
     coordinator
         .shared
+        .legacy
+        .as_ref()
+        .unwrap()
         .admit(&friend.public_key(), Some(invite))
         .unwrap();
     assert!(members(&friend.public_key()));
@@ -837,4 +847,319 @@ async fn an_invite_added_while_running_takes_effect() {
 #[test]
 fn a_limited_invite_needs_a_limit() {
     assert!(limited_invite(None, None).is_none());
+}
+
+// ---------- hub 模式 ----------
+
+/// hub 模式的协调服务，数据放在 `state` 的目录里
+async fn start_hub(state: &TempState, limits: HubLimits) -> (Coord, meshora_relay::Links) {
+    let secret = NodeSecret::generate();
+    let key = secret.public_key();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let probe_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let probe = probe_socket.local_addr().unwrap();
+    let coordinator = Coordinator::new(Config {
+        secret,
+        nodes: vec![],
+        state: None,
+        overlay: "100.64.0.0/10".parse().unwrap(),
+        probe: Some(probe),
+        relays: vec![],
+        hub: Some(HubConfig {
+            dir: state.0.parent().unwrap().to_path_buf(),
+            limits,
+        }),
+    })
+    .unwrap();
+    let links = coordinator.links();
+    tokio::spawn(coordinator.serve(listener, Some(probe_socket)));
+    (Coord { addr, probe, key }, links)
+}
+
+/// 建一个网络：收下 Created、Welcome、第一份 NetMap 和成员清单
+async fn create(coord: &Coord, owner: &NodeSecret, name: &str) -> (Client, NetworkId, Invite) {
+    let mut client = connect(coord, owner).await;
+    send(&mut client, ClientMessage::Create { name: name.into() }).await;
+    let ServerMessage::Created { network, invite } = recv(&mut client).await else {
+        panic!("应该先收到 Created");
+    };
+    let ServerMessage::Welcome { overlay_ip, .. } = recv(&mut client).await else {
+        panic!("接着是 Welcome");
+    };
+    assert_eq!(overlay_ip, Ipv4Addr::new(100, 64, 0, 1), "网主拿第一个地址");
+    (client, network, invite)
+}
+
+/// 凭网络 ID 和邀请码加入：返回连接和 Welcome
+async fn join_hub(
+    coord: &Coord,
+    secret: &NodeSecret,
+    network: NetworkId,
+    invite: Option<Invite>,
+) -> (Client, ServerMessage) {
+    let mut client = connect(coord, secret).await;
+    send(&mut client, ClientMessage::Join { network, invite }).await;
+    let first = recv(&mut client).await;
+    (client, first)
+}
+
+/// 一直收，直到收到满足条件的消息（中间夹着的 NetMap、成员清单跳过）
+async fn recv_until(
+    client: &mut Client,
+    mut wanted: impl FnMut(&ServerMessage) -> bool,
+) -> ServerMessage {
+    loop {
+        let message = recv(client).await;
+        if wanted(&message) {
+            return message;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_hub_network_is_created_joined_and_seen_by_its_owner() {
+    let state = TempState::new("hub-create");
+    let (coord, _) = start_hub(&state, HubLimits::default()).await;
+    let owner = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let (mut owner_client, network, invite) = create(&coord, &owner, "周末开黑").await;
+
+    let (_friend_client, welcome) = join_hub(&coord, &friend, network, Some(invite)).await;
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { overlay_ip, .. } if overlay_ip == Ipv4Addr::new(100, 64, 0, 2)),
+        "{welcome:?}"
+    );
+
+    // 网主会收到两样：有朋友的 NetMap，和两个人都在线的成员清单。它们合并着发、先后不定，一起等
+    let mut net_map = None;
+    let mut roster = None;
+    while net_map.is_none() || roster.is_none() {
+        match recv(&mut owner_client).await {
+            ServerMessage::NetMap { peers } if peers.len() == 1 => net_map = Some(peers),
+            ServerMessage::Roster(r)
+                if r.members.len() == 2 && r.members.iter().all(|m| m.online) =>
+            {
+                roster = Some(r);
+            }
+            _ => {}
+        }
+    }
+    // 网主的 NetMap 里有朋友
+    assert_eq!(net_map.unwrap()[0].key, friend.public_key());
+    // 成员清单：两个人，都在线，自己是网主
+    let roster = roster.unwrap();
+    assert_eq!(roster.name, "周末开黑");
+    assert_eq!(roster.invite, Some(invite));
+    assert!(
+        roster
+            .members
+            .iter()
+            .any(|m| m.key == owner.public_key() && m.owner)
+    );
+    assert!(
+        roster
+            .members
+            .iter()
+            .any(|m| m.key == friend.public_key() && !m.owner)
+    );
+}
+
+#[tokio::test]
+async fn hub_networks_do_not_see_each_other() {
+    let state = TempState::new("hub-isolated");
+    let (coord, links) = start_hub(&state, HubLimits::default()).await;
+    let (a, b, c) = (
+        NodeSecret::generate(),
+        NodeSecret::generate(),
+        NodeSecret::generate(),
+    );
+    let (_a_client, network_a, invite_a) = create(&coord, &a, "A").await;
+    let (_c_client, network_c, _) = create(&coord, &c, "C").await;
+    assert_ne!(network_a, network_c);
+
+    let (mut b_client, _) = join_hub(&coord, &b, network_a, Some(invite_a)).await;
+    let net_map = recv_until(&mut b_client, |m| matches!(m, ServerMessage::NetMap { .. })).await;
+    let ServerMessage::NetMap { peers } = net_map else {
+        unreachable!()
+    };
+    assert_eq!(peers.len(), 1, "b 只看得到同一个网络里的 a");
+    assert_eq!(peers[0].key, a.public_key());
+
+    // 中继只在同一个网络里转发
+    assert!(links(&a.public_key(), &b.public_key()));
+    assert!(!links(&a.public_key(), &c.public_key()));
+    assert!(!links(&b.public_key(), &c.public_key()));
+
+    // 拿着 A 的邀请码进不了 C
+    let (_, rejected) = join_hub(&coord, &NodeSecret::generate(), network_c, Some(invite_a)).await;
+    assert!(
+        matches!(rejected, ServerMessage::Rejected { .. }),
+        "{rejected:?}"
+    );
+}
+
+#[tokio::test]
+async fn only_the_owner_can_manage_and_the_owner_can_do_everything() {
+    let state = TempState::new("hub-admin");
+    let (coord, _) = start_hub(&state, HubLimits::default()).await;
+    let owner = NodeSecret::generate();
+    let friend = NodeSecret::generate();
+    let (mut owner_client, network, invite) = create(&coord, &owner, "网").await;
+    let (mut friend_client, _) = join_hub(&coord, &friend, network, Some(invite)).await;
+
+    let is_reply = |m: &ServerMessage| matches!(m, ServerMessage::AdminReply(_));
+    // 不是网主：管不了
+    send(
+        &mut friend_client,
+        ClientMessage::Admin(AdminRequest::Delete),
+    )
+    .await;
+    let reply = recv_until(&mut friend_client, is_reply).await;
+    assert!(
+        matches!(reply, ServerMessage::AdminReply(Err(_))),
+        "{reply:?}"
+    );
+
+    // 新建一个一次性邀请码，陌生人用它进来
+    send(
+        &mut owner_client,
+        ClientMessage::Admin(AdminRequest::NewInvite {
+            uses: Some(1),
+            hours: None,
+        }),
+    )
+    .await;
+    let ServerMessage::AdminReply(Ok(Some(once))) = recv_until(&mut owner_client, is_reply).await
+    else {
+        panic!("新建邀请码应该成功");
+    };
+    let stranger = NodeSecret::generate();
+    let (_stranger_client, welcome) = join_hub(&coord, &stranger, network, Some(once)).await;
+    assert!(matches!(welcome, ServerMessage::Welcome { .. }));
+    // 用过了，第二个人进不来
+    let (_, rejected) = join_hub(&coord, &NodeSecret::generate(), network, Some(once)).await;
+    assert!(matches!(rejected, ServerMessage::Rejected { .. }));
+
+    // 换掉长期邀请码：旧的作废
+    send(
+        &mut owner_client,
+        ClientMessage::Admin(AdminRequest::RotateInvite),
+    )
+    .await;
+    let ServerMessage::AdminReply(Ok(Some(rotated))) =
+        recv_until(&mut owner_client, is_reply).await
+    else {
+        panic!("换码应该成功");
+    };
+    assert_ne!(rotated, invite);
+    let (_, rejected) = join_hub(&coord, &NodeSecret::generate(), network, Some(invite)).await;
+    assert!(matches!(rejected, ServerMessage::Rejected { .. }));
+
+    // 网主不能把自己踢出去
+    send(
+        &mut owner_client,
+        ClientMessage::Admin(AdminRequest::Kick {
+            member: owner.public_key(),
+        }),
+    )
+    .await;
+    assert!(matches!(
+        recv_until(&mut owner_client, is_reply).await,
+        ServerMessage::AdminReply(Err(_))
+    ));
+
+    // 踢掉朋友：他收到"被移出"，然后连接断开
+    send(
+        &mut owner_client,
+        ClientMessage::Admin(AdminRequest::Kick {
+            member: friend.public_key(),
+        }),
+    )
+    .await;
+    assert!(matches!(
+        recv_until(&mut owner_client, is_reply).await,
+        ServerMessage::AdminReply(Ok(None))
+    ));
+    let kicked = recv_until(&mut friend_client, |m| {
+        matches!(m, ServerMessage::Rejected { .. })
+    })
+    .await;
+    assert!(matches!(kicked, ServerMessage::Rejected { reason } if reason.contains("移出")));
+
+    // 解散：网主自己也被断开，网络找不到了
+    send(
+        &mut owner_client,
+        ClientMessage::Admin(AdminRequest::Delete),
+    )
+    .await;
+    let gone = recv_until(&mut owner_client, |m| {
+        matches!(m, ServerMessage::Rejected { .. })
+    })
+    .await;
+    assert!(matches!(gone, ServerMessage::Rejected { reason } if reason.contains("解散")));
+    let (_, rejected) = join_hub(&coord, &NodeSecret::generate(), network, Some(rotated)).await;
+    assert!(matches!(rejected, ServerMessage::Rejected { reason } if reason.contains("找不到")));
+    assert!(
+        !state
+            .0
+            .parent()
+            .unwrap()
+            .join(format!("{network}.state"))
+            .exists(),
+        "状态文件删了"
+    );
+}
+
+#[tokio::test]
+async fn one_owner_can_only_create_so_many_networks() {
+    let state = TempState::new("hub-limit");
+    let limits = HubLimits {
+        networks_per_owner: 2,
+        ..HubLimits::default()
+    };
+    let (coord, _) = start_hub(&state, limits).await;
+    let owner = NodeSecret::generate();
+    let _first = create(&coord, &owner, "一").await;
+    let _second = create(&coord, &owner, "二").await;
+    let mut client = connect(&coord, &owner).await;
+    send(&mut client, ClientMessage::Create { name: "三".into() }).await;
+    assert!(
+        matches!(recv(&mut client).await, ServerMessage::Rejected { reason } if reason.contains("最多"))
+    );
+}
+
+#[tokio::test]
+async fn hub_networks_survive_a_restart() {
+    let state = TempState::new("hub-restart");
+    let owner = NodeSecret::generate();
+    let network;
+    let invite;
+    {
+        let (coord, _) = start_hub(&state, HubLimits::default()).await;
+        (_, network, invite) = create(&coord, &owner, "留下来").await;
+    }
+    // 同一个目录再起一个：网络还在，网主照样能进、拿回原来的地址；朋友凭原来的邀请码能加入
+    let (coord, _) = start_hub(&state, HubLimits::default()).await;
+    let (_, welcome) = join_hub(&coord, &owner, network, None).await;
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { overlay_ip, .. } if overlay_ip == Ipv4Addr::new(100, 64, 0, 1)),
+        "{welcome:?}"
+    );
+    let (_, welcome) = join_hub(&coord, &NodeSecret::generate(), network, Some(invite)).await;
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { .. }),
+        "{welcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_hub_only_server_turns_away_old_style_hello() {
+    let state = TempState::new("hub-hello");
+    let (coord, _) = start_hub(&state, HubLimits::default()).await;
+    let mut client = connect(&coord, &NodeSecret::generate()).await;
+    send(&mut client, ClientMessage::Hello { invite: None }).await;
+    assert!(
+        matches!(recv(&mut client).await, ServerMessage::Rejected { reason } if reason.contains("网络 ID"))
+    );
 }

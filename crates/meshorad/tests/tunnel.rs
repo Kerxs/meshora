@@ -64,6 +64,8 @@ async fn start_relay(nodes: Vec<NodeKey>) -> RelayInfo {
         meshora_relay::Config {
             secret,
             allow: meshora_relay::allow_list(nodes),
+            links: None,
+            rate: None,
         },
         listener,
     ));
@@ -83,6 +85,7 @@ async fn start_coord(case: &Case, nodes: Vec<NodeKey>, relays: Vec<RelayInfo>) -
         overlay: format!("198.18.{}.0/24", case.subnet).parse().unwrap(),
         probe: Some(probe.local_addr().unwrap()),
         relays,
+        hub: None,
     };
     tokio::spawn(meshora_coord::serve(config, listener, Some(probe)));
     Coord { addr, key }
