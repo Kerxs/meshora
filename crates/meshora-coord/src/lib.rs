@@ -44,7 +44,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ipnet::Ipv4Net;
 use meshora_proto::admission::Admission;
-use meshora_proto::control::{ClientMessage, PeerInfo, RelayInfo, ServerMessage};
+use meshora_proto::control::{ClientMessage, PeerInfo, RelayInfo, ServerMessage, clean_name};
 use meshora_proto::disco::{self, DiscoMessage};
 use meshora_proto::noise::{Channel, NoiseStream};
 use meshora_types::{Invite, NodeKey, NodeSecret};
@@ -156,6 +156,8 @@ struct State {
     limited: Vec<Limited>,
     online: HashMap<NodeKey, Conn>,
     endpoints: HashMap<NodeKey, Vec<SocketAddr>>,
+    /// 成员给自己起的名字（整理过的）。只在内存里：节点每次连上都会重发
+    names: HashMap<NodeKey, String>,
 }
 
 impl State {
@@ -204,6 +206,7 @@ impl Shared {
                     .get(&member.key)
                     .cloned()
                     .unwrap_or_default(),
+                name: state.names.get(&member.key).cloned().unwrap_or_default(),
             })
             .collect();
         ServerMessage::NetMap { peers }
@@ -347,6 +350,7 @@ impl Shared {
         state.limited = stored.limited;
         for key in &removed {
             state.endpoints.remove(key);
+            state.names.remove(key);
             if let Some(conn) = state.online.remove(key) {
                 conn.kick.notify_one();
             }
@@ -695,6 +699,7 @@ impl Coordinator {
                     limited,
                     online: HashMap::new(),
                     endpoints: HashMap::new(),
+                    names: HashMap::new(),
                 }),
                 next_conn: AtomicU64::new(0),
                 admission: Admission::new(PENDING_PER_SOURCE),
@@ -923,6 +928,19 @@ async fn handle(shared: Arc<Shared>, tcp: TcpStream, from: SocketAddr) {
             }
             Ok(ClientMessage::Ping) => {
                 let _ = tx.try_send(ServerMessage::Pong);
+            }
+            Ok(ClientMessage::SetName(name)) => {
+                let name = clean_name(&name);
+                let state = &mut *shared.state();
+                let current = state.names.get(&key).map_or("", String::as_str);
+                if current != name {
+                    if name.is_empty() {
+                        state.names.remove(&key);
+                    } else {
+                        state.names.insert(key, name);
+                    }
+                    shared.broadcast_net_maps(state, Some(&key));
+                }
             }
             Ok(ClientMessage::Hello { .. }) => {}
             Err(err) => {

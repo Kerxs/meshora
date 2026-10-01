@@ -164,6 +164,7 @@ async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) -> Ech
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: case.relay_only,
+        name: String::new(),
     })
     .await
     .unwrap();

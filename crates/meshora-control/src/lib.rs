@@ -81,6 +81,26 @@ pub struct Config {
     /// UDP 整个被封的网络里用得上（反正打不通，省得白探测），排查问题时也用得上。
     /// 别人的 Ping 照样回应。
     pub relay_only: bool,
+    /// 给网里别人看的名字，空串是不起。连上后告诉协调服务；连着的时候用 [`NameSetter`] 改。
+    pub name: String,
+}
+
+/// 连着的时候改名字。见 [`Session::name_setter`]。
+#[derive(Clone)]
+pub struct NameSetter(Arc<watch::Sender<String>>);
+
+impl NameSetter {
+    /// 换一个名字。连着协调服务就马上告诉它；断着的话重连时带上。
+    pub fn set(&self, name: impl Into<String>) {
+        let name = name.into();
+        self.0.send_if_modified(|current| {
+            let changed = *current != name;
+            if changed {
+                *current = name;
+            }
+            changed
+        });
+    }
 }
 
 /// 协调服务在注册时告诉本机的东西。
@@ -112,6 +132,8 @@ pub struct PeerView {
     pub key: NodeKey,
     /// peer 的 overlay 地址。
     pub overlay_ip: Ipv4Addr,
+    /// peer 给自己起的名字，空串是没起。谁都能随便填：认人以地址和公钥为准。
+    pub name: String,
     /// 已经交给数据面的发送路径。还没选出来为 `None`。
     pub path: Option<Path>,
     /// 走直连时，这条直连平滑后的往返时间。走中继时没测，为 `None`。
@@ -142,13 +164,15 @@ pub struct Session {
     welcome: Welcome,
     connection: Connection,
     status: watch::Sender<Status>,
+    name: Arc<watch::Sender<String>>,
 }
 
 impl Session {
     /// 连上协调服务并注册。本机不在协调服务的名单里时返回 [`ControlError::Rejected`]。
     pub async fn connect(config: Config) -> Result<Self, ControlError> {
-        let (welcome, connection) = connect_once(&config).await?;
+        let (welcome, connection) = connect_once(&config, &config.name).await?;
         info!(ip = %welcome.overlay_ip, "已注册到协调服务");
+        let name = Arc::new(watch::Sender::new(config.name.clone()));
         Ok(Self {
             config,
             welcome,
@@ -157,7 +181,13 @@ impl Session {
                 coord_connected: true,
                 peers: Vec::new(),
             }),
+            name,
         })
+    }
+
+    /// 改名字用的把手，[`run`](Self::run) 跑起来之后照样能用。
+    pub fn name_setter(&self) -> NameSetter {
+        NameSetter(Arc::clone(&self.name))
     }
 
     /// 订阅控制面的状态。[`run`](Self::run) 跑起来之后，每处理完一件事就更新一次（内容没变不通知）。
@@ -181,7 +211,9 @@ impl Session {
             welcome,
             mut connection,
             status,
+            name,
         } = self;
+        let mut names = name.subscribe();
         let mut node = Node::new(&config, &welcome, dataplane);
         let mut tick = tokio::time::interval(TICK);
 
@@ -212,6 +244,9 @@ impl Session {
                         None => return Ok(()),
                     },
                     _ = tick.tick() => node.on_tick(Instant::now()),
+                    Ok(()) = names.changed() => {
+                        vec![ClientMessage::SetName(names.borrow_and_update().clone())]
+                    }
                 };
                 node.publish(&status, true);
                 for message in outgoing {
@@ -235,9 +270,11 @@ impl Session {
             let mut backoff = Duration::from_secs(1);
             connection = loop {
                 let (delay, config) = (backoff, &config);
+                // 断着的时候改过名字：重连时带上最新的
+                let current = names.borrow_and_update().clone();
                 let reconnect = async move {
                     tokio::time::sleep(delay).await;
-                    connect_once(config).await
+                    connect_once(config, &current).await
                 };
                 tokio::pin!(reconnect);
                 let result = loop {
@@ -275,7 +312,7 @@ impl Session {
     }
 }
 
-async fn connect_once(config: &Config) -> Result<(Welcome, Connection), ControlError> {
+async fn connect_once(config: &Config, name: &str) -> Result<(Welcome, Connection), ControlError> {
     let timeout = |what| move |_| ControlError::Timeout(what);
     let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(config.coord))
         .await
@@ -311,6 +348,10 @@ async fn connect_once(config: &Config) -> Result<(Welcome, Connection), ControlE
         ServerMessage::Rejected { reason } => return Err(ControlError::Rejected(reason)),
         _ => return Err(ControlError::Protocol("协调服务的第一条消息不是 Welcome")),
     };
+    // 协调服务只在内存里记名字：每次连上都告诉它一遍
+    writer
+        .send(&ClientMessage::SetName(name.to_owned()).encode())
+        .await?;
 
     let (tx, inbox) = mpsc::channel(64);
     let reader = tokio::spawn(async move {
@@ -347,6 +388,7 @@ async fn connect_once(config: &Config) -> Result<(Welcome, Connection), ControlE
 
 struct PeerState {
     overlay_ip: Ipv4Addr,
+    name: String,
     paths: PeerPaths,
     /// 已经告诉数据面的路径
     current: Option<Path>,
@@ -509,11 +551,13 @@ impl Node {
         for peer in &peers {
             let state = self.peers.entry(peer.key).or_insert_with(|| PeerState {
                 overlay_ip: peer.overlay_ip,
+                name: String::new(),
                 paths: PeerPaths::default(),
                 current: None,
                 last_call_me_maybe: None,
             });
             state.overlay_ip = peer.overlay_ip;
+            state.name.clone_from(&peer.name);
             state.paths.set_advertised(&peer.endpoints);
         }
         self.update_paths(now);
@@ -707,6 +751,7 @@ impl Node {
             .map(|(key, state)| PeerView {
                 key: *key,
                 overlay_ip: state.overlay_ip,
+                name: state.name.clone(),
                 path: state.current,
                 rtt: match state.current {
                     Some(Path::Direct(addr)) => state.paths.rtt(addr),

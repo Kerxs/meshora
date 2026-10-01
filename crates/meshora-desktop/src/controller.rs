@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use meshora_control::{ControlError, Status};
+use meshora_control::{ControlError, NameSetter, Status};
 use meshora_dataplane::PeerStatus;
 use meshora_types::{NodeSecret, Path};
 use meshorad::{NetworkCode, Node, Options, StartError};
@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::logs::LogBuffer;
-use crate::store::{Settings, Store};
+use crate::store::{MAX_NAME_CHARS, Settings, Store};
 
 /// 先试这个端口，被占了（比如同时开着 meshorad）就让系统挑一个。固定端口方便在路由器上做端口转发
 const PORT: u16 = 41641;
@@ -114,6 +114,8 @@ pub struct Me {
 pub struct PeerRow {
     /// 公钥。
     pub id: String,
+    /// 对方给自己起的名字，空串是没起。
+    pub name: String,
     /// overlay 地址。
     pub ip: String,
     /// 走哪条路：`direct`、`relay`，还没选出来是 `pending`。
@@ -140,6 +142,8 @@ pub struct Overview {
     pub version: &'static str,
     /// 本机公钥：网络主人要把它加进名单。
     pub id: String,
+    /// 见 [`Settings::name`]。
+    pub name: String,
     /// 保存着的网络码。
     pub network: Option<String>,
     /// 见 [`Settings::prefer_broadcast`]。
@@ -189,6 +193,8 @@ struct State {
     runner: Option<Runner>,
     /// 正在设网卡的网络类别的任务。换一个设置、断开时就停掉旧的
     profile: Option<Background>,
+    /// 节点跑着时改名字用
+    renamer: Option<NameSetter>,
 }
 
 struct Shared {
@@ -237,6 +243,7 @@ impl Controller {
                     snapshot: Snapshot::default(),
                     runner: None,
                     profile: None,
+                    renamer: None,
                 }),
                 ops: tokio::sync::Mutex::new(()),
             }),
@@ -255,6 +262,7 @@ impl Controller {
         Overview {
             version: env!("CARGO_PKG_VERSION"),
             id: self.shared.secret.public_key().to_string(),
+            name: state.settings.name.clone(),
             network: state.settings.network.clone(),
             prefer_broadcast: state.settings.prefer_broadcast,
             auto_connect: state.settings.auto_connect,
@@ -300,9 +308,16 @@ impl Controller {
         state.settings.network = Some(network.to_string());
         self.shared.save(&state.settings);
         let metric = state.settings.prefer_broadcast.then_some(BROADCAST_METRIC);
+        let name = state.settings.name.clone();
         state.phase = Phase::Connecting;
         state.snapshot = Snapshot::default();
-        let task = tokio::spawn(run(Arc::clone(&self.shared), network, metric, stop_rx));
+        let task = tokio::spawn(run(
+            Arc::clone(&self.shared),
+            network,
+            metric,
+            name,
+            stop_rx,
+        ));
         state.runner = Some(Runner { stop, task });
         Ok(())
     }
@@ -369,6 +384,20 @@ impl Controller {
         }
     }
 
+    /// 改给网里别人看的名字。连着的话马上生效，不用重连。返回整理过的名字。
+    pub fn set_name(&self, name: &str) -> String {
+        let name: String = name.trim().chars().take(MAX_NAME_CHARS).collect();
+        let mut state = self.shared.state();
+        if state.settings.name != name {
+            state.settings.name.clone_from(&name);
+            self.shared.save(&state.settings);
+            if let Some(renamer) = &state.renamer {
+                renamer.set(name.clone());
+            }
+        }
+        name
+    }
+
     /// 客户端刚打开：按设置自动连接上次的网络。
     pub async fn start_up(&self) {
         let wanted = {
@@ -385,6 +414,7 @@ impl Controller {
         let runner = {
             let mut state = self.shared.state();
             state.profile = None;
+            state.renamer = None;
             state.runner.take()
         };
         if let Some(Runner { stop, mut task }) = runner {
@@ -402,10 +432,11 @@ async fn run(
     shared: Arc<Shared>,
     network: NetworkCode,
     metric: Option<u32>,
+    name: String,
     mut stop: oneshot::Receiver<()>,
 ) {
     let started = tokio::select! {
-        started = start(&shared.secret, &network, metric) => started,
+        started = start(&shared.secret, &network, metric, name) => started,
         _ = &mut stop => return,
     };
     let mut node = match started {
@@ -421,6 +452,7 @@ async fn run(
         let mut state = shared.state();
         state.phase = Phase::Connected;
         state.snapshot = snapshot(&node);
+        state.renamer = Some(node.name_setter());
         // 关着的时候什么都不动：网卡是新建的，本来就是系统默认的类别
         if state.settings.private_network {
             state.profile = Some(set_profile(node.tun_name().to_owned(), true));
@@ -456,6 +488,7 @@ async fn start(
     secret: &NodeSecret,
     network: &NetworkCode,
     metric: Option<u32>,
+    name: String,
 ) -> Result<Node, Failure> {
     let coord = network.resolve().await.map_err(|err| {
         Failure::new(
@@ -474,6 +507,7 @@ async fn start(
         metric,
         keepalive: NonZeroU16::new(KEEPALIVE),
         relay_only: false,
+        name: name.clone(),
     };
     let started = match meshorad::start(options(PORT)).await {
         Err(StartError::Bind(_, err)) if err.kind() == io::ErrorKind::AddrInUse => {
@@ -556,6 +590,7 @@ fn rows(status: &Status, peers: &[PeerStatus], now: Instant) -> Vec<PeerRow> {
             let data = peers.iter().find(|peer| peer.key == view.key);
             PeerRow {
                 id: view.key.to_string(),
+                name: view.name.clone(),
                 ip: view.overlay_ip.to_string(),
                 route: match view.path {
                     Some(Path::Direct(_)) => "direct",
@@ -603,6 +638,7 @@ mod tests {
                 PeerView {
                     key: key(1),
                     overlay_ip: Ipv4Addr::new(100, 64, 0, 1),
+                    name: "小明".into(),
                     path: Some(Path::Direct(SocketAddr::from(([192, 0, 2, 1], 41641)))),
                     rtt: Some(Duration::from_micros(12_700)),
                     jitter: Some(Duration::from_micros(2_300)),
@@ -611,6 +647,7 @@ mod tests {
                 PeerView {
                     key: key(2),
                     overlay_ip: Ipv4Addr::new(100, 64, 0, 2),
+                    name: String::new(),
                     path: Some(relay),
                     rtt: None,
                     jitter: None,
@@ -619,6 +656,7 @@ mod tests {
                 PeerView {
                     key: key(3),
                     overlay_ip: Ipv4Addr::new(100, 64, 0, 3),
+                    name: String::new(),
                     path: None,
                     rtt: None,
                     jitter: None,
@@ -648,6 +686,7 @@ mod tests {
             rows_now[0],
             PeerRow {
                 id: key(1).to_string(),
+                name: "小明".into(),
                 ip: "100.64.0.1".into(),
                 route: "direct",
                 rtt_ms: Some(12),
@@ -822,7 +861,15 @@ mod tests {
         controller.set_prefer_broadcast(false).await.unwrap();
         controller.set_auto_connect(false);
         controller.set_private_network(true);
+        assert_eq!(controller.set_name("  小明的电脑  "), "小明的电脑");
+        assert_eq!(
+            controller.set_name(&"长".repeat(40)).chars().count(),
+            MAX_NAME_CHARS
+        );
+        controller.set_name("小明的电脑");
         let saved = Store::new(&dir.0).load_settings();
+        assert_eq!(saved.name, "小明的电脑");
+        assert_eq!(controller.overview().name, "小明的电脑");
         assert!(!saved.prefer_broadcast);
         assert!(!saved.auto_connect);
         assert!(saved.private_network);

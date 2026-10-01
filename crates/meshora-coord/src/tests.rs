@@ -87,6 +87,7 @@ async fn member_gets_welcome_and_the_rest_of_the_network() {
                 key: a.public_key(),
                 overlay_ip: Ipv4Addr::new(100, 64, 0, 1),
                 endpoints: vec![],
+                name: String::new(),
             }],
         }
     );
@@ -126,9 +127,40 @@ async fn endpoint_changes_reach_the_other_nodes() {
                 key: a.public_key(),
                 overlay_ip: Ipv4Addr::new(100, 64, 0, 1),
                 endpoints: vec![endpoint],
+                name: String::new(),
             }],
         }
     );
+}
+
+#[tokio::test]
+async fn names_reach_the_other_nodes_cleaned_up() {
+    let a = NodeSecret::generate();
+    let b = NodeSecret::generate();
+    let coord = start(&[&a, &b]).await;
+    let (mut client_a, ..) = join(&coord, &a).await;
+    let (mut client_b, ..) = join(&coord, &b).await;
+
+    let name_in = |message: ServerMessage| match message {
+        ServerMessage::NetMap { peers } => peers[0].name.clone(),
+        other => panic!("应该是 NetMap，收到 {other:?}"),
+    };
+    // 换行、方向控制字符去掉，首尾空白去掉
+    send(
+        &mut client_a,
+        ClientMessage::SetName("  小明\n\u{202E}的电脑 ".into()),
+    )
+    .await;
+    assert_eq!(name_in(recv(&mut client_b).await), "小明的电脑");
+    // 太长的截断
+    send(&mut client_a, ClientMessage::SetName("长".repeat(100))).await;
+    assert_eq!(
+        name_in(recv(&mut client_b).await).chars().count(),
+        meshora_proto::control::MAX_NAME_CHARS
+    );
+    // 清空
+    send(&mut client_a, ClientMessage::SetName(String::new())).await;
+    assert_eq!(name_in(recv(&mut client_b).await), "");
 }
 
 #[tokio::test]
@@ -441,6 +473,7 @@ async fn an_invite_lets_a_stranger_join_with_the_next_free_address() {
                 key: friend.public_key(),
                 overlay_ip: Ipv4Addr::new(100, 64, 0, 2),
                 endpoints: vec![],
+                name: String::new(),
             }],
         }
     );

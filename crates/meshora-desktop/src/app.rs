@@ -42,6 +42,11 @@ fn set_auto_connect(controller: State<'_, Controller>, on: bool) {
 }
 
 #[tauri::command]
+fn set_name(controller: State<'_, Controller>, name: String) -> String {
+    controller.set_name(&name)
+}
+
+#[tauri::command]
 fn set_private_network(controller: State<'_, Controller>, on: bool) {
     controller.set_private_network(on);
 }
@@ -160,6 +165,7 @@ pub fn run() {
             set_prefer_broadcast,
             set_auto_connect,
             set_private_network,
+            set_name,
             logs
         ])
         .build(tauri::generate_context!())

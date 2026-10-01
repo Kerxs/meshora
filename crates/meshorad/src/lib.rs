@@ -11,7 +11,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
-use meshora_control::{Config, ControlError, Session, Status, Welcome};
+use meshora_control::{Config, ControlError, NameSetter, Session, Status, Welcome};
 use meshora_dataplane::{DataPlane, PeerStatus};
 use meshora_tun::{Pipes, Tun, TunConfig};
 use meshora_types::{Invite, NodeKey, NodeSecret};
@@ -44,6 +44,8 @@ pub struct Options {
     pub keepalive: Option<NonZeroU16>,
     /// 只走中继，不尝试直连。
     pub relay_only: bool,
+    /// 给网里别人看的名字，空串是不起。
+    pub name: String,
 }
 
 /// 启动失败的原因。
@@ -85,6 +87,7 @@ pub struct Node {
     tun_name: String,
     dataplane: Arc<UserspaceDataPlane>,
     status: watch::Receiver<Status>,
+    name: NameSetter,
     control: JoinHandle<Result<(), ControlError>>,
 }
 
@@ -108,6 +111,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         local_port,
         keepalive: options.keepalive,
         relay_only: options.relay_only,
+        name: options.name,
     })
     .await
     .map_err(StartError::Register)?;
@@ -148,6 +152,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
     dataplane.set_lan(welcome.overlay_ip, welcome.prefix_len);
 
     let status = session.status();
+    let name = session.name_setter();
     let control =
         tokio::spawn(session.run(Arc::clone(&dataplane) as Arc<dyn DataPlane>, events_rx));
     Ok(Node {
@@ -155,6 +160,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         tun_name,
         dataplane,
         status,
+        name,
         control,
     })
 }
@@ -173,6 +179,11 @@ impl Node {
     /// 订阅控制面的状态。
     pub fn status(&self) -> watch::Receiver<Status> {
         self.status.clone()
+    }
+
+    /// 改名字用的把手：换一个给网里别人看的名字，不用重连。节点停了再用也无妨，只是没人收。
+    pub fn name_setter(&self) -> NameSetter {
+        self.name.clone()
     }
 
     /// 数据面眼里每个 peer 的状态（握手、流量）。

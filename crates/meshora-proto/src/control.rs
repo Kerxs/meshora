@@ -12,6 +12,7 @@
 //! 3. 协调服务回 [`ServerMessage::Welcome`]（或 [`ServerMessage::Rejected`] 后断开），
 //!    接着发 [`ServerMessage::NetMap`]；此后网里有变化就再发一份完整的 NetMap
 //! 4. 节点的候选端点变了就发 [`ClientMessage::Endpoints`]
+//! 5. 节点连上后发一次 [`ClientMessage::SetName`]（给别人看的名字），改名时再发
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -28,6 +29,31 @@ pub struct PeerInfo {
     pub overlay_ip: Ipv4Addr,
     /// 它上报的候选端点：局域网地址、探测到的公网地址。
     pub endpoints: Vec<SocketAddr>,
+    /// 它给自己起的名字，空串是没起。谁都可以随便填，认人还得看地址和公钥。
+    pub name: String,
+}
+
+/// 名字最多多少个字符。
+pub const MAX_NAME_CHARS: usize = 32;
+
+/// 把一个名字整理成能放进 NetMap 的样子：去掉控制字符（换行、制表符之类）和看不见的格式字符
+/// （方向控制、零宽字符）、去掉首尾空白、最多 [`MAX_NAME_CHARS`] 个字符。
+/// 协调服务收到时整理一遍，发的一方也可以先整理。
+pub fn clean_name(name: &str) -> String {
+    let visible: String = name
+        .chars()
+        .filter(|c| !c.is_control() && !is_format_char(*c))
+        .collect();
+    let cut: String = visible.trim().chars().take(MAX_NAME_CHARS).collect();
+    cut.trim_end().to_owned()
+}
+
+/// 看不见、却能改变文字走向或者把字藏起来的字符：零宽字符、方向控制、字节序标记
+fn is_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+    )
 }
 
 /// 一个中继。
@@ -59,6 +85,8 @@ pub enum ClientMessage {
     },
     /// 保活。
     Ping,
+    /// 本机给别人看的名字（整个替换，空串是不起名字）。协调服务会整理它，见 [`clean_name`]。
+    SetName(String),
 }
 
 /// 协调服务发给节点的消息。
@@ -101,6 +129,7 @@ mod tag {
     pub const ENDPOINTS: u8 = 2;
     pub const CALL_ME_MAYBE: u8 = 3;
     pub const PING: u8 = 4;
+    pub const SET_NAME: u8 = 5;
 
     pub const WELCOME: u8 = 1;
     pub const NET_MAP: u8 = 2;
@@ -137,6 +166,10 @@ impl ClientMessage {
                 w.key(peer);
             }
             Self::Ping => w.u8(tag::PING),
+            Self::SetName(name) => {
+                w.u8(tag::SET_NAME);
+                w.string(name);
+            }
         }
         w.finish()
     }
@@ -157,6 +190,7 @@ impl ClientMessage {
             tag::ENDPOINTS => Self::Endpoints(read_endpoints(&mut r)?),
             tag::CALL_ME_MAYBE => Self::CallMeMaybe { peer: r.key()? },
             tag::PING => Self::Ping,
+            tag::SET_NAME => Self::SetName(r.string()?),
             other => return Err(DecodeError::UnknownType(other)),
         };
         r.finish()?;
@@ -196,6 +230,7 @@ impl ServerMessage {
                     w.key(&peer.key);
                     w.ipv4(peer.overlay_ip);
                     write_endpoints(w, &peer.endpoints);
+                    w.string(&peer.name);
                 });
             }
             Self::CallMeMaybe { peer, endpoints } => {
@@ -246,6 +281,7 @@ impl ServerMessage {
                         key: r.key()?,
                         overlay_ip: r.ipv4()?,
                         endpoints: read_endpoints(r)?,
+                        name: r.string()?,
                     })
                 })?,
             },
@@ -290,6 +326,8 @@ mod tests {
             ClientMessage::Endpoints(vec![]),
             ClientMessage::CallMeMaybe { peer: key(3) },
             ClientMessage::Ping,
+            ClientMessage::SetName("阿杰的台式机".into()),
+            ClientMessage::SetName(String::new()),
         ];
         for message in messages {
             assert_eq!(ClientMessage::decode(&message.encode()), Ok(message));
@@ -319,6 +357,7 @@ mod tests {
                     key: key(1),
                     overlay_ip: Ipv4Addr::new(100, 64, 0, 1),
                     endpoints: vec![addr("198.51.100.4:41641")],
+                    name: "小明".into(),
                 }],
             },
             ServerMessage::CallMeMaybe {
@@ -333,6 +372,23 @@ mod tests {
         for message in messages {
             assert_eq!(ServerMessage::decode(&message.encode()), Ok(message));
         }
+    }
+
+    #[test]
+    fn names_are_cleaned() {
+        assert_eq!(clean_name("  小明  "), "小明");
+        assert_eq!(clean_name("a\nb\tc"), "abc");
+        // 方向控制字符能把显示的字倒过来，零宽字符能藏字
+        assert_eq!(clean_name("evil\u{202E}gnp.exe"), "evilgnp.exe");
+        assert_eq!(clean_name("x\u{200B}y"), "xy");
+        let long = "长".repeat(50);
+        assert_eq!(clean_name(&long).chars().count(), MAX_NAME_CHARS);
+        // 截断之后末尾的空白也去掉
+        assert_eq!(
+            clean_name(&format!("{} b", "a".repeat(MAX_NAME_CHARS - 1))),
+            "a".repeat(MAX_NAME_CHARS - 1)
+        );
+        assert_eq!(clean_name("\u{0}\u{1}"), "");
     }
 
     #[test]

@@ -24,7 +24,20 @@ pub struct Settings {
     /// 把 Meshora 的网卡设成 Windows 的"专用网络"（见 `meshora_tun::set_network_private`）。
     /// 有安全上的代价，默认关着，由用户决定。
     pub private_network: bool,
+    /// 给网里别人看的名字。第一次打开时取这台电脑的名字（Windows 的计算机名）。
+    pub name: String,
 }
+
+/// 这台电脑的名字，取不到是空串
+fn computer_name() -> String {
+    let name = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_default();
+    name.trim().chars().take(MAX_NAME_CHARS).collect()
+}
+
+/// 名字最多多少个字符。协调服务也会截，这里先截，免得界面上显示的和别人看到的不一样
+pub const MAX_NAME_CHARS: usize = 32;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -33,6 +46,7 @@ impl Default for Settings {
             prefer_broadcast: true,
             auto_connect: true,
             private_network: false,
+            name: computer_name(),
         }
     }
 }
@@ -153,6 +167,7 @@ pub(crate) mod tests {
             prefer_broadcast: false,
             auto_connect: true,
             private_network: true,
+            name: "阿杰的台式机".into(),
         };
         store.save_settings(&settings).unwrap();
         assert_eq!(store.load_settings(), settings);

@@ -6,7 +6,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use meshora_control::{Config, ControlError, Session, Status};
+use meshora_control::{Config, ControlError, NameSetter, Session, Status};
 use meshora_dataplane::DataPlane;
 use meshora_proto::control::RelayInfo;
 use meshora_types::{NodeKey, NodeSecret, Path};
@@ -59,6 +59,7 @@ struct Node {
     tun_out: mpsc::Receiver<Vec<u8>>,
     dataplane: Arc<UserspaceDataPlane>,
     status: watch::Receiver<Status>,
+    name: NameSetter,
 }
 
 fn config(secret: &NodeSecret, coord: &Coord, local_port: u16) -> Config {
@@ -70,18 +71,25 @@ fn config(secret: &NodeSecret, coord: &Coord, local_port: u16) -> Config {
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: false,
+        name: String::new(),
     }
 }
 
 /// 按守护进程的顺序启动一个节点：先注册拿到地址，再起数据面，最后跑控制面
 async fn start_node(secret: &NodeSecret, coord: &Coord, relay_only: bool) -> Node {
+    start_named(secret, coord, relay_only, "").await
+}
+
+async fn start_named(secret: &NodeSecret, coord: &Coord, relay_only: bool, name: &str) -> Node {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let local_port = socket.local_addr().unwrap().port();
     let mut config = config(secret, coord, local_port);
     config.relay_only = relay_only;
+    config.name = name.into();
     let session = Session::connect(config).await.unwrap();
     let ip = session.welcome().overlay_ip;
     let status = session.status();
+    let name = session.name_setter();
 
     let (tun_in, from_tun) = mpsc::channel(64);
     let (to_tun, tun_out) = mpsc::channel(64);
@@ -105,6 +113,7 @@ async fn start_node(secret: &NodeSecret, coord: &Coord, relay_only: bool) -> Nod
         tun_out,
         dataplane,
         status,
+        name,
     }
 }
 
@@ -338,6 +347,32 @@ async fn a_dead_relay_is_replaced_by_the_next_one() {
     assert_eq!(&received[20..], b"and back");
 }
 
+/// 等到 `node` 看到的第一个 peer 叫 `expected`
+async fn wait_name(node: &mut Node, expected: &str) {
+    tokio::time::timeout(
+        CONVERGE,
+        node.status
+            .wait_for(|s| s.peers.first().is_some_and(|p| p.name == expected)),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("一直没看到名字 {expected:?}"))
+    .unwrap();
+}
+
+#[tokio::test]
+async fn names_reach_the_other_side_and_can_change_while_connected() {
+    let a = NodeSecret::generate();
+    let b = NodeSecret::generate();
+    let coord = start_coord(&[&a, &b], vec![]).await;
+    let node_a = start_named(&a, &coord, false, "阿杰的台式机").await;
+    let mut node_b = start_named(&b, &coord, false, "小明").await;
+
+    wait_name(&mut node_b, "阿杰的台式机").await;
+    // 连着改名，不用重连
+    node_a.name.set("阿杰");
+    wait_name(&mut node_b, "阿杰").await;
+}
+
 #[tokio::test]
 async fn a_node_outside_the_member_list_is_turned_away() {
     let a = NodeSecret::generate();
@@ -389,6 +424,7 @@ async fn a_member_removed_from_the_state_file_is_told_and_stops() {
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: false,
+        name: String::new(),
     })
     .await
     .expect("凭邀请码加入");

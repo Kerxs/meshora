@@ -37,6 +37,7 @@ up 的选项：
   --mtu <字节>          虚拟网卡的 MTU，默认 1280
   --keepalive <秒>      persistent keepalive，默认 25，0 表示关闭
   --relay-only          只走中继，不尝试直连
+  --name <名字>         给网里别人看的名字，默认不起
   -v, --verbose         打出调试日志
 ";
 
@@ -48,6 +49,7 @@ struct Up {
     mtu: u16,
     keepalive: Option<NonZeroU16>,
     relay_only: bool,
+    name: String,
     verbose: bool,
 }
 
@@ -93,6 +95,7 @@ fn parse() -> Result<Command, lexopt::Error> {
                 mtu: 1280,
                 keepalive: NonZeroU16::new(25),
                 relay_only: false,
+                name: String::new(),
                 verbose: false,
             };
             while let Some(arg) = parser.next()? {
@@ -106,6 +109,7 @@ fn parse() -> Result<Command, lexopt::Error> {
                     Long("mtu") => up.mtu = parser.value()?.parse()?,
                     Long("keepalive") => up.keepalive = NonZeroU16::new(parser.value()?.parse()?),
                     Long("relay-only") => up.relay_only = true,
+                    Long("name") => up.name = parser.value()?.string()?,
                     Short('v') | Long("verbose") => up.verbose = true,
                     Long("help") | Short('h') => return Err(USAGE.into()),
                     _ => return Err(arg.unexpected()),
@@ -263,6 +267,7 @@ async fn run(up: Up) -> Result<(), String> {
         metric: None,
         keepalive: up.keepalive,
         relay_only: up.relay_only,
+        name: up.name,
     })
     .await
     .map_err(|err| err.to_string())?;
