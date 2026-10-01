@@ -37,6 +37,8 @@ up 的选项：
   --mtu <字节>          虚拟网卡的 MTU，默认 1280
   --keepalive <秒>      persistent keepalive，默认 25，0 表示关闭
   --relay-only          只走中继，不尝试直连
+  --create <网络名>     在 --join 指的服务器（hub 模式的协调服务）上新建一个网络，自己当网主，
+                        建好后打出网络码。--join 这时只写服务器地址：公钥@地址:端口
   --name <名字>         给网里别人看的名字，默认不起
   -v, --verbose         打出调试日志
 ";
@@ -50,6 +52,7 @@ struct Up {
     keepalive: Option<NonZeroU16>,
     relay_only: bool,
     name: String,
+    create: Option<String>,
     verbose: bool,
 }
 
@@ -96,6 +99,7 @@ fn parse() -> Result<Command, lexopt::Error> {
                 keepalive: NonZeroU16::new(25),
                 relay_only: false,
                 name: String::new(),
+                create: None,
                 verbose: false,
             };
             while let Some(arg) = parser.next()? {
@@ -110,6 +114,7 @@ fn parse() -> Result<Command, lexopt::Error> {
                     Long("keepalive") => up.keepalive = NonZeroU16::new(parser.value()?.parse()?),
                     Long("relay-only") => up.relay_only = true,
                     Long("name") => up.name = parser.value()?.string()?,
+                    Long("create") => up.create = Some(parser.value()?.string()?),
                     Short('v') | Long("verbose") => up.verbose = true,
                     Long("help") | Short('h') => return Err(USAGE.into()),
                     _ => return Err(arg.unexpected()),
@@ -260,7 +265,10 @@ async fn run(up: Up) -> Result<(), String> {
         secret,
         coord,
         coord_key: up.network.coord_key,
-        invite: up.network.invite,
+        entry: match &up.create {
+            Some(name) => meshorad::Entry::Create { name: name.clone() },
+            None => up.network.entry(),
+        },
         port: up.port,
         tun: up.tun,
         mtu: up.mtu,
@@ -271,6 +279,13 @@ async fn run(up: Up) -> Result<(), String> {
     })
     .await
     .map_err(|err| err.to_string())?;
+    if let (Some(network), Some(invite)) = (node.welcome().network, node.welcome().created) {
+        let mut code = up.network.server();
+        code.network = Some(network);
+        code.invite = Some(invite);
+        eprintln!("网络建好了，你是网主。网络码（发给要加入的朋友）：");
+        println!("{code}");
+    }
 
     tokio::select! {
         result = node.wait() => {

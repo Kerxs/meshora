@@ -500,7 +500,7 @@ async fn start(
         secret: secret.clone(),
         coord,
         coord_key: network.coord_key,
-        invite: network.invite,
+        entry: network.entry(),
         port,
         tun: TUN_NAME.into(),
         mtu: MTU,

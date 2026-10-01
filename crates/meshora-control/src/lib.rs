@@ -16,7 +16,7 @@
 
 pub mod paths;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
@@ -30,14 +30,16 @@ use meshora_proto::codec::DecodeError;
 use meshora_proto::control::{ClientMessage, PeerInfo, RelayInfo, ServerMessage};
 use meshora_proto::disco::{self, DiscoMessage, TxId};
 use meshora_proto::noise::{Channel, NoiseError, NoiseStream, NoiseWriter};
-use meshora_types::{Invite, NodeKey, NodeSecret, Path};
+use meshora_types::{Invite, NetworkId, NodeKey, NodeSecret, Path};
 use rand_core::{OsRng, RngCore};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::paths::PeerPaths;
+
+pub use meshora_proto::control::{AdminRequest, Roster, RosterInvite, RosterMember};
 
 /// 控制面的节拍。
 const TICK: Duration = Duration::from_secs(1);
@@ -61,6 +63,73 @@ const PING_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// 每秒最多处理多少条控制报文。每条要做两次 DH，被人灌满时必须能丢（R3）
 const DISCO_RATE: u32 = 200;
+/// 网主的管理请求最多等多久回音
+const ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 连协调服务时，第一条消息怎么说。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// 单网络的协调服务（1.0.0 起就有的说法）。
+    Hello {
+        /// 邀请码：本机还不在网里时，凭它加入。已经在网里的话带不带都一样。
+        invite: Option<Invite>,
+    },
+    /// 进 hub 里的某个网络。
+    Join {
+        /// 哪个网络。
+        network: NetworkId,
+        /// 邀请码，同上。
+        invite: Option<Invite>,
+    },
+    /// 在 hub 里新建一个网络，自己当网主。建好之后重连时自动改成 [`Join`](Self::Join)。
+    Create {
+        /// 网络的名字。
+        name: String,
+    },
+}
+
+impl Entry {
+    fn message(&self) -> ClientMessage {
+        match self {
+            Self::Hello { invite } => ClientMessage::Hello { invite: *invite },
+            Self::Join { network, invite } => ClientMessage::Join {
+                network: *network,
+                invite: *invite,
+            },
+            Self::Create { name } => ClientMessage::Create { name: name.clone() },
+        }
+    }
+}
+
+/// 管理请求的结果：成功时可能带一个新邀请码，失败时是给人看的原因。
+pub type AdminResult = Result<Option<Invite>, String>;
+
+/// 网主管理网络用的把手。见 [`Session::admin`]。不是网主也能拿到，只是请求会被拒。
+#[derive(Clone)]
+pub struct AdminHandle {
+    requests: mpsc::UnboundedSender<(AdminRequest, oneshot::Sender<AdminResult>)>,
+    roster: watch::Receiver<Option<Roster>>,
+}
+
+impl AdminHandle {
+    /// 发一个管理请求，等协调服务的回音。
+    pub async fn request(&self, request: AdminRequest) -> AdminResult {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send((request, reply))
+            .map_err(|_| "节点已经停了".to_string())?;
+        match tokio::time::timeout(ADMIN_TIMEOUT, answer).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("和协调服务的连接断了，稍后再试".into()),
+            Err(_) => Err("协调服务太久没回音，稍后再试".into()),
+        }
+    }
+
+    /// 协调服务最近一次发来的成员清单。只有网主才有，别人一直是 `None`。
+    pub fn roster(&self) -> watch::Receiver<Option<Roster>> {
+        self.roster.clone()
+    }
+}
 
 /// 控制面的配置。
 pub struct Config {
@@ -70,8 +139,8 @@ pub struct Config {
     pub coord: SocketAddr,
     /// 协调服务的公钥。事先知道它，才能认证协调服务（IK 的 K）。
     pub coord_key: NodeKey,
-    /// 邀请码：本机还不在网里时，凭它加入。已经在网里的话带不带都一样。
-    pub invite: Option<Invite>,
+    /// 第一条消息怎么说：进哪个网络、凭什么邀请码，或者新建一个。
+    pub entry: Entry,
     /// 数据面 socket 的本地端口，用来拼出本机的局域网端点。
     pub local_port: u16,
     /// 给每个 peer 的 persistent keepalive，NAT 后面的节点靠它维持映射。
@@ -114,6 +183,10 @@ pub struct Welcome {
     pub probe: Option<SocketAddr>,
     /// 可用的中继。
     pub relays: Vec<RelayInfo>,
+    /// 在 hub 里的哪个网络（单网络的协调服务没有）。
+    pub network: Option<NetworkId>,
+    /// 这次是新建的网络：它长期有效的邀请码。
+    pub created: Option<Invite>,
 }
 
 /// 控制面此刻的样子，给界面看。见 [`Session::status`]。
@@ -165,14 +238,30 @@ pub struct Session {
     connection: Connection,
     status: watch::Sender<Status>,
     name: Arc<watch::Sender<String>>,
+    admin: AdminHandle,
+    admin_requests: mpsc::UnboundedReceiver<(AdminRequest, oneshot::Sender<AdminResult>)>,
+    roster: watch::Sender<Option<Roster>>,
 }
 
 impl Session {
     /// 连上协调服务并注册。本机不在协调服务的名单里时返回 [`ControlError::Rejected`]。
-    pub async fn connect(config: Config) -> Result<Self, ControlError> {
-        let (welcome, connection) = connect_once(&config, &config.name).await?;
-        info!(ip = %welcome.overlay_ip, "已注册到协调服务");
+    pub async fn connect(mut config: Config) -> Result<Self, ControlError> {
+        let (welcome, connection) = connect_once(&config, &config.entry, &config.name).await?;
+        info!(ip = %welcome.overlay_ip, network = ?welcome.network, "已注册到协调服务");
+        // 新建的网络：以后重连就是"进这个网络"，不能再建一个
+        if let (Entry::Create { .. }, Some(network)) = (&config.entry, welcome.network) {
+            config.entry = Entry::Join {
+                network,
+                invite: None,
+            };
+        }
         let name = Arc::new(watch::Sender::new(config.name.clone()));
+        let (requests, admin_requests) = mpsc::unbounded_channel();
+        let roster = watch::Sender::new(None);
+        let admin = AdminHandle {
+            requests,
+            roster: roster.subscribe(),
+        };
         Ok(Self {
             config,
             welcome,
@@ -182,7 +271,15 @@ impl Session {
                 peers: Vec::new(),
             }),
             name,
+            admin,
+            admin_requests,
+            roster,
         })
+    }
+
+    /// 网主管理网络用的把手，[`run`](Self::run) 跑起来之后照样能用。
+    pub fn admin(&self) -> AdminHandle {
+        self.admin.clone()
     }
 
     /// 改名字用的把手，[`run`](Self::run) 跑起来之后照样能用。
@@ -212,8 +309,13 @@ impl Session {
             mut connection,
             status,
             name,
+            admin: _,
+            mut admin_requests,
+            roster,
         } = self;
         let mut names = name.subscribe();
+        // 发出去、还在等回音的管理请求，按发出的顺序
+        let mut waiting: VecDeque<oneshot::Sender<AdminResult>> = VecDeque::new();
         let mut node = Node::new(&config, &welcome, dataplane);
         let mut tick = tokio::time::interval(TICK);
 
@@ -232,6 +334,18 @@ impl Session {
                             warn!(%reason, "协调服务把本机移出了网络");
                             return Err(ControlError::Rejected(reason));
                         }
+                        Some(ServerMessage::Roster(list)) => {
+                            last_heard = Instant::now();
+                            roster.send_replace(Some(list));
+                            vec![]
+                        }
+                        Some(ServerMessage::AdminReply(result)) => {
+                            last_heard = Instant::now();
+                            if let Some(reply) = waiting.pop_front() {
+                                let _ = reply.send(result);
+                            }
+                            vec![]
+                        }
                         Some(message) => {
                             let now = Instant::now();
                             last_heard = now;
@@ -246,6 +360,10 @@ impl Session {
                     _ = tick.tick() => node.on_tick(Instant::now()),
                     Ok(()) = names.changed() => {
                         vec![ClientMessage::SetName(names.borrow_and_update().clone())]
+                    }
+                    Some((request, reply)) = admin_requests.recv() => {
+                        waiting.push_back(reply);
+                        vec![ClientMessage::Admin(request)]
                     }
                 };
                 node.publish(&status, true);
@@ -264,8 +382,10 @@ impl Session {
                 }
             }
 
-            // 断开了：边重连边照常处理事件和节拍，只是发不了消息给协调服务
+            // 断开了：边重连边照常处理事件和节拍，只是发不了消息给协调服务。
+            // 还在等回音的管理请求等不到了（丢掉回音的发送端，请求方会收到"连接断了"）
             warn!("和协调服务的连接断了，重连中");
+            waiting.clear();
             node.publish(&status, false);
             let mut backoff = Duration::from_secs(1);
             connection = loop {
@@ -274,7 +394,7 @@ impl Session {
                 let current = names.borrow_and_update().clone();
                 let reconnect = async move {
                     tokio::time::sleep(delay).await;
-                    connect_once(config, &current).await
+                    connect_once(config, &config.entry, &current).await
                 };
                 tokio::pin!(reconnect);
                 let result = loop {
@@ -285,6 +405,10 @@ impl Session {
                             None => return Ok(()),
                         },
                         _ = tick.tick() => drop(node.on_tick(Instant::now())),
+                        // 断着的时候来的管理请求：直接告诉它现在办不了
+                        Some((_, reply)) = admin_requests.recv() => {
+                            let _ = reply.send(Err("和协调服务的连接断了，稍后再试".into()));
+                        }
                     }
                     node.publish(&status, false);
                 };
@@ -312,7 +436,11 @@ impl Session {
     }
 }
 
-async fn connect_once(config: &Config, name: &str) -> Result<(Welcome, Connection), ControlError> {
+async fn connect_once(
+    config: &Config,
+    entry: &Entry,
+    name: &str,
+) -> Result<(Welcome, Connection), ControlError> {
     let timeout = |what| move |_| ControlError::Timeout(what);
     let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(config.coord))
         .await
@@ -325,28 +453,44 @@ async fn connect_once(config: &Config, name: &str) -> Result<(Welcome, Connectio
     .await
     .map_err(timeout("和协调服务握手"))??;
     let (mut reader, mut writer) = stream.into_split();
-    let hello = ClientMessage::Hello {
-        invite: config.invite,
-    };
-    writer.send(&hello.encode()).await?;
+    writer.send(&entry.message().encode()).await?;
 
-    let first = tokio::time::timeout(CONNECT_TIMEOUT, reader.recv())
-        .await
-        .map_err(timeout("等协调服务的 Welcome"))??;
-    let welcome = match ServerMessage::decode(&first)? {
-        ServerMessage::Welcome {
-            overlay_ip,
-            prefix_len,
-            probe,
-            relays,
-        } => Welcome {
-            overlay_ip,
-            prefix_len,
-            probe,
-            relays,
-        },
-        ServerMessage::Rejected { reason } => return Err(ControlError::Rejected(reason)),
-        _ => return Err(ControlError::Protocol("协调服务的第一条消息不是 Welcome")),
+    let mut network = match entry {
+        Entry::Join { network, .. } => Some(*network),
+        _ => None,
+    };
+    let mut created = None;
+    let welcome = loop {
+        let bytes = tokio::time::timeout(CONNECT_TIMEOUT, reader.recv())
+            .await
+            .map_err(timeout("等协调服务的 Welcome"))??;
+        match ServerMessage::decode(&bytes)? {
+            // 新建的网络：先告诉 ID 和邀请码，接着才是 Welcome
+            ServerMessage::Created {
+                network: id,
+                invite,
+            } if matches!(entry, Entry::Create { .. }) && created.is_none() => {
+                network = Some(id);
+                created = Some(invite);
+            }
+            ServerMessage::Welcome {
+                overlay_ip,
+                prefix_len,
+                probe,
+                relays,
+            } => {
+                break Welcome {
+                    overlay_ip,
+                    prefix_len,
+                    probe,
+                    relays,
+                    network,
+                    created,
+                };
+            }
+            ServerMessage::Rejected { reason } => return Err(ControlError::Rejected(reason)),
+            _ => return Err(ControlError::Protocol("协调服务的第一条消息不是 Welcome")),
+        }
     };
     // 协调服务只在内存里记名字：每次连上都告诉它一遍
     writer
@@ -521,7 +665,7 @@ impl Node {
                 vec![]
             }
             ServerMessage::Pong => vec![],
-            // 建网、网主管理的消息：下一步接上
+            // 成员清单、管理结果在 Session::run 里就处理了；Created 只在注册时出现
             ServerMessage::Created { .. }
             | ServerMessage::Roster(_)
             | ServerMessage::AdminReply(_) => vec![],

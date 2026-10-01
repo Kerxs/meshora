@@ -6,7 +6,9 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use meshora_control::{Config, ControlError, NameSetter, Session, Status};
+use meshora_control::{
+    AdminHandle, AdminRequest, Config, ControlError, Entry, NameSetter, Session, Status, Welcome,
+};
 use meshora_dataplane::DataPlane;
 use meshora_proto::control::RelayInfo;
 use meshora_types::{NodeKey, NodeSecret, Path};
@@ -63,6 +65,9 @@ struct Node {
     dataplane: Arc<UserspaceDataPlane>,
     status: watch::Receiver<Status>,
     name: NameSetter,
+    admin: AdminHandle,
+    welcome: Welcome,
+    running: tokio::task::JoinHandle<Result<(), ControlError>>,
 }
 
 fn config(secret: &NodeSecret, coord: &Coord, local_port: u16) -> Config {
@@ -70,7 +75,7 @@ fn config(secret: &NodeSecret, coord: &Coord, local_port: u16) -> Config {
         secret: secret.clone(),
         coord: coord.addr,
         coord_key: coord.key,
-        invite: None,
+        entry: Entry::Hello { invite: None },
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: false,
@@ -84,15 +89,35 @@ async fn start_node(secret: &NodeSecret, coord: &Coord, relay_only: bool) -> Nod
 }
 
 async fn start_named(secret: &NodeSecret, coord: &Coord, relay_only: bool, name: &str) -> Node {
+    start_with(
+        secret,
+        coord,
+        relay_only,
+        name,
+        Entry::Hello { invite: None },
+    )
+    .await
+}
+
+async fn start_with(
+    secret: &NodeSecret,
+    coord: &Coord,
+    relay_only: bool,
+    name: &str,
+    entry: Entry,
+) -> Node {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let local_port = socket.local_addr().unwrap().port();
     let mut config = config(secret, coord, local_port);
     config.relay_only = relay_only;
     config.name = name.into();
+    config.entry = entry;
     let session = Session::connect(config).await.unwrap();
     let ip = session.welcome().overlay_ip;
+    let welcome = session.welcome().clone();
     let status = session.status();
     let name = session.name_setter();
+    let admin = session.admin();
 
     let (tun_in, from_tun) = mpsc::channel(64);
     let (to_tun, tun_out) = mpsc::channel(64);
@@ -109,7 +134,7 @@ async fn start_named(secret: &NodeSecret, coord: &Coord, relay_only: bool, name:
         )
         .unwrap(),
     );
-    tokio::spawn(session.run(dataplane.clone(), events_rx));
+    let running = tokio::spawn(session.run(dataplane.clone(), events_rx));
     Node {
         ip,
         tun_in,
@@ -117,7 +142,47 @@ async fn start_named(secret: &NodeSecret, coord: &Coord, relay_only: bool, name:
         dataplane,
         status,
         name,
+        admin,
+        welcome,
+        running,
     }
+}
+
+/// hub 模式的协调服务（同进程带一个中继，只在同一个网络里转发），数据放在临时目录
+async fn start_hub(dir: &std::path::Path) -> Coord {
+    let secret = NodeSecret::generate();
+    let key = secret.public_key();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let probe = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let relay_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let coordinator = meshora_coord::Coordinator::new(meshora_coord::Config {
+        secret: secret.clone(),
+        nodes: vec![],
+        state: None,
+        overlay: "100.64.0.0/10".parse().unwrap(),
+        probe: Some(probe.local_addr().unwrap()),
+        relays: vec![RelayInfo {
+            key,
+            addr: relay_listener.local_addr().unwrap(),
+        }],
+        hub: Some(meshora_coord::HubConfig {
+            dir: dir.to_path_buf(),
+            limits: meshora_coord::HubLimits::default(),
+        }),
+    })
+    .unwrap();
+    tokio::spawn(meshora_relay::serve(
+        meshora_relay::Config {
+            secret,
+            allow: coordinator.members(),
+            links: Some(coordinator.links()),
+            rate: None,
+        },
+        relay_listener,
+    ));
+    tokio::spawn(coordinator.serve(listener, Some(probe)));
+    Coord { addr, key }
 }
 
 fn ipv4(src: Ipv4Addr, dst: Ipv4Addr, payload: &[u8]) -> Vec<u8> {
@@ -377,6 +442,97 @@ async fn names_reach_the_other_side_and_can_change_while_connected() {
 }
 
 #[tokio::test]
+async fn a_network_is_created_on_a_hub_joined_managed_and_left() {
+    let dir = std::env::temp_dir().join(format!("meshora-control-hub-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let coord = start_hub(&dir).await;
+    let (a, b) = (NodeSecret::generate(), NodeSecret::generate());
+
+    // A 建网：拿到网络 ID 和邀请码，自己是第一个地址
+    let mut node_a = start_with(
+        &a,
+        &coord,
+        false,
+        "阿杰",
+        Entry::Create {
+            name: "周末开黑".into(),
+        },
+    )
+    .await;
+    let network = node_a.welcome.network.expect("建好的网络有 ID");
+    let invite = node_a.welcome.created.expect("建好的网络有邀请码");
+    assert_eq!(node_a.ip, Ipv4Addr::new(100, 64, 0, 1));
+
+    // B 凭网络码加入，两边互通
+    let mut node_b = start_with(
+        &b,
+        &coord,
+        false,
+        "小明",
+        Entry::Join {
+            network,
+            invite: Some(invite),
+        },
+    )
+    .await;
+    assert_eq!(node_b.ip, Ipv4Addr::new(100, 64, 0, 2));
+    let received = deliver(&node_a, &mut node_b, b"hello from the owner").await;
+    assert_eq!(&received[20..], b"hello from the owner");
+    let received = deliver(&node_b, &mut node_a, b"and back").await;
+    assert_eq!(&received[20..], b"and back");
+
+    // A 是网主：看得到两个人的成员清单
+    let mut roster = node_a.admin.roster();
+    let list = tokio::time::timeout(
+        CONVERGE,
+        roster.wait_for(|r| r.as_ref().is_some_and(|r| r.members.len() == 2)),
+    )
+    .await
+    .expect("网主一直没收到两个人的成员清单")
+    .unwrap()
+    .clone()
+    .unwrap();
+    assert_eq!(list.name, "周末开黑");
+    assert!(
+        list.members
+            .iter()
+            .any(|m| m.key == b.public_key() && m.name == "小明")
+    );
+    // B 不是网主：没有清单，管理请求被拒
+    assert!(node_b.admin.roster().borrow().is_none());
+    assert!(node_b.admin.request(AdminRequest::Delete).await.is_err());
+
+    // 网主新建一个一次性邀请码
+    let once = node_a
+        .admin
+        .request(AdminRequest::NewInvite {
+            uses: Some(1),
+            hours: None,
+        })
+        .await
+        .unwrap();
+    assert!(once.is_some());
+
+    // 网主把 B 移出：B 的控制面停下，原因是"被移出"
+    node_a
+        .admin
+        .request(AdminRequest::Kick {
+            member: b.public_key(),
+        })
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(10), &mut node_b.running)
+        .await
+        .expect("被移出之后控制面一直没停")
+        .unwrap();
+    assert!(
+        matches!(&result, Err(ControlError::Rejected(reason)) if reason.contains("移出")),
+        "{result:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn a_node_outside_the_member_list_is_turned_away() {
     let a = NodeSecret::generate();
     let stranger = NodeSecret::generate();
@@ -424,7 +580,7 @@ async fn a_member_removed_from_the_state_file_is_told_and_stops() {
         secret: friend.clone(),
         coord: addr,
         coord_key: coord_secret.public_key(),
-        invite,
+        entry: Entry::Hello { invite },
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: false,

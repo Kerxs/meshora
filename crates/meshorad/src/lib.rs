@@ -14,12 +14,14 @@ use std::sync::Arc;
 use meshora_control::{Config, ControlError, NameSetter, Session, Status, Welcome};
 use meshora_dataplane::{DataPlane, PeerStatus};
 use meshora_tun::{Pipes, Tun, TunConfig};
-use meshora_types::{Invite, NodeKey, NodeSecret};
+use meshora_types::{NodeKey, NodeSecret};
 use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::info;
 
+pub use meshora_control::{AdminHandle, AdminResult, Entry};
+pub use meshora_control::{AdminRequest, Roster, RosterInvite, RosterMember};
 pub use network::{NetworkCode, ParseNetworkCodeError};
 
 /// 启动一个节点要的东西。
@@ -30,8 +32,8 @@ pub struct Options {
     pub coord: SocketAddr,
     /// 协调服务的公钥。
     pub coord_key: NodeKey,
-    /// 邀请码：本机还不在网里时凭它加入。
-    pub invite: Option<Invite>,
+    /// 第一条消息怎么说：进哪个网络（凭什么邀请码），或者新建一个。见 [`NetworkCode::entry`]。
+    pub entry: Entry,
     /// WireGuard 和控制报文共用的 UDP 端口，0 表示让系统挑。
     pub port: u16,
     /// 虚拟网卡的名字。
@@ -88,6 +90,7 @@ pub struct Node {
     dataplane: Arc<UserspaceDataPlane>,
     status: watch::Receiver<Status>,
     name: NameSetter,
+    admin: AdminHandle,
     control: JoinHandle<Result<(), ControlError>>,
 }
 
@@ -107,7 +110,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         secret: options.secret.clone(),
         coord: options.coord,
         coord_key: options.coord_key,
-        invite: options.invite,
+        entry: options.entry,
         local_port,
         keepalive: options.keepalive,
         relay_only: options.relay_only,
@@ -153,6 +156,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
 
     let status = session.status();
     let name = session.name_setter();
+    let admin = session.admin();
     let control =
         tokio::spawn(session.run(Arc::clone(&dataplane) as Arc<dyn DataPlane>, events_rx));
     Ok(Node {
@@ -161,6 +165,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         dataplane,
         status,
         name,
+        admin,
         control,
     })
 }
@@ -179,6 +184,11 @@ impl Node {
     /// 订阅控制面的状态。
     pub fn status(&self) -> watch::Receiver<Status> {
         self.status.clone()
+    }
+
+    /// 网主管理网络用的把手（踢人、邀请码、解散……），以及网主看到的成员清单。
+    pub fn admin(&self) -> AdminHandle {
+        self.admin.clone()
     }
 
     /// 改名字用的把手：换一个给网里别人看的名字，不用重连。节点停了再用也无妨，只是没人收。

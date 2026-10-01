@@ -163,7 +163,7 @@ async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) -> Ech
         secret: secret.clone(),
         coord: coord.addr,
         coord_key: coord.key,
-        invite: None,
+        entry: meshora_control::Entry::Hello { invite: None },
         local_port,
         keepalive: NonZeroU16::new(25),
         relay_only: case.relay_only,
