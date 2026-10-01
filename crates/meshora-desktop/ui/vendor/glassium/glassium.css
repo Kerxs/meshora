@@ -1,0 +1,200 @@
+/*
+ * Glassium 组件的兜底外观。
+ *
+ * 用 <link rel="stylesheet"> 放在 <head> 里：它要在 JS 执行之前就生效，
+ * 否则元素 upgrade 之前会先以「行内、全透明」的样子闪一下。
+ *
+ * 所有选择器都包在 :where() 里，优先级为 0 —— 作者写的任何样式都能覆盖它们。
+ */
+
+/* 布局默认值。upgrade 前后一致，避免 upgrade 那一刻跳一下。
+   组件的影子树里也有同样的 :host 规则，没引这份 CSS 时由那边兜底。 */
+:where(glass-card) {
+  display: block;
+  border-radius: 24px;
+}
+
+:where(glass-button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+/* 导航栏：upgrade 之后宿主是 display: contents（栏那一行 sticky，大标题跟着正文走，都在影子树里）；
+   upgrade 之前先把几个子元素排成一行，别散成一串行内元素 */
+:where(glass-nav-bar:not(:defined), glass-toolbar:not(:defined)) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 16px;
+}
+
+/* 标签栏是一条玻璃胶囊，各格排成一行 */
+:where(glass-tab-bar) {
+  display: inline-flex;
+  box-sizing: border-box;
+  padding: 4px;
+  border-radius: 999px;
+}
+
+/*
+ * 没打开的 popover 不显示：上面这些 display 是作者样式，压过浏览器默认的那条
+ * `[popover]:not(:popover-open) { display: none }`（组件的影子样式里也有同样的一条）。
+ */
+:where(glass-card, glass-button, glass-container, glass-fill, glass-tab-bar, glass-switch, glass-slider, glass-segmented)[popover]:not(:popover-open) {
+  display: none;
+}
+
+/* 容器自己没有玻璃，只是分组；排版交给作者（常见的是 display: flex）。 */
+:where(glass-container) {
+  display: block;
+}
+
+/*
+ * 填充的颜色或渐变：不继承的 <color> | <image>。纯色可以过渡（`transition: --glass-fill 0.25s` 直接可用），
+ * 也可以写 linear-gradient() / radial-gradient()。register.ts 里 JS 也注册一次，没引这份 CSS 时由那边兜底。
+ */
+@property --glass-fill {
+  syntax: '<color> | <image>';
+  inherits: false;
+  initial-value: transparent;
+}
+
+:where(glass-fill) {
+  display: block;
+}
+
+/* 开关的样式都在它自己的影子树里（轨道、旋钮、兜底、强制配色），这里只放 upgrade 之前的占位尺寸。 */
+:where(glass-switch:not(:defined)) {
+  display: inline-block;
+  width: 64px;
+  height: 28px;
+  border-radius: 999px;
+  vertical-align: middle;
+  background-color: rgba(120, 120, 128, 0.32);
+}
+
+/* 分段控件：upgrade 之前先排成一行、画出底 */
+:where(glass-segmented:not(:defined)) {
+  display: inline-flex;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 2px;
+  vertical-align: middle;
+  border-radius: 999px;
+  background-color: rgba(120, 120, 128, 0.24);
+}
+
+/* 滑块同理：upgrade 之前先占住位置，画一条轨道 */
+:where(glass-slider:not(:defined)) {
+  display: inline-block;
+  width: 200px;
+  height: 28px;
+  vertical-align: middle;
+  background: linear-gradient(rgba(120, 120, 128, 0.2), rgba(120, 120, 128, 0.2)) center / 100% 6px no-repeat;
+}
+
+/*
+ * 没有玻璃时，填充就是一块普通的 CSS 背景。有玻璃时颜色画在场景里（玻璃看得见它），
+ * 元素自己必须透明 —— 否则它会挡住放在它上面的玻璃（R1）。
+ */
+:where(glass-fill:not([data-glassium-active])),
+:where(glass-fill)[data-glassium-overlay] {
+  background: var(--glass-fill); /* 简写：颜色与渐变都放得进去 */
+}
+
+/*
+ * 没有玻璃的时候，给一层可读的表面。
+ *
+ * 「没有玻璃」= 没有 data-glassium-active 属性，这一条同时覆盖：
+ *   - upgrade 之前（:not(:defined) 的元素当然没有这个属性）
+ *   - 已经 upgrade 但 stage 还没建好（createGlassStage 要等 GPU 设备）
+ *   - 没有 GPU 后端
+ *   - 高对比度模式（stage 主动停用）
+ *
+ * 玻璃生效时组件加上这个属性，表面随之去掉 —— 否则它自己就会挡住后面的玻璃（R1）。
+ *
+ * 圆角来自上面的 border-radius，不来自 corner-radius 属性：CSS 算不出「短边的比例」
+ * 这种圆角。改了 corner-radius 又想让兜底表面跟上，就同时写 border-radius。
+ */
+:where(
+    glass-card:not([data-glassium-active]),
+    glass-button:not([data-glassium-active]),
+    glass-tab-bar:not([data-glassium-active])
+  ) {
+  background-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
+}
+
+/*
+ * 用 CSS 画的玻璃（src/core/overlay.ts）：盖在 DOM 上的玻璃（overlay 属性）、浏览器顶层里的玻璃（打开的模态对话框、
+ * 打开的 popover、全屏元素里面）。stage 给它们加上 data-glassium-overlay、不画 GPU 玻璃；表面由各组件自己的影子样式
+ * 按材质画（没引这份 CSS 也生效）。下面几个媒体查询里带 [data-glassium-overlay] 的规则是对它的细化。
+ */
+
+/* 连 backdrop-filter 都没有：换成近乎不透明的深色表面，保证上面的浅色文字可读。 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :where(
+      glass-card:not([data-glassium-active]),
+      glass-button:not([data-glassium-active]),
+      glass-tab-bar:not([data-glassium-active])
+    ),
+  :where(glass-card, glass-button, glass-tab-bar)[data-glassium-overlay] {
+    background-color: rgba(18, 30, 50, 0.82);
+  }
+}
+
+/*
+ * 减少透明度：兜底表面也换成更实的深色磨砂，与玻璃在这个设置下的样子一致
+ * （src/core/transparency.ts：浅色文字配 rgba(28, 28, 32, 0.8)）。兜底表面的文字默认是浅色的，
+ * 所以这里只写深色一种；作者给了深色文字的话，自己在同一个媒体查询里覆盖成浅色。
+ */
+@media (prefers-reduced-transparency: reduce) {
+  :where(
+      glass-card:not([data-glassium-active]),
+      glass-button:not([data-glassium-active]),
+      glass-tab-bar:not([data-glassium-active])
+    ),
+  :where(glass-card, glass-button, glass-tab-bar)[data-glassium-overlay] {
+    background-color: rgba(28, 28, 32, 0.9);
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+  }
+}
+
+/*
+ * 更高对比度（prefers-contrast: more）：玻璃在 stage 那边同样换成磨砂，这里再描一圈边。
+ * 用文字颜色 —— 磨砂是按文字颜色的反色选的，这圈边在磨砂上总是看得清。
+ *
+ * 用 box-shadow 而不是 outline：<glass-button> 的焦点框是 outline，这里（文档级样式）会盖掉影子树里的
+ * :host(:focus-visible) 规则，焦点框就没了。
+ */
+@media (prefers-contrast: more) {
+  :where(glass-card, glass-button, glass-tab-bar),
+  :where(glass-card, glass-button, glass-tab-bar)[data-glassium-overlay] {
+    box-shadow: inset 0 0 0 1px currentColor;
+  }
+}
+
+/*
+ * 高对比度模式。
+ *
+ * 背景色和文字色由浏览器强制成系统色（背景的 alpha 保留），所以这里不写颜色，
+ * 只补一圈边框 —— 强制配色会去掉 box-shadow，不补的话卡片和按钮就没有边界了。
+ *
+ * 不写 forced-color-adjust: none：它会被子元素继承，卡片里作者写的
+ * `color: #fff` 就不再被强制，浅色主题的高对比度下白字压在白底上。
+ */
+@media (forced-colors: active) {
+  :where(glass-card, glass-tab-bar) {
+    border: 1px solid CanvasText;
+  }
+
+  :where(glass-button) {
+    border: 1px solid ButtonText;
+  }
+}

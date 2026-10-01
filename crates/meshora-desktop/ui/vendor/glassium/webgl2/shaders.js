@@ -1,0 +1,986 @@
+/**
+ * WebGL2 后端的着色器（GLSL ES 3.00）。
+ *
+ * 光学函数来自 OPTICS_GLSL —— 由 scripts/gen-glsl.ts 从 WGSL 真源机械生成，这里一行不改。
+ * 这个文件手写的只有各后端本来就不同的部分：入口、绑定（uniform / UBO）、像素坐标的约定。
+ * 每一段都与 WebGPU 那边的同名着色器逐段对应（scene / blur / backdrop / glass / glass-group），
+ * 改一边就去对另一边。
+ *
+ * ## 坐标：只在上屏时翻一次
+ *
+ * WebGPU 的帧缓冲与纹理都是**第 0 行在上**；WebGL 的 gl_FragCoord 与默认帧缓冲是
+ * **第 0 行在下**。约定：
+ *
+ * - 离屏 pass（场景、模糊、探针）不翻：gl_FragCoord.y 直接当成「从上往下数」。于是纹理在
+ *   显存里的排布与 WebGPU 完全相同（第 0 行 = 屏幕顶部），之后按 uv（y 向下）采样也就对得上。
+ * - 上屏 pass（背景、玻璃、合并组）翻一次：px.y = 画布高 − gl_FragCoord.y。
+ * - scissor 与 readPixels 用的也是 GL 的左下原点，在 renderer.ts 里各换算一次。
+ *
+ * 全后端只有这几处翻转。翻两次和不翻看起来一样是正的，但中间任何一步采样都会错位 ——
+ * 所以验证是拿两个后端的整帧回读逐像素比，而不是看截图。
+ */
+import { MAX_GRADIENT_STOPS } from "../core/gradient.js";
+import { OPTICS_GLSL } from "../shaders/generated/optics.glsl.js";
+const HEADER = `#version 300 es
+precision highp float;
+precision highp int;
+`;
+/**
+ * 与 shaders/srgb.wgsl.ts 的 SRGB_WGSL 对应（公式见 core/color.ts）。写成浮点权重的 mix，与原来
+ * relLuminance 里的写法一样 —— relLuminance 改成调用它之后，默认模式的算术一个字都没变。
+ */
+const SRGB_GLSL = `
+vec3 srgbToLinear(vec3 c) {
+  vec3 s = max(c, vec3(0.0));
+  return mix(pow((s + 0.055) / 1.055, vec3(2.4)), s / 12.92, vec3(lessThanEqual(s, vec3(0.04045))));
+}
+
+vec3 linearToSrgb(vec3 c) {
+  vec3 l = max(c, vec3(0.0));
+  return mix(1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, l * 12.92, vec3(lessThanEqual(l, vec3(0.0031308))));
+}
+`;
+/**
+ * 全屏三角形。没有顶点属性，用 gl_VertexID 生成（与 WGSL 的 vertex_index 同一个三角形）。
+ * uFlipUv = 1 时 uv 的 y 向下对应上屏（默认帧缓冲第 0 行在下），= 0 时对应离屏。
+ */
+export const FULLSCREEN_VS = `${HEADER}
+uniform float uFlipUv;
+out vec2 vUv;
+void main() {
+  vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+  gl_Position = vec4(p, 0.0, 1.0);
+  float v = uFlipUv > 0.5 ? (1.0 - p.y) * 0.5 : (1.0 + p.y) * 0.5;
+  vUv = vec2((p.x + 1.0) * 0.5, v);
+}
+`;
+/** 与 scene.wgsl.ts 的 SCENE_WGSL 逐段对应。 */
+export const SCENE_FS = `${HEADER}
+uniform vec4 uScene0;   // resolution.xy, time, mode
+uniform vec4 uScene1;   // center.xy（uv）, radius, linear（1 = 输出线性值，见 scene.wgsl.ts）
+in vec2 vUv;
+out vec4 outColor;
+${SRGB_GLSL}
+vec3 palette(float t) {
+  vec3 c0 = vec3(0.682, 0.835, 0.953);
+  vec3 c1 = vec3(0.180, 0.345, 0.643);
+  vec3 c2 = vec3(0.016, 0.063, 0.122);
+  float k = clamp(t, 0.0, 1.0);
+  vec3 lower = mix(c0, c1, smoothstep(0.0, 0.55, k));
+  return mix(lower, c2, smoothstep(0.55, 1.0, k));
+}
+
+vec3 calibration(vec2 uv, vec2 res) {
+  vec2 p = uv * res;
+  float cell = 24.0;
+  float checker = step(0.5, fract((floor(p.x / cell) + floor(p.y / cell)) * 0.5));
+  // 两条硬边都挪开 1/4 像素，永远不经过像素中心 —— 理由见 scene.wgsl.ts
+  float halfPlane = step(0.0, p.x + p.y - (res.x + res.y) * 0.5 + 0.25);
+  float vstep = step(res.x * 0.5 - 0.25, p.x);
+  vec3 right = mix(vec3(0.04, 0.04, 0.05), vec3(0.96, 0.96, 0.98), vstep);
+  return mix(vec3(checker, checker, checker), right, halfPlane);
+}
+
+vec3 sceneColor() {
+  vec2 resolution = uScene0.xy;
+  float time = uScene0.z;
+  float mode = uScene0.w;
+  if (mode > 2.5) {
+    return vec3(0.5, 0.5, 0.5);
+  }
+  if (mode > 1.5) {
+    float aspect = resolution.x / max(resolution.y, 1.0);
+    vec2 p = vec2(vUv.x * aspect, vUv.y);
+    vec2 c = vec2(uScene1.x * aspect, uScene1.y);
+    float v = clamp(length(p - c) / max(uScene1.z, 1e-6), 0.0, 1.0);
+    return vec3(v, v, v);
+  }
+  if (mode > 0.5) {
+    return calibration(vUv, resolution);
+  }
+  float aspect = resolution.x / max(resolution.y, 1.0);
+  vec2 p = vec2(vUv.x * aspect, vUv.y);
+  float drift = sin(time * 0.25) * 0.06;
+  float t = clamp((p.x * 0.45 + p.y * 0.85) * 0.78 + drift, 0.0, 1.0);
+  return palette(t);
+}
+
+void main() {
+  vec3 c = sceneColor();
+  outColor = vec4(uScene1.w > 0.5 ? srgbToLinear(c) : c, 1.0);
+}
+`;
+/** 与 scene.wgsl.ts 的 SCENE_IMAGE_WGSL 对应。离屏，vUv 不翻（纹理第 0 行 = 屏幕顶部）。 */
+export const SCENE_IMAGE_FS = `${HEADER}
+uniform sampler2D uImage;
+uniform vec4 uUv;          // uvScale.xy, uvOffset.xy
+uniform vec4 uBackground;  // rgb（sRGB 编码）, linear（1 = 输出线性值）
+in vec2 vUv;
+out vec4 outColor;
+${SRGB_GLSL}
+void main() {
+  vec2 uv = vUv * uUv.xy + uUv.zw;
+  bool inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+  vec4 c = textureLod(uImage, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+  vec3 rgb = mix(uBackground.rgb, c.rgb, c.a);
+  vec3 col = inside ? rgb : uBackground.rgb;
+  outColor = vec4(uBackground.w > 0.5 ? srgbToLinear(col) : col, 1.0);
+}
+`;
+/**
+ * 与 blur.wgsl.ts 的 BLUR_WGSL 对应。WebGPU 那边用单级视图（baseMipLevel = k−1）采样，
+ * 这里用 textureLod 指定整数级 —— 整数 lod 下线性 mip 过滤只取那一级，两者等价。
+ */
+export const BLUR_FS = `${HEADER}
+uniform sampler2D uSrc;
+uniform vec4 uBlur;   // texelSize.xy, sigma, vertical
+uniform float uLod;
+in vec2 vUv;
+out vec4 outColor;
+void main() {
+  vec2 dir = uBlur.w > 0.5 ? vec2(0.0, uBlur.y) : vec2(uBlur.x, 0.0);
+  float s2 = 2.0 * uBlur.z * uBlur.z;
+  float w0 = 1.0;
+  float w1 = exp(-1.0 / s2);
+  float w2 = exp(-4.0 / s2);
+  float norm = 1.0 / (w0 + 2.0 * w1 + 2.0 * w2);
+  vec4 acc = textureLod(uSrc, vUv, uLod) * w0;
+  acc += textureLod(uSrc, vUv + dir, uLod) * w1;
+  acc += textureLod(uSrc, vUv - dir, uLod) * w1;
+  acc += textureLod(uSrc, vUv + dir * 2.0, uLod) * w2;
+  acc += textureLod(uSrc, vUv - dir * 2.0, uLod) * w2;
+  outColor = acc * norm;
+}
+`;
+const COLOR_FILTER = `
+float luma(vec3 c) {
+  return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 applyColorFilter(vec3 rgb, float saturation, vec4 tint) {
+  float g = luma(rgb);
+  vec3 saturated = mix(vec3(g, g, g), rgb, saturation);
+  return mix(saturated, tint.rgb, tint.a);
+}
+`;
+/** 与 blur.wgsl.ts 的 BACKDROP_WGSL 对应。上屏，vUv 已翻转。 */
+export const BACKDROP_FS = `${HEADER}
+uniform sampler2D uChain;
+uniform vec4 uTint;
+uniform vec4 uParams;   // saturation, level, decodeIn, encodeOut（见 blur.wgsl.ts）
+in vec2 vUv;
+out vec4 outColor;
+${COLOR_FILTER}
+${SRGB_GLSL}
+void main() {
+  vec3 rgb = textureLod(uChain, vUv, uParams.y).rgb;
+  if (uParams.z > 0.5) {
+    rgb = srgbToLinear(rgb);
+  }
+  vec3 col = applyColorFilter(rgb, uParams.x, uTint);
+  if (uParams.w > 0.5) {
+    col = linearToSrgb(col);
+  }
+  outColor = vec4(col, 1.0);
+}
+`;
+/** 与 glass.wgsl.ts 的 POSE_WGSL 对应。玻璃与填充共用。 */
+const POSE_GLSL = `// 与 glass.wgsl.ts 的 toLocal / toWorld 对应。
+vec2 toLocal(vec2 v, vec4 pose) {
+  return vec2(pose.x * v.x + pose.y * v.y, pose.x * v.y - pose.y * v.x);
+}
+
+vec2 toWorld(vec2 v, vec4 pose) {
+  return vec2(pose.x * v.x - pose.y * v.y, pose.x * v.y + pose.y * v.x);
+}`;
+/** 与 glass.wgsl.ts 的 GLASS_COMMON_WGSL 对应。 */
+/** 与 glass.wgsl.ts 的 ROUNDED_BOX_WGSL 对应：到带圆角（可以是椭圆角）盒子边界的有符号距离。 */
+const ROUNDED_BOX_GLSL = `float cornerOf(vec4 v, bool right, bool bottom) {
+  return bottom ? (right ? v.z : v.w) : (right ? v.y : v.x);
+}
+
+float roundedBoxSd(vec2 px, vec4 box, vec4 radii, vec4 radiiY, vec4 invX, vec4 invY) {
+  vec2 c = (box.xy + box.zw) * 0.5;
+  bool right = px.x > c.x;
+  bool bottom = px.y > c.y;
+  float r = cornerOf(radii, right, bottom);
+  float ry = cornerOf(radiiY, right, bottom);
+  vec2 outside = vec2(max(box.x - px.x, px.x - box.z), max(box.y - px.y, px.y - box.w));
+  if (r == ry) {
+    vec2 e = outside + r;
+    return length(max(e, vec2(0.0))) + min(max(e.x, e.y), 0.0) - r;
+  }
+  vec2 q = outside + vec2(r, ry);
+  if (q.x > 0.0 && q.y > 0.0) {
+    vec2 inv = vec2(cornerOf(invX, right, bottom), cornerOf(invY, right, bottom));
+    vec2 k = q * inv;
+    float len = length(k);
+    return (len - 1.0) * len / max(length(k * inv), 1e-6);
+  }
+  return max(q.x - r, q.y - ry);
+}`;
+/** 与 glass.wgsl.ts 的 MASK_WGSL 对应：遮罩（mask-image 的渐变）在 px 处的不透明度。 */
+const MASK_GLSL = `float maskPick(int i, vec4 a, vec4 b) {
+  return i < 4 ? a[min(i, 3)] : b.x;
+}
+
+float maskAlpha(vec2 px, vec4 paint, vec4 geom, vec4 alpha0, vec4 alpha1, vec4 at0, vec4 at1, vec4 span) {
+  if (paint.x < 0.5) {
+    return 1.0;
+  }
+  float t;
+  if (paint.x < 1.5) {
+    t = dot(px - geom.xy, geom.zw);
+  } else {
+    t = length((px - geom.xy) * geom.zw);
+  }
+  int count = int(paint.y + 0.5);
+  float first = at0.x;
+  if (paint.z > 0.5 && at1.y > 0.0) {
+    float u = (t - first) * at1.y;
+    t = first + (u - floor(u)) * at1.z;
+  }
+  float a = alpha0.x;
+  if (t <= first) {
+    return a;
+  }
+  for (int i = 1; i < 5; i++) {
+    if (i >= count) {
+      break;
+    }
+    float next = maskPick(i, alpha0, alpha1);
+    if (t < maskPick(i, at0, at1)) {
+      float f = clamp((t - maskPick(i - 1, at0, at1)) * span[i - 1], 0.0, 1.0);
+      return a + (next - a) * f;
+    }
+    a = next;
+  }
+  return a;
+}`;
+const GLASS_COMMON = `
+${OPTICS_GLSL}
+
+struct Panel {
+  vec4 rect;
+  vec4 radii;
+  vec4 tint;
+  float heightPx;
+  float amountPx;
+  float blurLevel;
+  float saturation;
+  float squircle;
+  float depthEffect;
+  float dispersion;
+  float highlight;
+  float opacity;
+  float debugMode;
+  float rimPx;
+  float adapt;
+  vec4 clip;
+  vec4 clipRadii;
+  vec4 light;
+  vec4 shadow;
+  vec4 pose;
+  vec4 clipRadiiY;
+  vec4 clipInv[2];
+  vec4 shapeBox;
+  vec4 shapeRadii;
+  vec4 shapeRadiiY;
+  vec4 shapeInv[2];
+  vec4 maskPaint;
+  vec4 maskGeom;
+  vec4 maskAlpha[2];
+  vec4 maskAt[2];
+  vec4 maskSpan;
+  vec4 extra;
+};
+
+// 与 glass.wgsl.ts 的光照常量相同。
+const vec2 RIM_LIGHT_DIR = vec2(0.0, -1.0);
+const float RIM_BASE = 0.45;
+const float RIM_GLOSS = 1.0;
+const float RIM_GAIN = 0.3;
+const float BEVEL_SATURATION = 0.3;
+const float BEVEL_GLOW = 0.02;
+const float BODY_SHADE = 0.047;
+const float BODY_LIGHT = 0.055;
+const float EDGE_GRAY = 0.16;
+const float EDGE_MIX = 0.6;
+const float EDGE_TOP = 0.68;
+const float EDGE_FRAC = 0.6;
+const float SHADOW_TINT = 0.5;
+
+uniform sampler2D chain;
+uniform vec4 uStage;       // canvasSize.xy, probeOrigin.xy
+// 1 / canvasSize（CPU 上算好）。采样坐标乘它，不除以 canvasSize：实测 NVIDIA RTX 4070 Laptop + ANGLE（D3D11）上，
+// 片元着色器里除以 uniform 的结果会在帧与帧之间差 1 ulp —— 同一段着色器、同样的输入，这一帧是这个值、下一帧是
+// 那个值 —— 经过双线性采样放大成 ±1 的色阶，静止的画面两次回读哈希不同。乘法没有这个现象。
+// WGSL 那边（Dawn / D3D12）除法是稳定的，仍然写除法。
+uniform vec2 uStageInv;
+uniform float uOnScreen;   // 1 = 默认帧缓冲（翻 y），0 = 探针目标（不翻，加原点）
+uniform float uLinear;     // 1 = 线性光模式（见 glass.wgsl.ts 的 Stage.linear）
+
+out vec4 outColor;
+${SRGB_GLSL}
+
+// 片元的画布设备像素坐标，左上原点、像素中心在 +0.5 —— 与 WGSL 的 @builtin(position) 一致。
+vec2 fragPx() {
+  return uOnScreen > 0.5
+    ? vec2(gl_FragCoord.x, uStage.y - gl_FragCoord.y)
+    : gl_FragCoord.xy + uStage.zw;
+}
+${COLOR_FILTER}
+// 与 glass.wgsl.ts 的 workingTint 对应。
+vec4 workingTint(vec4 t) {
+  if (uLinear > 0.5) {
+    return vec4(srgbToLinear(t.rgb), t.a);
+  }
+  return t;
+}
+
+struct Shading {
+  float sd;
+  float coverage;
+  vec2 dir;
+  float displacement;
+  vec2 offset;
+  float bevel;
+  float vpos;
+  float body;
+  vec2 normal;
+  vec4 tint;
+  float blurLevel;
+  float saturation;
+  float dispersion;
+  float highlight;
+  float opacity;
+  float rimPx;
+  float glow;
+  vec2 veil;
+};
+
+vec4 shade(vec2 px, Shading s) {
+  vec2 base = px - s.dir * s.displacement - s.offset;
+  vec3 sampled;
+  if (s.dispersion > 0.0) {
+    vec3 w = spectralWeights(s.dispersion);
+    vec2 sR = px - s.dir * (s.displacement * w.x) - s.offset;
+    vec2 sB = px - s.dir * (s.displacement * w.z) - s.offset;
+    sampled = vec3(
+      textureLod(chain, sR * uStageInv, s.blurLevel).r,
+      textureLod(chain, base * uStageInv, s.blurLevel).g,
+      textureLod(chain, sB * uStageInv, s.blurLevel).b
+    );
+  } else {
+    sampled = textureLod(chain, base * uStageInv, s.blurLevel).rgb;
+  }
+  float bevel2 = s.bevel * s.bevel;
+  vec3 filtered = applyColorFilter(sampled, s.saturation * (1.0 + BEVEL_SATURATION * bevel2), workingTint(s.tint));
+  vec3 veiled = filtered * s.veil.x + (vec3(1.0) - filtered * s.veil.x) * s.veil.y;
+  vec3 edgeGray = uLinear > 0.5 ? srgbToLinear(vec3(EDGE_GRAY)) : vec3(EDGE_GRAY);
+  float edgePx = max(s.rimPx * EDGE_FRAC, 1.5);
+  float edge = rimMask(s.sd, edgePx);
+  float ndl = abs(dot(s.normal, RIM_LIGHT_DIR));
+  vec3 rgb = mix(veiled, edgeGray, EDGE_MIX * (1.0 - EDGE_TOP * ndl) * s.highlight * edge);
+  float rim = rimLight(s.normal, RIM_LIGHT_DIR, RIM_BASE, RIM_GLOSS) * rimMask(s.sd + edgePx, s.rimPx) * (1.0 - edge) * (1.0 - edge) * RIM_GAIN;
+  float body = bodyLight(s.vpos, BODY_SHADE, BODY_LIGHT) * s.body * (1.0 - edge);
+  float lit = (rim + BEVEL_GLOW * bevel2 + body) * s.highlight + s.glow;
+  float a = s.coverage * s.opacity;
+  vec3 color = max(rgb + vec3(lit, lit, lit), vec3(0.0));
+  if (uLinear > 0.5) {
+    color = linearToSrgb(color);
+  }
+  return vec4(color * a, a);
+}
+
+// 与 glass.wgsl.ts 的 shadowColor 对应。
+vec3 shadowColor(vec3 avg) {
+  vec3 c = avg * SHADOW_TINT;
+  if (uLinear > 0.5) {
+    return linearToSrgb(c);
+  }
+  return c;
+}
+
+// 与 glass.wgsl.ts 的自适应对应。
+const float ADAPT_MAX_LUM = 0.3;
+const float ADAPT_MIN_LUM = 0.1;
+const float ADAPT_LEVEL = 4.0;
+
+float relLuminance(vec3 c) {
+  vec3 lin = srgbToLinear(clamp(c, vec3(0.0), vec3(1.0)));
+  return dot(lin, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// 与 glass.wgsl.ts 的 adaptVeil 对应（线性光模式下的两条分支见那边的注释）。
+vec2 adaptVeil(vec3 avg, float adapt, float saturation, vec4 tint) {
+  if (adapt == 0.0) {
+    return vec2(1.0, 0.0);
+  }
+  vec3 filtered = applyColorFilter(avg, saturation, workingTint(tint));
+  bool linear = uLinear > 0.5;
+  float lum = linear
+    ? dot(clamp(filtered, vec3(0.0), vec3(1.0)), vec3(0.2126, 0.7152, 0.0722))
+    : relLuminance(filtered);
+  float strength = abs(adapt);
+  if (adapt > 0.0 && lum > ADAPT_MAX_LUM) {
+    float ratio = ADAPT_MAX_LUM / lum;
+    float scale = linear ? ratio : pow(ratio, 1.0 / 2.2);
+    return vec2(1.0 - (1.0 - scale) * strength, 0.0);
+  }
+  if (adapt < 0.0 && lum < ADAPT_MIN_LUM) {
+    if (linear) {
+      return vec2(1.0, (ADAPT_MIN_LUM - lum) / max(1.0 - lum, 1e-6) * strength);
+    }
+    float e = pow(max(lum, 0.0), 1.0 / 2.2);
+    float goal = pow(ADAPT_MIN_LUM, 1.0 / 2.2);
+    return vec2(1.0, (goal - e) / max(1.0 - e, 1e-6) * strength);
+  }
+  return vec2(1.0, 0.0);
+}
+
+// 与 glass.wgsl.ts 的 panelAverage 对应。
+vec3 panelAverage(vec4 rect) {
+  vec2 spots[5] = vec2[5](vec2(0.5, 0.5), vec2(0.25, 0.25), vec2(0.75, 0.25), vec2(0.25, 0.75), vec2(0.75, 0.75));
+  vec3 sum = vec3(0.0);
+  for (int i = 0; i < 5; i++) {
+    vec2 p = rect.xy + rect.zw * spots[i];
+    sum += textureLod(chain, p * uStageInv, ADAPT_LEVEL).rgb;
+  }
+  return sum / 5.0;
+}
+
+// 与 glass.wgsl.ts 的 lightAt 对应。
+float lightAt(vec2 px, vec4 light) {
+  if (light.w <= 0.0) {
+    return 0.0;
+  }
+  vec2 d = px - light.xy;
+  return light.w * exp(-dot(d, d) / (2.0 * light.z * light.z));
+}
+
+${POSE_GLSL}
+
+// 与 glass.wgsl.ts 的 shadowSd 对应。
+float shadowSd(vec2 centered, vec2 halfSize, vec4 radii, vec4 shadow, vec4 pose) {
+  vec2 shifted = centered - toLocal(vec2(0.0, shadow.z), pose);
+  vec2 inner = max(halfSize - vec2(shadow.w, shadow.w), vec2(0.0));
+  return sdRoundedRect(shifted, inner, max(radiusAt(shifted, radii) - shadow.w, 0.0));
+}
+
+// 与 glass.wgsl.ts 的 shadowAlpha 对应。
+float shadowAlpha(float sdShifted, float strength, float sigma) {
+  if (strength <= 0.0) {
+    return 0.0;
+  }
+  float d = max(sdShifted, 0.0);
+  return strength * exp(-d * d / (2.0 * sigma * sigma));
+}
+
+${ROUNDED_BOX_GLSL}
+
+${MASK_GLSL}
+
+// 与 glass.wgsl.ts 的 clipCoverage 对应。
+float clipCoverage(vec2 px, Panel p) {
+  float a = clamp(0.5 - roundedBoxSd(px, p.clip, p.clipRadii, p.clipRadiiY, p.clipInv[0], p.clipInv[1]), 0.0, 1.0);
+  float b = clamp(0.5 - roundedBoxSd(px, p.shapeBox, p.shapeRadii, p.shapeRadiiY, p.shapeInv[0], p.shapeInv[1]), 0.0, 1.0);
+  float m = maskAlpha(px, p.maskPaint, p.maskGeom, p.maskAlpha[0], p.maskAlpha[1], p.maskAt[0], p.maskAt[1], p.maskSpan);
+  return a * b * m;
+}
+
+vec4 debugView(int mode, float sd, float coverage, vec2 dir, float displacement, float amountPx) {
+  if (mode == 1) {
+    float bands = 0.5 + 0.5 * cos(sd * 0.6);
+    vec3 side = sd < 0.0 ? vec3(0.25, 0.55, 0.95) : vec3(0.95, 0.55, 0.25);
+    float edge = 1.0 - smoothstep(0.0, 1.5, abs(sd));
+    return vec4(mix(side * (0.55 + 0.45 * bands), vec3(1.0, 1.0, 1.0), edge), 1.0);
+  }
+  if (mode == 2) {
+    return vec4(coverage, coverage, coverage, 1.0);
+  }
+  if (mode == 3) {
+    return vec4(dir * 0.5 + 0.5, 0.0, 1.0);
+  }
+  if (mode == 4) {
+    float m = displacement / max(amountPx, 1e-6);
+    return vec4(m, m, m, 1.0);
+  }
+  return vec4(0.0, 0.0, 0.0, -1.0);
+}
+`;
+/**
+ * 与 glass.wgsl.ts 的 GLASS_WGSL 对应。uProbe = 1 时是 fsProbe：
+ * 输出 (sd, dir.x, dir.y, displacement) 到 RGBA32F（要 EXT_color_buffer_float）。
+ */
+export const GLASS_FS = `${HEADER}
+${GLASS_COMMON}
+layout(std140) uniform PanelBlock {
+  Panel panel;
+};
+uniform float uProbe;
+
+struct Optics {
+  vec2 centered;
+  vec2 halfSize;
+  float radius;
+  float sd;
+  vec2 dir;
+  float displacement;
+};
+
+Optics evalOptics(vec2 px) {
+  Optics o;
+  o.halfSize = panel.rect.zw * 0.5;
+  o.centered = toLocal(px - (panel.rect.xy + o.halfSize), panel.pose);
+  o.radius = radiusAt(o.centered, panel.radii);
+  o.sd = sdRoundedRect(o.centered, o.halfSize, o.radius);
+  float gradR = gradRadiusOf(o.radius, o.halfSize);
+  o.dir = toWorld(refractionDirection(o.centered, o.halfSize, gradR, panel.depthEffect), panel.pose);
+  o.displacement = refractionProfile(o.sd, panel.heightPx, panel.amountPx, panel.squircle);
+  return o;
+}
+
+void main() {
+  vec2 px = fragPx();
+  Optics o = evalOptics(px);
+  if (uProbe > 0.5) {
+    outColor = vec4(o.sd, o.dir.x, o.dir.y, o.displacement);
+    return;
+  }
+  float clip = clipCoverage(px, panel);
+  float coverage = clamp(0.5 - o.sd, 0.0, 1.0) * clip;
+  vec4 debug = debugView(int(panel.debugMode + 0.5), o.sd, coverage, o.dir, o.displacement, panel.amountPx);
+  if (debug.a >= 0.0) {
+    outColor = debug;
+    return;
+  }
+  float shade0 = shadowAlpha(shadowSd(o.centered, o.halfSize, panel.radii, panel.shadow, panel.pose), panel.shadow.x, panel.shadow.y) * clip * panel.opacity;
+  vec3 avg = panelAverage(panel.rect);
+  if (coverage <= 0.0) {
+    if (shade0 <= 0.0) {
+      discard;
+    }
+    outColor = vec4(shadowColor(avg) * shade0, shade0);
+    return;
+  }
+  Shading s;
+  s.sd = o.sd;
+  s.coverage = coverage;
+  s.dir = o.dir;
+  s.displacement = o.displacement;
+  s.offset = (px - (panel.rect.xy + o.halfSize)) * panel.pose.z;
+  s.bevel = refractionProfile(o.sd, panel.heightPx, 1.0, panel.squircle);
+  s.vpos = clamp((o.centered.y + o.halfSize.y) * panel.pose.w, 0.0, 1.0);
+  s.body = panel.extra.x;
+  s.normal = toWorld(safeNormalize(gradSdRoundedRect(o.centered, o.halfSize, gradRadiusOf(o.radius, o.halfSize))), panel.pose);
+  s.tint = panel.tint;
+  s.blurLevel = panel.blurLevel;
+  s.saturation = panel.saturation;
+  s.dispersion = panel.dispersion;
+  s.highlight = panel.highlight;
+  s.opacity = panel.opacity;
+  s.rimPx = panel.rimPx;
+  s.glow = lightAt(px, panel.light);
+  s.veil = adaptVeil(avg, panel.adapt, panel.saturation, panel.tint);
+  vec4 glass = shade(px, s);
+  float under = shade0 * (1.0 - glass.a);
+  outColor = vec4(glass.rgb + shadowColor(avg) * under, glass.a + under);
+}
+`;
+/**
+ * 与 fill.wgsl.ts 的 FILL_WGSL 对应。
+ *
+ * 画进场景目标时是离屏（不翻 y），画到画布上时翻一次 —— 与其它 pass 同一个约定，由 uDest.w 区分。
+ */
+export const FILL_FS = `${HEADER}
+${OPTICS_GLSL}
+${POSE_GLSL}
+
+struct Fill {
+  vec4 rect;
+  vec4 radii;
+  vec4 color;
+  vec4 clip;
+  vec4 clipRadii;
+  vec4 pose;
+  vec4 paint;
+  vec4 geom;
+  vec4 stops[${MAX_GRADIENT_STOPS}];
+  vec4 at[2];
+  vec4 span;
+  vec4 radiiY;
+  vec4 inv[2];
+  vec4 clipRadiiY;
+  vec4 clipInv[2];
+  vec4 shapeBox;
+  vec4 shapeRadii;
+  vec4 shapeRadiiY;
+  vec4 shapeInv[2];
+  vec4 maskPaint;
+  vec4 maskGeom;
+  vec4 maskAlpha[2];
+  vec4 maskAt[2];
+  vec4 maskSpan;
+  vec4 holeBox;
+  vec4 holeRadii;
+  vec4 holeRadiiY;
+  vec4 holeInv[2];
+  vec4 holeAlpha;
+};
+layout(std140) uniform FillBlock {
+  Fill fill;
+};
+uniform vec4 uDest;         // scale.xy（一个目标像素是几个画布设备像素）, aa, 翻不翻（1 = 画布）
+uniform float uDestHeight;  // 目标的高：翻 y 用
+uniform float uLinear;      // 1 = 输出线性值（线性光模式下画进场景目标，见 fill.wgsl.ts 的 Dest.linear）
+uniform sampler2D uAtlas;   // 位图填充的图集（预乘的 sRGB 编码值，第 0 行是顶部）；没有时是 1×1 的透明占位
+out vec4 outColor;
+${SRGB_GLSL}
+
+${ROUNDED_BOX_GLSL}
+
+${MASK_GLSL}
+
+// 与 fill.wgsl.ts 的 clipSd 对应。
+float clipSd(vec2 px) {
+  float a = roundedBoxSd(px, fill.clip, fill.clipRadii, fill.clipRadiiY, fill.clipInv[0], fill.clipInv[1]);
+  float b = roundedBoxSd(px, fill.shapeBox, fill.shapeRadii, fill.shapeRadiiY, fill.shapeInv[0], fill.shapeInv[1]);
+  return max(a, b);
+}
+
+// 与 fill.wgsl.ts 的 fillSd 对应。
+float fillSd(vec2 c, vec2 halfSize) {
+  float rx = radiusAt(c, fill.radii);
+  float ry = radiusAt(c, fill.radiiY);
+  if (rx == ry) {
+    return sdRoundedRect(c, halfSize, rx);
+  }
+  vec2 q = abs(c) - halfSize + vec2(rx, ry);
+  if (q.x > 0.0 && q.y > 0.0) {
+    vec2 inv = vec2(radiusAt(c, fill.inv[0]), radiusAt(c, fill.inv[1]));
+    vec2 k = q * inv;
+    float len = length(k);
+    return (len - 1.0) * len / max(length(k * inv), 1e-6);
+  }
+  return max(q.x - rx, q.y - ry);
+}
+
+// 与 fill.wgsl.ts 的 stopAt / gradientAt 对应。
+float stopAt(int i) {
+  return fill.at[i / 4][i % 4];
+}
+
+vec4 gradientAt(float t0) {
+  int count = int(fill.paint.y + 0.5);
+  float first = stopAt(0);
+  float t = t0;
+  if (fill.paint.z > 0.5 && fill.at[1].y > 0.0) {
+    float u = (t - first) * fill.at[1].y;
+    t = first + (u - floor(u)) * fill.at[1].z;
+  }
+  vec4 color = vec4(fill.stops[0].rgb * fill.stops[0].a, fill.stops[0].a);
+  if (t <= first) {
+    return color;
+  }
+  for (int i = 1; i < ${MAX_GRADIENT_STOPS}; i++) {
+    if (i >= count) {
+      break;
+    }
+    vec4 s = fill.stops[i];
+    vec4 next = vec4(s.rgb * s.a, s.a);
+    if (t < stopAt(i)) {
+      float f = clamp((t - stopAt(i - 1)) * fill.span[i - 1], 0.0, 1.0);
+      return mix(color, next, f);
+    }
+    color = next;
+  }
+  return color;
+}
+
+void main() {
+  vec2 frag = uDest.w > 0.5 ? vec2(gl_FragCoord.x, uDestHeight - gl_FragCoord.y) : gl_FragCoord.xy;
+  vec2 px = frag * uDest.xy;
+  vec2 halfSize = fill.rect.zw * 0.5;
+  vec2 c = toLocal(px - (fill.rect.xy + halfSize), fill.pose);
+  float sd = fillSd(c, halfSize);
+  float shape = clamp(0.5 - sd / uDest.z, 0.0, 1.0);
+  float covered = clamp(0.5 - clipSd(px) / uDest.z, 0.0, 1.0) *
+    maskAlpha(px, fill.maskPaint, fill.maskGeom, fill.maskAlpha[0], fill.maskAlpha[1], fill.maskAt[0], fill.maskAt[1], fill.maskSpan);
+  // 洞（见 fill.wgsl.ts）：没有时 holeAlpha 是 0
+  float hole = fill.holeAlpha.x *
+    clamp(0.5 - roundedBoxSd(px, fill.holeBox, fill.holeRadii, fill.holeRadiiY, fill.holeInv[0], fill.holeInv[1]) / uDest.z, 0.0, 1.0);
+  float clip = covered * (1.0 - hole);
+  if (fill.paint.x > 2.5) {
+    // 与 fill.wgsl.ts 的位图一支对应
+    vec2 uv = fill.geom.xy + (c + halfSize) * fill.geom.zw;
+    vec4 texel = textureLod(uAtlas, uv, 0.0);
+    vec4 cell = fill.stops[0];
+    float inCell = all(greaterThanEqual(uv, cell.xy)) && all(lessThanEqual(uv, cell.zw)) ? 1.0 : 0.0;
+    float kb = fill.color.a * shape * clip * inCell;
+    if (texel.a * kb <= 0.0) {
+      discard;
+    }
+    if (uLinear > 0.5) {
+      outColor = vec4(srgbToLinear(texel.rgb / texel.a) * texel.a * kb, texel.a * kb);
+      return;
+    }
+    outColor = texel * kb;
+    return;
+  }
+  if (fill.paint.x < 0.5) {
+    float a = fill.color.a * shape * clip;
+    if (a <= 0.0) {
+      discard;
+    }
+    vec3 rgb = uLinear > 0.5 ? srgbToLinear(fill.color.rgb) : fill.color.rgb;
+    outColor = vec4(rgb * a, a);
+    return;
+  }
+  vec2 local = c + halfSize;
+  float t = fill.paint.x < 1.5
+    ? dot(local - fill.geom.xy, fill.geom.zw)
+    : length((local - fill.geom.xy) * fill.geom.zw);
+  vec4 paint = gradientAt(t);
+  float k = fill.color.a * shape * clip;
+  if (paint.a * k <= 0.0) {
+    discard;
+  }
+  if (uLinear > 0.5) {
+    outColor = vec4(srgbToLinear(paint.rgb / paint.a) * paint.a * k, paint.a * k);
+    return;
+  }
+  outColor = paint * k;
+}
+`;
+/** 与 glass-group.wgsl.ts 的 GLASS_GROUP_WGSL 对应。混合同样不用 mix()，理由见那边的文件头。 */
+export function glassGroupFs(capacity) {
+    return `${HEADER}
+${GLASS_COMMON}
+struct Group {
+  vec4 header;
+  Panel members[${capacity}];
+};
+layout(std140) uniform GroupBlock {
+  Group grp;
+};
+uniform float uProbe;
+
+struct MemberOptics {
+  float sd;
+  vec2 dir;
+  vec2 normal;
+  vec2 offset;
+  float vpos;
+  float body;
+};
+
+MemberOptics memberOptics(Panel p, vec2 px) {
+  vec2 halfSize = p.rect.zw * 0.5;
+  vec2 centered = toLocal(px - (p.rect.xy + halfSize), p.pose);
+  float radius = radiusAt(centered, p.radii);
+  float gradR = gradRadiusOf(radius, halfSize);
+  MemberOptics m;
+  m.sd = sdRoundedRect(centered, halfSize, radius);
+  m.dir = toWorld(refractionDirection(centered, halfSize, gradR, p.depthEffect), p.pose);
+  m.normal = toWorld(safeNormalize(gradSdRoundedRect(centered, halfSize, gradR)), p.pose);
+  m.offset = (px - (p.rect.xy + halfSize)) * p.pose.z;
+  m.vpos = clamp((centered.y + halfSize.y) * p.pose.w, 0.0, 1.0);
+  m.body = p.extra.x;
+  return m;
+}
+
+float blend1(float a, float b, float h) {
+  return a * (1.0 - h) + b * h;
+}
+
+vec4 blend4(vec4 a, vec4 b, float h) {
+  return a * (1.0 - h) + b * h;
+}
+
+struct Merged {
+  float sd;
+  vec2 dir;
+  vec2 normal;
+  float displacement;
+  vec2 offset;
+  float bevel;
+  float vpos;
+  float body;
+  vec4 tint;
+  float heightPx;
+  float amountPx;
+  float blurLevel;
+  float saturation;
+  float squircle;
+  float dispersion;
+  float highlight;
+  float opacity;
+  float rimPx;
+  vec2 veil;
+};
+
+vec2 blend2(vec2 a, vec2 b, float h) {
+  return a * (1.0 - h) + b * h;
+}
+
+vec2 memberVeil(Panel p) {
+  return adaptVeil(panelAverage(p.rect), p.adapt, p.saturation, p.tint);
+}
+
+Merged evalGroup(vec2 px) {
+  int count = min(int(grp.header.x + 0.5), ${capacity});
+  float k = grp.header.y;
+
+  Panel first = grp.members[0];
+  MemberOptics f = memberOptics(first, px);
+  Merged m;
+  m.sd = f.sd;
+  m.dir = f.dir;
+  m.normal = f.normal;
+  m.offset = f.offset;
+  m.vpos = f.vpos;
+  m.body = f.body;
+  m.tint = first.tint;
+  m.heightPx = first.heightPx;
+  m.amountPx = first.amountPx;
+  m.blurLevel = first.blurLevel;
+  m.saturation = first.saturation;
+  m.squircle = first.squircle;
+  m.dispersion = first.dispersion;
+  m.highlight = first.highlight;
+  m.opacity = first.opacity;
+  m.rimPx = first.rimPx;
+  m.veil = memberVeil(first);
+
+  bool blended = false;
+  for (int i = 1; i < ${capacity}; i++) {
+    if (i >= count) break;
+    Panel p = grp.members[i];
+    MemberOptics c = memberOptics(p, px);
+    vec2 s = smin(c.sd, m.sd, k);
+    float h = s.y;
+    m.sd = s.x;
+    m.dir = sminGradient(c.dir, m.dir, h);
+    m.normal = sminGradient(c.normal, m.normal, h);
+    m.offset = blend2(m.offset, c.offset, h);
+    m.vpos = blend1(m.vpos, c.vpos, h);
+    m.body = blend1(m.body, c.body, h);
+    m.tint = blend4(m.tint, p.tint, h);
+    m.heightPx = blend1(m.heightPx, p.heightPx, h);
+    m.amountPx = blend1(m.amountPx, p.amountPx, h);
+    m.blurLevel = blend1(m.blurLevel, p.blurLevel, h);
+    m.saturation = blend1(m.saturation, p.saturation, h);
+    m.squircle = blend1(m.squircle, p.squircle, h);
+    m.dispersion = blend1(m.dispersion, p.dispersion, h);
+    m.highlight = blend1(m.highlight, p.highlight, h);
+    m.opacity = blend1(m.opacity, p.opacity, h);
+    m.rimPx = blend1(m.rimPx, p.rimPx, h);
+    m.veil = blend2(m.veil, memberVeil(p), h);
+    blended = blended || (h > 0.0 && h < 1.0);
+  }
+
+  float agreement = blended ? length(m.dir) : 1.0;
+  m.dir = blended ? safeNormalize(m.dir) : m.dir;
+  m.normal = blended ? safeNormalize(m.normal) : m.normal;
+  m.displacement = refractionProfile(m.sd, m.heightPx, m.amountPx, m.squircle) * agreement;
+  m.bevel = refractionProfile(m.sd, m.heightPx, 1.0, m.squircle) * agreement;
+  return m;
+}
+
+float groupGlow(vec2 px) {
+  int count = min(int(grp.header.x + 0.5), ${capacity});
+  float g = 0.0;
+  for (int i = 0; i < ${capacity}; i++) {
+    if (i >= count) break;
+    g += lightAt(px, grp.members[i].light);
+  }
+  return g;
+}
+
+float memberShadowSd(Panel p, vec2 pos) {
+  vec2 halfSize = p.rect.zw * 0.5;
+  vec2 centered = toLocal(pos - (p.rect.xy + halfSize), p.pose);
+  return shadowSd(centered, halfSize, p.radii, p.shadow, p.pose);
+}
+
+// 与 glass-group.wgsl.ts 的 groupShadow 对应：(影子颜色, 不透明度)。
+vec4 groupShadow(vec2 px) {
+  int count = min(int(grp.header.x + 0.5), ${capacity});
+  float k = grp.header.y;
+  Panel first = grp.members[0];
+  float sd = memberShadowSd(first, px);
+  float strength = first.shadow.x;
+  float sigma = first.shadow.y;
+  vec3 avg = panelAverage(first.rect);
+  for (int i = 1; i < ${capacity}; i++) {
+    if (i >= count) break;
+    Panel p = grp.members[i];
+    vec2 s = smin(memberShadowSd(p, px), sd, k);
+    sd = s.x;
+    strength = blend1(strength, p.shadow.x, s.y);
+    sigma = blend1(sigma, p.shadow.y, s.y);
+    avg = avg * (1.0 - s.y) + panelAverage(p.rect) * s.y;
+  }
+  return vec4(avg, shadowAlpha(sd, strength, sigma));
+}
+
+float groupClip(vec2 px) {
+  int count = min(int(grp.header.x + 0.5), ${capacity});
+  float c = clipCoverage(px, grp.members[0]);
+  for (int i = 1; i < ${capacity}; i++) {
+    if (i >= count) break;
+    c = max(c, clipCoverage(px, grp.members[i]));
+  }
+  return c;
+}
+
+void main() {
+  vec2 px = fragPx();
+  Merged m = evalGroup(px);
+  if (uProbe > 0.5) {
+    outColor = vec4(m.sd, m.dir.x, m.dir.y, m.displacement);
+    return;
+  }
+  float clip = groupClip(px);
+  float coverage = clamp(0.5 - m.sd, 0.0, 1.0) * clip;
+  vec4 debug = debugView(int(grp.header.z + 0.5), m.sd, coverage, m.dir, m.displacement, m.amountPx);
+  if (debug.a >= 0.0) {
+    outColor = debug;
+    return;
+  }
+  vec4 shadow = groupShadow(px);
+  float shade0 = shadow.w * clip * m.opacity;
+  vec3 avg = shadow.xyz;
+  if (coverage <= 0.0) {
+    if (shade0 <= 0.0) {
+      discard;
+    }
+    outColor = vec4(shadowColor(avg) * shade0, shade0);
+    return;
+  }
+  Shading s;
+  s.sd = m.sd;
+  s.coverage = coverage;
+  s.dir = m.dir;
+  s.displacement = m.displacement;
+  s.offset = m.offset;
+  s.bevel = m.bevel;
+  s.vpos = m.vpos;
+  s.body = m.body;
+  s.normal = m.normal;
+  s.tint = m.tint;
+  s.blurLevel = m.blurLevel;
+  s.saturation = m.saturation;
+  s.dispersion = m.dispersion;
+  s.highlight = m.highlight;
+  s.opacity = m.opacity;
+  s.rimPx = m.rimPx;
+  s.glow = groupGlow(px);
+  s.veil = m.veil;
+  vec4 glass = shade(px, s);
+  float under = shade0 * (1.0 - glass.a);
+  outColor = vec4(glass.rgb + shadowColor(avg) * under, glass.a + under);
+}
+`;
+}

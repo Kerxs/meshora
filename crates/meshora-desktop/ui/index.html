@@ -4,15 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Meshora</title>
+    <!-- Glassium 的兜底样式要赶在脚本之前：没有 GPU 时组件也有一层看得清的表面 -->
+    <link rel="stylesheet" href="vendor/glassium/glassium.css" />
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <div class="backdrop" aria-hidden="true">
-      <span class="blob blob-a"></span>
-      <span class="blob blob-b"></span>
-      <span class="blob blob-c"></span>
+    <!-- 背景：几团彩色光。每个元素只有一层渐变，Glassium 才收得进场景、玻璃折射得到 -->
+    <div class="sky" aria-hidden="true">
+      <span class="orb orb-a"></span>
+      <span class="orb orb-b"></span>
+      <span class="orb orb-c"></span>
+      <span class="orb orb-d"></span>
     </div>
     <div id="app"></div>
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>

@@ -263,4 +263,4 @@ Markdown 里的 `](/guide/x)` 会被 VitePress 自动加前缀，组件里的不
 本仓库以 [MIT](LICENSE) 发布。
 
 构建产物中包含第三方代码，其声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) ——
-首页背景使用的 Paper Shaders 是 Apache-2.0，按其第 4(d) 条要求转载了 NOTICE。
+首页背景使用的 Paper Shaders、桌面客户端界面使用的 Glassium 都是 Apache-2.0，按其第 4(d) 条要求转载了 NOTICE。

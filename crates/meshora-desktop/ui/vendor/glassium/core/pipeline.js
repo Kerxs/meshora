@@ -1,0 +1,79 @@
+/**
+ * 有序效果管线 —— Glassium 的内核。
+ *
+ * 为什么是有序命令式管线而不是一个扁平属性包：上游 Kyant0/AndroidLiquidGlass 的 v1
+ * 正是后者（`GlassStyle` / `GlassMaterial`），作者在 1.0.0-alpha14 把它整块删掉了。
+ * 原因有两条，都是扁平属性包结构上表达不了的：
+ *
+ *   1. **效果顺序有语义。** 先调色再模糊，和先模糊再调色，出来的不是一个东西。
+ *   2. **效果要向渲染器报告采样余量。** 模糊要读到面板边界之外 3σ 的像素，
+ *      按元素录制图层的渲染器（上游、以及将来的 Android 渲染器）得据此把图层外扩。
+ *      一个属性包里没有地方放这个信息。目前只有模糊需要余量，折射不需要——见下。
+ *
+ * 声明式的那层没有消失，它在 material.ts 里，作为立面降级到这个管线。
+ * 简单场景写一行，复杂场景可以下探 —— 两者都要。
+ */
+/**
+ * 单个效果需要读到面板边界之外多远，dp。
+ *
+ * **lens 是 0。** 折射只向面板内部采样：上游在 Lens.kt 里把 refractionAmount
+ * 取负后才传给着色器，而 SDF 梯度指向外侧，于是 `coord + d·grad` 是往里走的 ——
+ * 这也正是凸透镜在边缘放大的物理行为（视线在倾斜的表面上向法线偏折，落点比
+ * 入射点更靠近中心）。Glassium 保持同样的方向，所以折射读到的永远是面板内部的像素。
+ *
+ * （这里曾经写的是 amountDp，理由是「上游按 height 编排余量、欠补 2 倍」。
+ * 那是规划阶段的推断，从没渲染验证过，而且和上面这个采样方向矛盾 —— 已撤回，
+ * 见 docs/porting-notes.md。）
+ *
+ * 将来若加一个向外采样的折射模式（边缘「包住」外侧内容的那种观感），它的余量才是
+ * amountDp。
+ *
+ * 不需要 size 参数：降级时已经把分数参数解算成 dp 了，到这里全是绝对值。
+ */
+export function sampleMargin(effect) {
+    switch (effect.kind) {
+        case 'colorFilter':
+            return 0;
+        case 'blur':
+            // 高斯在 3σ 外的贡献低于 0.3%，按 3σ 截断是标准做法。
+            return Math.ceil(3 * Math.max(effect.sigmaDp, 0));
+        case 'lens':
+            return 0;
+    }
+}
+/**
+ * 整条链需要的采样余量，dp。
+ *
+ * 组合规则是**累加**：每个效果的输入必须在其下游所有效果会读到的范围内都有效，
+ * 所以向外的读取距离逐级叠加。
+ *
+ * 老实说，在当前的效果集合里这条规则**观察不到**：只有模糊需要余量，累加和取最大值
+ * 给出同一个数。保留它是因为它才是正确的组合方式 —— 一旦出现第二个向外读取的效果
+ * （向外折射、投影），取 max 就会欠补。
+ *
+ * 写成从右向左折叠，是为了将来出现改变尺度的效果（比如在半分辨率上跑的 pass）时
+ * 能正确复合 —— 那时候方向就有意义了。对当前这套纯加法而言方向无差别。
+ */
+export function resolveMargins(effects) {
+    return effects.reduceRight((downstream, effect) => sampleMargin(effect) + downstream, 0);
+}
+/** 管线的合法顺序。降级产出的链必须是它的子序列。 */
+const CANONICAL_ORDER = ['colorFilter', 'blur', 'lens'];
+/**
+ * 校验一条链的顺序合法。
+ *
+ * 手写 EffectChain 是允许的（这就是「可以下探」的意思），但顺序不能乱 ——
+ * 先折射再模糊会把折射出来的边缘一起糊掉，那不是玻璃是毛玻璃贴纸。
+ * 与其让它默默出一个难看的结果，不如在这里抛。
+ */
+export function assertCanonicalOrder(effects) {
+    let cursor = 0;
+    for (const effect of effects) {
+        const at = CANONICAL_ORDER.indexOf(effect.kind, cursor);
+        if (at < 0) {
+            throw new Error(`[Glassium] 效果顺序非法：${effects.map((e) => e.kind).join(' → ')}。` +
+                `合法顺序是 ${CANONICAL_ORDER.join(' → ')} 的子序列。`);
+        }
+        cursor = at + 1;
+    }
+}

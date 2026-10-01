@@ -1,0 +1,38 @@
+/**
+ * runtime 建的 stage 上的自适应质量（performance/adaptive.ts）：configure({ quality }) 是 auto 就按实测帧时间升降，
+ * 是固定档就定死。自己调 createGlassStage 的 stage 不挂（满质量）。
+ */
+import { AdaptiveQuality } from "../performance/adaptive.js";
+import { VERSION } from "../version.js";
+import { fixedQuality, getConfig, onConfigChange } from "./config.js";
+import { adaptiveTargets } from "./glass.js";
+let adaptive = null;
+/** runtime 建的 stage（显存预算跟着 configure 走）。 */
+let current = null;
+let subscribed = false;
+export function attachQuality(stage) {
+    adaptive?.dispose();
+    const c = getConfig();
+    stage.setMemoryBudget(c.memoryBudget);
+    current = stage;
+    adaptive = new AdaptiveQuality(stage, {
+        fixed: fixedQuality(c.quality),
+        remember: c.rememberQuality,
+        version: VERSION,
+        // 局部质量：整页吃紧时先降最贵的那几块 runtime 玻璃
+        locals: adaptiveTargets
+    });
+    if (!subscribed) {
+        subscribed = true;
+        onConfigChange((next, prev) => {
+            if (next.quality !== prev.quality)
+                adaptive?.setFixed(fixedQuality(next.quality));
+            if (next.memoryBudget !== prev.memoryBudget)
+                current?.setMemoryBudget(next.memoryBudget);
+        });
+    }
+}
+/** 当前的自适应质量（调试面板读；runtime 没建 stage 时是 null）。 */
+export function currentAdaptive() {
+    return adaptive;
+}

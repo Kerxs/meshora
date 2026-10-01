@@ -2,18 +2,26 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <!-- 和客户端 tauri.conf.json 里的同一条 CSP：在这里跑得通，进了客户端也跑得通 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Meshora（界面预览）</title>
+    <link rel="stylesheet" href="../ui/vendor/glassium/glassium.css" />
     <link rel="stylesheet" href="../ui/app.css" />
   </head>
   <body>
-    <div class="backdrop" aria-hidden="true">
-      <span class="blob blob-a"></span>
-      <span class="blob blob-b"></span>
-      <span class="blob blob-c"></span>
+    <div class="sky" aria-hidden="true">
+      <span class="orb orb-a"></span>
+      <span class="orb orb-b"></span>
+      <span class="orb orb-c"></span>
+      <span class="orb orb-d"></span>
     </div>
     <div id="app"></div>
+    <!-- 假后端是普通脚本，先执行；界面是模块，等文档解析完才跑 -->
     <script src="mock.js"></script>
-    <script src="../ui/app.js"></script>
+    <script type="module" src="../ui/app.js"></script>
   </body>
 </html>

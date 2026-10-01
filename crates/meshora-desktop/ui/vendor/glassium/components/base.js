@@ -1,0 +1,144 @@
+/**
+ * `<glass-*>` 组件的公共基类。
+ *
+ * 组件只做三件事：把 HTML 属性翻译成材质、在 stage 上把自己注册成面板、在没有玻璃时
+ * 挂上 CSS 兜底表面的钩子（`data-glassium-active` 属性，见 glassium.css）。
+ * 渲染全在 stage 里，组件本身不碰 GPU。
+ *
+ * 内容是普通的 light DOM（影子树里只有一个 `<slot>`）：选中、聚焦、输入法、无障碍、
+ * 命中测试全归浏览器，Glassium 一样都不接管。
+ *
+ * ## 组件可以早于 stage
+ *
+ * createGlassStage() 要等 GPU 设备，是异步的；而 customElements.define 一执行，页面上
+ * 已有的元素就立即 upgrade。所以「先建 stage 再 upgrade」在实际页面里做不到。
+ * 组件 upgrade 时没有 stage 就先等着，stage 建好时统一注册；stage 被 dispose 再重建，
+ * 组件也跟过去。
+ */
+import { overlayHostRule } from "../core/overlay.js";
+import { describeElement } from "../renderer/layering.js";
+import { ACTIVE_ATTRIBUTE, GlassBinding } from "../runtime/binding.js";
+import { MATERIAL_ATTRIBUTES, parseMaterialAttributes } from "./attributes.js";
+import { ScrollEdgeLayer } from "./scroll-edge.js";
+/** 玻璃生效时组件带上的属性（见 runtime/binding.ts）。 */
+export { ACTIVE_ATTRIBUTE };
+/**
+ * SSR / Node 里没有 HTMLElement。类声明在模块求值时就要用到基类，直接写
+ * `extends HTMLElement` 会让服务端 import 这个包时当场 ReferenceError。
+ * 真正的注册（customElements.define）只在 defineGlassElements() 里做，那里有环境判断。
+ */
+export const HTMLElementBase = typeof HTMLElement === 'undefined' ? class {
+} : HTMLElement;
+export class GlassElement extends HTMLElementBase {
+    /** 材质属性，加上 `scroll-edge`（浮在正文上时的磨砂，scroll-edge.ts）。子类在它后面接自己的。 */
+    static get observedAttributes() {
+        return [...MATERIAL_ATTRIBUTES, 'scroll-edge'];
+    }
+    #base = {};
+    /**
+     * 与 stage 的绑定（runtime/binding.ts）：等 stage、注册成面板、推材质与光、挂生效标记。
+     * runtime 的 `glass()` / `<div glass>` 走的是同一条路。
+     */
+    #binding = new GlassBinding(this, {
+        material: () => this.present(this.#base),
+        light: () => this.light()
+    });
+    #reported = new Set();
+    /**
+     * 这个元素自己的样式表：`:host { --glassium-* }`，把材质写成 CSS 变量（core/overlay.ts）。用 CSS 画的玻璃
+     * （overlay、对话框与 popover 里）读它们。放在影子树里而不写宿主的 style：那是作者（或框架）的，
+     * 改它还会惊动 stage 的 MutationObserver。材质变了才重写。
+     */
+    #vars = null;
+    #varsRule = '';
+    /** 写了 scroll-edge 时影子树里的磨砂层。 */
+    #scrollEdge = new ScrollEdgeLayer(this);
+    /** 解析后的基础材质：组件默认值 ⊕ preset ⊕ 显式属性。不含交互调制。 */
+    get material() {
+        return this.#base;
+    }
+    /** 子类的默认材质，会被 preset 与显式属性覆盖。 */
+    defaults() {
+        return {};
+    }
+    /** 子类在交互时调整材质（`<glass-button>` 的按压）。默认原样返回。 */
+    present(material) {
+        return material;
+    }
+    /** 子类的按压处的光（`<glass-button>`）。默认没有。 */
+    light() {
+        return null;
+    }
+    connectedCallback() {
+        this.#readAttributes();
+        this.#binding.connect();
+        this.#scrollEdge.sync();
+    }
+    disconnectedCallback() {
+        this.#binding.disconnect();
+        this.#scrollEdge.sync();
+    }
+    attributeChangedCallback(name, oldValue, newValue) {
+        if (oldValue === newValue)
+            return;
+        if (name === 'scroll-edge') {
+            this.#scrollEdge.sync();
+            return;
+        }
+        if (!MATERIAL_ATTRIBUTES.includes(name))
+            return;
+        this.#readAttributes();
+        this.refresh();
+    }
+    /** 材质或交互状态变了：把当前材质与光推给面板。还没注册（没有 stage）时什么都不做。 */
+    refresh() {
+        this.#binding.refresh();
+    }
+    /** 只有光变了（比如按住拖动）：不重推材质 —— 推材质会让面板重新降级。 */
+    refreshLight() {
+        this.#binding.refreshLight();
+    }
+    #writeOverlayVars() {
+        const root = this.shadowRoot;
+        if (!root || typeof CSSStyleSheet === 'undefined')
+            return;
+        const rule = overlayHostRule(this.#base);
+        if (rule === this.#varsRule)
+            return;
+        if (!this.#vars) {
+            this.#vars = new CSSStyleSheet();
+            root.adoptedStyleSheets = [...root.adoptedStyleSheets, this.#vars];
+        }
+        this.#vars.replaceSync(rule);
+        this.#varsRule = rule;
+    }
+    #readAttributes() {
+        const { material, problems } = parseMaterialAttributes((name) => this.getAttribute(name));
+        this.#base = { ...this.defaults(), ...material };
+        this.#writeOverlayVars();
+        for (const problem of problems) {
+            // 同一个错只报一次：改别的属性会重新解析全部属性，不去重的话同一条会反复出现
+            if (this.#reported.has(problem))
+                continue;
+            this.#reported.add(problem);
+            console.warn(`[Glassium] ${describeElement(this)} 的属性有误，已忽略：${problem}`, this);
+        }
+    }
+}
+/**
+ * 没打开的 popover 不显示。浏览器默认样式里的 `[popover]:not(:popover-open) { display: none }` 是 UA 样式，
+ * 组件自己的 `:host { display: … }` 是作者样式、压过它 —— 不补这一条，`<glass-card popover>` 没打开也显示着
+ * （还画着 GPU 玻璃）。验证页的 overlay 一项多数出一块面板才发现。
+ */
+export const POPOVER_HOST_CSS = ':host([popover]:not(:popover-open)) { display: none; }';
+/**
+ * 所有实例共用的一张影子样式表。惰性创建：模块顶层 `new CSSStyleSheet()` 在 SSR 里会抛。
+ * 每个组件的样式后面都补上 POPOVER_HOST_CSS。
+ */
+export function sharedSheet(cache, css) {
+    if (!cache.sheet) {
+        cache.sheet = new CSSStyleSheet();
+        cache.sheet.replaceSync(`${css}\n${POPOVER_HOST_CSS}`);
+    }
+    return cache.sheet;
+}

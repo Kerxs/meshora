@@ -8,13 +8,14 @@
   const id = "mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY=";
   const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443#3q2-7wEYkQ6n0Cf8Hs5VYA";
   const peers = [
-    { id: "Kx81ZrT0pQv3Yb7Nc2Lw5Df8Gh1Jk4Ms6Aa9Ee0Ii2U=", ip: "100.64.0.1", route: "direct", rttMs: 14, jitterMs: 3, lossPercent: 2, online: true, rx: 18_734_112, tx: 9_201_554 },
-    { id: "Pm42VcX9sB1nQ7rT3yH5jK8lZ0wE2dF4gA6uI9oO1eU=", ip: "100.64.0.2", route: "relay", rttMs: 48, jitterMs: 4, online: true, rx: 2_048_331, tx: 1_530_227 },
-    { id: "Wq7Hd3Fk9Lz1Xc5Vb8Nm2As4Df6Gh0Jk3Lq5We7Rt9Y=", ip: "100.64.0.4", route: "pending", rttMs: null, jitterMs: null, online: false, rx: 0, tx: 0 },
+    { id: "Kx81ZrT0pQv3Yb7Nc2Lw5Df8Gh1Jk4Ms6Aa9Ee0Ii2U=", name: "小明", ip: "100.64.0.1", route: "direct", rttMs: 14, jitterMs: 3, lossPercent: 2, online: true, rx: 18_734_112, tx: 9_201_554 },
+    { id: "Pm42VcX9sB1nQ7rT3yH5jK8lZ0wE2dF4gA6uI9oO1eU=", name: "老王的笔记本", ip: "100.64.0.2", route: "relay", rttMs: 48, jitterMs: 4, online: true, rx: 2_048_331, tx: 1_530_227 },
+    { id: "Wq7Hd3Fk9Lz1Xc5Vb8Nm2As4Df6Gh0Jk3Lq5We7Rt9Y=", name: "", ip: "100.64.0.4", route: "pending", rttMs: null, jitterMs: null, online: false, rx: 0, tx: 0 },
   ];
   const base = {
     version: "0.0.0",
     id,
+    name: "阿杰的台式机",
     network: null,
     preferBroadcast: true,
     autoConnect: true,
@@ -62,7 +63,13 @@
       if (ov.phase === "connected") {
         ov = {
           ...ov,
-          peers: ov.peers.map((p) => (p.online ? { ...p, rx: p.rx + 40_000 * tick, rttMs: p.rttMs && 12 + (tick % 5) } : p)),
+          // 延迟有点起伏，偶尔一个毛刺：历史曲线上才看得出东西
+          peers: ov.peers.map((p, i) => {
+            if (!p.online) return p;
+            const base = peers[i].rttMs;
+            const wobble = Math.round(Math.sin(tick / 3 + i) * base * 0.15 + (tick % 23 === 0 ? base * 0.8 : 0));
+            return { ...p, rx: p.rx + 60_000 * (i + 1), tx: p.tx + 20_000 * (i + 1), rttMs: Math.max(1, base + wobble) };
+          }),
         };
       }
       return ov;
@@ -88,6 +95,11 @@
     },
     set_private_network({ on }) {
       ov = { ...ov, privateNetwork: on };
+    },
+    set_name({ name }) {
+      const cleaned = name.trim().slice(0, 32);
+      ov = { ...ov, name: cleaned };
+      return cleaned;
     },
     logs() {
       return [

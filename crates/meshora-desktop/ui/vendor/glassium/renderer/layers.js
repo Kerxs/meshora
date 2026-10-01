@@ -1,0 +1,104 @@
+/**
+ * 玻璃的层（见 panels.ts 的 MAX_GLASS_LAYER）：两个后端共用的那一部分 —— 一层的东西有哪些、要重画哪一块。
+ *
+ * 第 0 层照旧：场景 → 模糊链 → 背景上屏 → 填充 → 玻璃。第 L 层（L ≥ 1）的玻璃要看得见下面那几层的玻璃，
+ * 所以画它之前：
+ *
+ *   1. 把画布上已经画好的那一块（场景 + 下面几层的玻璃与填充）拷出来，重采样回场景目标（模糊链的第 0 级）；
+ *   2. 这一层的填充画进去（这一层的玻璃看得见它）；
+ *   3. 只在这一块里重建模糊链；
+ *   4. 这一层的填充按画布分辨率画到画布上，再画这一层的玻璃与合并组。
+ *
+ * 「这一块」是这一层所有东西的包围盒往外扩到模糊够得着的地方：玻璃在模糊链的某一级采样，那一级的值取决于
+ * 第 0 级在它周围约 3σ 里的内容。扩出去的那一圈外面还是第 0 层时的旧内容（没有玻璃的场景），
+ * 离玻璃足够远，影响不到它。
+ */
+import { sigmaForLevel } from "./blur.js";
+/** 按层分组，层号从小到大，只含有东西的层。 */
+export function splitLayers(panels, groups, fills) {
+    const byLayer = new Map();
+    const bucket = (layer) => {
+        let b = byLayer.get(layer);
+        if (!b) {
+            b = { panels: [], groups: [], fills: [] };
+            byLayer.set(layer, b);
+        }
+        return b;
+    };
+    panels.forEach((p, i) => bucket(p.layer).panels.push(i));
+    groups.forEach((g, i) => bucket(g.layer).groups.push(i));
+    fills.forEach((f, i) => bucket(f.layer).fills.push(i));
+    return [...byLayer.entries()].sort((a, b) => a[0] - b[0]).map(([layer, b]) => ({ layer, ...b }));
+}
+/**
+ * 一层要重画的那一块。包围盒取这一层面板的包围盒、合并组与填充的裁剪矩形；往外扩的量按模糊链最粗的那一级算
+ * （3σ，场景像素）—— 自适应的纱在第 4 级取样，玻璃自己的模糊也可能用到最粗的一级。空的返回 null。
+ */
+export function layerRegion(items, panels, groups, fills, viewport, levels) {
+    let box = null;
+    const add = (b) => {
+        box = box
+            ? { x0: Math.min(box.x0, b.x0), y0: Math.min(box.y0, b.y0), x1: Math.max(box.x1, b.x1), y1: Math.max(box.y1, b.y1) }
+            : b;
+    };
+    const fromScissor = (s) => ({ x0: s[0], y0: s[1], x1: s[0] + s[2], y1: s[1] + s[3] });
+    for (const i of items.panels)
+        add(panels[i].bounds);
+    for (const i of items.groups)
+        add(fromScissor(groups[i].scissor));
+    for (const i of items.fills)
+        add(fromScissor(fills[i].scissor));
+    if (!box)
+        return null;
+    const b = box;
+    const sw = viewport.sceneWidth;
+    const sh = viewport.sceneHeight;
+    const cw = viewport.compositeWidth;
+    const ch = viewport.compositeHeight;
+    const kx = sw / cw;
+    const ky = sh / ch;
+    const margin = Math.ceil(3 * sigmaForLevel(Math.max(1, levels - 1))) + 2;
+    const sx0 = Math.max(0, Math.floor(b.x0 * kx) - margin);
+    const sy0 = Math.max(0, Math.floor(b.y0 * ky) - margin);
+    const sx1 = Math.min(sw, Math.ceil(b.x1 * kx) + margin);
+    const sy1 = Math.min(sh, Math.ceil(b.y1 * ky) + margin);
+    if (sx1 <= sx0 || sy1 <= sy0)
+        return null;
+    // 画布上要拷的那一块：盖住场景那一块的全部像素（重采样的双线性会读到边上一个像素）
+    const cx0 = Math.max(0, Math.floor(sx0 / kx) - 1);
+    const cy0 = Math.max(0, Math.floor(sy0 / ky) - 1);
+    const cx1 = Math.min(cw, Math.ceil(sx1 / kx) + 1);
+    const cy1 = Math.min(ch, Math.ceil(sy1 / ky) + 1);
+    return {
+        composite: [cx0, cy0, cx1 - cx0, cy1 - cy0],
+        scene: [sx0, sy0, sx1 - sx0, sy1 - sy0]
+    };
+}
+/** 几块场景矩形（[x, y, w, h]）的并集包围盒；没有是 null。 */
+export function unionRegion(rects) {
+    if (rects.length === 0)
+        return null;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const [x, y, w, h] of rects) {
+        x0 = Math.min(x0, x);
+        y0 = Math.min(y0, y);
+        x1 = Math.max(x1, x + w);
+        y1 = Math.max(y1, y + h);
+    }
+    return [x0, y0, x1 - x0, y1 - y0];
+}
+/**
+ * 场景目标里的一块 → 模糊链第 level 级里要重建的那一块：按级缩小、往外扩 3 个纹素（5 抽头的核 ±2，
+ * 再加双线性降采样读到的那一个），钳到这一级的尺寸里。
+ */
+export function levelRegion(scene, level, levelWidth, levelHeight) {
+    const f = 2 ** level;
+    const x0 = Math.max(0, Math.floor(scene[0] / f) - 3);
+    const y0 = Math.max(0, Math.floor(scene[1] / f) - 3);
+    const x1 = Math.min(levelWidth, Math.ceil((scene[0] + scene[2]) / f) + 3);
+    const y1 = Math.min(levelHeight, Math.ceil((scene[1] + scene[3]) / f) + 3);
+    return [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)];
+}
