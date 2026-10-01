@@ -51,6 +51,12 @@ echo "Meshora 在跑（pid $pid）"
 tap() {
   local wanted=$1 point
   for _ in $(seq 1 20); do
+    # 被系统挪到后台（或者被结束）了就再打开：界面会接着上次的进度
+    if ! adb shell dumpsys activity activities | grep -q "topResumedActivity.*$package"; then
+      echo "Meshora 不在前台，重新打开"
+      adb shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 >/dev/null || true
+      sleep 5
+    fi
     adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || true
     adb shell cat /sdcard/ui.xml > "$out/ui.xml" 2>/dev/null || true
     point=$(python3 - "$wanted" "$out/ui.xml" <<'PY'

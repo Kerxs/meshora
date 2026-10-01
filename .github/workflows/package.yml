@@ -215,7 +215,9 @@ jobs:
         with:
           api-level: 34
           arch: x86_64
-          target: google_apis
+          # 不带 Google 服务的原生镜像：Google 服务在模拟器开机后常自己重启，WebView 依赖它的字体提供程序，
+          # 会被一起结束。Meshora 用不到 Google 服务
+          target: default
           disable-animations: true
           script: bash scripts/android-smoke.sh apk/*.apk smoke code.txt
       - name: 另一边收到了回应
