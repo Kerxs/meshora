@@ -1,5 +1,7 @@
 // Meshora 的 VpnService 插件（Android 库）。打包时由 Tauri 并进 App 的 Android 工程，
-// Android Gradle 插件、Kotlin 的版本跟着 App 工程走
+// Android Gradle 插件、Kotlin 的版本跟着 App 工程走。写法照着 Tauri 自己的 tauri-api 库
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -7,7 +9,7 @@ plugins {
 
 android {
     namespace = "io.github.kerxs.meshora.vpn"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 24
@@ -18,8 +20,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
-    kotlinOptions {
-        jvmTarget = "1.8"
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_1_8
     }
 }
 

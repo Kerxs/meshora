@@ -1,2 +1,4 @@
 /build
 /.gradle
+# 构建脚本从 tauri 里复制出来的 Kotlin API，每次编译重新生成
+/.tauri
