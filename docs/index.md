@@ -121,7 +121,7 @@ Meshora 想提供的是：**开源、可以完全自建、以联机为唯一目�
 
 <HomeSection eyebrow="1.0.0" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
 
-**1.0.0 已发布：Windows 客户端的安装程序、安卓客户端的 APK 和 Linux 服务端可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，安装包没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过 —— 欢迎试用，把结果告诉我们。
+**1.0.0 已发布：Windows 客户端的安装程序、安卓客户端的 APK 和 Linux 服务端可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，Windows 安装程序没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过、没在真手机上试过 —— 欢迎试用，把结果告诉我们。
 
 核心引擎用 Rust 写，数据面采用 WireGuard 协议（[boringtun](https://github.com/cloudflare/boringtun) 用户态实现），
 控制面自研。在 Linux 上，两台机器之间已经能经加密隧道 ping 通 ——
