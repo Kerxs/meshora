@@ -8,6 +8,7 @@
 //! | --- | --- | --- |
 //! | Linux | `/dev/net/tun` + ioctl | 实测过 |
 //! | Windows | wintun | CI 的 Windows 虚拟机上实测过 |
+//! | 安卓 | VpnService 交出的文件描述符（[`Tun::from_fd`]） | 在模拟器上跑过 |
 //!
 //! 平台相关的 unsafe 代码集中在这个 crate 里，每一处都写了 SAFETY。
 
@@ -15,6 +16,9 @@ use std::io;
 use std::net::Ipv4Addr;
 
 use tokio::sync::mpsc;
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod fd;
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
@@ -27,6 +31,12 @@ use linux as platform;
 mod windows;
 #[cfg(windows)]
 use windows as platform;
+
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+mod android;
+#[cfg(target_os = "android")]
+use android as platform;
 
 /// 搬运 channel 的容量（报文个数）。
 const CHANNEL_CAPACITY: usize = 256;
@@ -67,6 +77,16 @@ impl Tun {
         }
         let (device, name) = platform::open(config)?;
         Ok(Self { name, device })
+    }
+
+    /// 接过安卓 VpnService 建好的网卡（`ParcelFileDescriptor.detachFd()` 交出来的描述符）。
+    /// 地址、路由、MTU 都已经在 `VpnService.Builder` 上设好了，这里只管读写。
+    #[cfg(target_os = "android")]
+    pub fn from_fd(name: impl Into<String>, fd: std::os::fd::OwnedFd) -> io::Result<Self> {
+        Ok(Self {
+            name: name.into(),
+            device: platform::from_fd(fd)?,
+        })
     }
 
     /// 系统里这块网卡实际的名字。

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use meshora_control::{Config, ControlError, NameSetter, Session, Status, Welcome};
 use meshora_dataplane::{DataPlane, PeerStatus};
-use meshora_tun::{Pipes, Tun, TunConfig};
+use meshora_tun::Pipes;
 use meshora_types::{NodeKey, NodeSecret};
 use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::sync::{mpsc, watch};
@@ -22,7 +22,12 @@ use tracing::info;
 
 pub use meshora_control::{AdminHandle, AdminResult, Entry, Hosting};
 pub use meshora_control::{AdminRequest, Roster, RosterInvite, RosterMember};
+pub use meshora_tun::{Tun, TunConfig};
 pub use network::{NetworkCode, ParseNetworkCodeError};
+
+/// 自己建虚拟网卡的办法。不给就用 [`Tun::open`]（Windows、Linux）；安卓上网卡要请系统的 VpnService 建，
+/// 客户端在这里接上它。拿到的配置里是协调服务刚分的地址。会在异步任务里同步地调用，可以阻塞一会儿
+pub type TunOpener = Arc<dyn Fn(&TunConfig) -> io::Result<Tun> + Send + Sync>;
 
 /// 启动一个节点要的东西。
 pub struct Options {
@@ -50,6 +55,8 @@ pub struct Options {
     pub name: String,
     /// 本机当主机时的额外设置，见 [`Hosting`]。
     pub hosting: Hosting,
+    /// 自己建虚拟网卡的办法，见 [`TunOpener`]。`None` 是 [`Tun::open`]。
+    pub open_tun: Option<TunOpener>,
 }
 
 /// 启动失败的原因。
@@ -124,13 +131,17 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
     let welcome = session.welcome().clone();
 
     let tun_error = |err| StartError::Tun(options.tun.clone(), err);
-    let tun = Tun::open(&TunConfig {
+    let tun_config = TunConfig {
         name: options.tun.clone(),
         address: welcome.overlay_ip,
         prefix_len: welcome.prefix_len,
         mtu: options.mtu,
         metric: options.metric,
-    })
+    };
+    let tun = match &options.open_tun {
+        Some(open) => open(&tun_config),
+        None => Tun::open(&tun_config),
+    }
     .map_err(tun_error)?;
     let tun_name = tun.name().to_owned();
     info!(

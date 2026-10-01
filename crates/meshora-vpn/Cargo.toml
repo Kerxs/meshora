@@ -1,0 +1,22 @@
+[package]
+name = "tauri-plugin-meshora-vpn"
+description = "Meshora 安卓客户端的 VpnService：要 VPN 权限、建网卡，把文件描述符交给 Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+# Tauri 插件要有 links：构建脚本靠它把 Kotlin 代码的位置告诉 App 的 Android 工程
+links = "tauri-plugin-meshora-vpn"
+
+# 只在 Windows（编得过、检查得到）和安卓上编。Linux 的 CI 不必为它装 WebKit
+[target.'cfg(any(windows, target_os = "android"))'.dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+
+[build-dependencies]
+tauri-plugin = { version = "2.7", features = ["build"] }
+
+[lints]
+workspace = true

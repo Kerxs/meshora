@@ -1169,3 +1169,146 @@ td.spark-cell .spark {
     width: min(520px, 100%);
   }
 }
+
+/* ---------- 手机（安卓客户端，html.phone） ----------
+ * 一栏：通行证缩成顶上一张卡（状态、你的地址、断开），内容在下面滚，导航是底部一条胶囊。
+ * 尺寸还是上面那一套，只是换了摆法 */
+
+.phone body {
+  /* 手机浏览器的 100vh 不扣地址栏、键盘：用动态视口 */
+  height: 100dvh;
+}
+
+.phone #app {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--sp-3);
+  height: 100dvh;
+  padding: calc(var(--sp-3) + env(safe-area-inset-top)) var(--sp-3) calc(76px + env(safe-area-inset-bottom));
+}
+
+.phone #app.solo {
+  grid-template-rows: minmax(0, 1fr);
+  padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+}
+
+.phone .pass {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  padding: var(--sp-4);
+  gap: var(--sp-3);
+}
+
+/* 品牌一整行；下面左边是你的地址，右边是断开 */
+.phone .brand {
+  grid-column: 1 / -1;
+}
+
+.phone .me .btn {
+  height: var(--h-ctl-sm);
+  margin-top: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-radius: calc(var(--h-ctl-sm) / 2);
+  font-size: var(--fs-sec);
+}
+
+.phone .pass-foot .btn {
+  height: var(--h-ctl-sm);
+  padding: 0 var(--sp-4);
+  border-radius: calc(var(--h-ctl-sm) / 2);
+  font-size: var(--fs-sec);
+}
+
+/* 网状图的标题和统计数字上下排 */
+.phone .map-head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+
+.phone .stats {
+  justify-content: space-between;
+}
+
+.phone .me .ip {
+  font-size: var(--fs-num);
+}
+
+/* 网络码、版本号进设置页看；断开按钮留在卡上 */
+.phone .netbox,
+.phone .ver {
+  display: none;
+}
+
+.phone .pass-foot {
+  margin-top: 0;
+}
+
+.phone .pass-foot:has(.btn[hidden]) {
+  display: none;
+}
+
+.phone .nav {
+  position: fixed;
+  z-index: 10;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+  flex-direction: row;
+  gap: 0;
+  height: 52px;
+  padding: 8px;
+  border-radius: 26px;
+  border: 1px solid var(--line);
+  background: rgba(14, 20, 56, 0.86);
+}
+
+.phone .nav button {
+  flex: 1;
+  justify-content: center;
+  padding: 0 var(--sp-2);
+  text-align: center;
+}
+
+.phone .nav .n {
+  display: none;
+}
+
+.phone .nav-glide {
+  top: 8px;
+  left: 0;
+  right: auto;
+}
+
+.phone .dialog {
+  padding: var(--sp-5);
+}
+
+.phone .paths {
+  grid-template-columns: 1fr;
+}
+
+.phone .start {
+  grid-template-columns: 1fr;
+}
+
+/* 卡片标题和说明上下排：横着放，标题会被挤成竖排 */
+.phone .card-head {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+/* 朋友表格列多，手机上放不下：在卡片里左右滑，不撑破页面 */
+.phone .card:has(> table) {
+  overflow-x: auto;
+}
+
+.phone .card > table {
+  min-width: 560px;
+}
+
+.phone main {
+  overflow-x: hidden;
+}

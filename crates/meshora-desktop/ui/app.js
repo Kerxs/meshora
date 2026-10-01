@@ -10,6 +10,12 @@ glassium.configure({ absorbForComponents: true });
 
 const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
+// 安卓客户端（crates/meshora-android）用的也是这份界面：手机上没有标题栏、本机当主机、Windows 的网络设置，
+// 导航挪到屏幕底部。一打开就要知道（标题栏在拿到第一份状态之前就画了），所以看 User-Agent
+const PHONE = /Android/i.test(navigator.userAgent);
+document.documentElement.classList.toggle("phone", PHONE);
+const DEVICE = PHONE ? "这台手机" : "这台电脑";
+
 const POLL_MS = 1000;
 /** 延迟历史记多少个点：每秒一个，五分钟 */
 const HISTORY = 300;
@@ -121,7 +127,7 @@ function bars(peer) {
 
 function route(peer) {
   if (!peer.online) return h("span", { class: "route off" }, peer.route === "pending" ? "○ 等待中" : "○ 不在线");
-  if (peer.route === "direct") return h("span", { class: "route direct", title: "两台电脑之间直接连通，游戏流量不经过第三方" }, "● 直连");
+  if (peer.route === "direct") return h("span", { class: "route direct", title: "两台设备之间直接连通，游戏流量不经过第三方" }, "● 直连");
   return h("span", { class: "route relay", title: "打不通直连，经中继服务器转发（全程加密，中继看不到内容）" }, "◆ 经中继");
 }
 
@@ -257,7 +263,7 @@ const pass = {
     const connected = ov.phase === "connected";
     this.online.hidden = !connected;
     this.offline.hidden = connected;
-    this.offlineName.textContent = ov.name || "这台电脑";
+    this.offlineName.textContent = ov.name || DEVICE;
     if (connected) {
       this.ip.textContent = ov.me.ip;
       this.who.textContent = ov.name || "没起名字";
@@ -308,7 +314,13 @@ const pass = {
     // 放进微任务：第一次渲染时通行证刚建好、还没进文档，量不出位置
     const selected = this.buttons.get(state.page).button;
     queueMicrotask(() => {
-      this.glide.style.transform = `translateY(${selected.offsetTop}px)`;
+      // 手机上导航横着排在底部：横着挪，宽度跟着按钮
+      if (PHONE) {
+        this.glide.style.width = `${selected.offsetWidth}px`;
+        this.glide.style.transform = `translateX(${selected.offsetLeft}px)`;
+      } else {
+        this.glide.style.transform = `translateY(${selected.offsetTop}px)`;
+      }
     });
   },
 };
@@ -324,9 +336,11 @@ function meshGraph() {
   function draw(ov) {
     const W = svg.clientWidth || 600;
     const H = svg.clientHeight || 400;
+    // 手机上标题和统计数字叠成两行，占得更高：图往下让出这一截
+    const head = PHONE ? 64 : 0;
     const cx = W / 2;
-    const cy = H / 2 + 8;
-    const R = H * 0.31;
+    const cy = (H + head) / 2 + 8;
+    const R = (H - head) * 0.31;
     const RX = Math.min(W * 0.36, R * 2);
     const peers = ov.peers.slice(0, 12);
     const relay = [cx, cy - R * 0.55];
@@ -392,7 +406,7 @@ function meshGraph() {
       s("circle", { cx, cy, r: 64, fill: "url(#me-glow)" }),
       s("circle", { cx, cy, r: 27, fill: "#3d6bff", stroke: "#fff", "stroke-width": 3 }),
       s("text", { x: cx, y: cy + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, "我"),
-      s("text", { class: "node-label", x: cx, y: cy + 46, "text-anchor": "middle" }, ov.name || "这台电脑"),
+      s("text", { class: "node-label", x: cx, y: cy + 46, "text-anchor": "middle" }, ov.name || DEVICE),
       s("text", { class: "node-sub", x: cx, y: cy + 61, "text-anchor": "middle" }, ov.me.ip),
     );
     svg.replaceChildren(...nodes);
@@ -724,8 +738,9 @@ views.settings = {
         settingRow("你的名字", "网里的人看到的就是它。改了马上生效", this.name),
         settingRow("你的 ID", null, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制")),
         h("div", { class: "group" }, "联机"),
-        settingRow("让游戏的广播走 Meshora（推荐）", "朋友的房间才会出现在局域网列表里。改了会重新连接", this.broadcast),
-        settingRow("把 Meshora 设为专用网络", "朋友连不进你开的房间时再打开。代价：你对专用网络共享的东西（比如共享文件夹），网里的人也能访问", this.private),
+        // 这两项是 Windows 的网卡设置（跃点数、网络类别），手机上没有
+        PHONE ? null : settingRow("让游戏的广播走 Meshora（推荐）", "朋友的房间才会出现在局域网列表里。改了会重新连接", this.broadcast),
+        PHONE ? null : settingRow("把 Meshora 设为专用网络", "朋友连不进你开的房间时再打开。代价：你对专用网络共享的东西（比如共享文件夹），网里的人也能访问", this.private),
         settingRow("打开时自动连接", "启动客户端时自动连上次的网络", this.auto),
         this.network,
         this.serverGroup,
@@ -882,7 +897,7 @@ views.start = {
     // ---- 建网络 ----
     this.netName = h("input", { class: "field wide-field", maxlength: "32", spellcheck: "false", "aria-label": "网络名" });
     this.netName.value = `${ov.name || "我"}的网络`;
-    this.where = ov.officialServer ? "official" : "thisPc";
+    this.where = ov.officialServer ? "official" : PHONE ? "server" : "thisPc";
     this.server = h("input", { class: "field wide-field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
     this.server.value = ov.servers[0] || "";
     const serverRow = h("div", { class: "server-row" }, this.server);
@@ -891,9 +906,10 @@ views.start = {
     const createButton = h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "建网络");
     const options = [
       { value: "official", label: "官方服务器", hint: ov.officialServer ? "最省事：朋友在哪都能连进来" : "还没上线", disabled: !ov.officialServer },
-      { value: "thisPc", label: "本机当主机", hint: "不用服务器。路由器要支持 UPnP，这台电脑开着网络才在" },
+      // 手机多半在运营商级 NAT 后面，换个网络地址就变，当不了主机
+      PHONE ? null : { value: "thisPc", label: "本机当主机", hint: "不用服务器。路由器要支持 UPnP，这台电脑开着网络才在" },
       { value: "server", label: "我的服务器", hint: "自己架的 meshora-coord（--hub）" },
-    ];
+    ].filter(Boolean);
     const picker = choices(options, this.where, (value) => {
       this.where = value;
       serverRow.hidden = value !== "server";
@@ -1236,6 +1252,15 @@ const FAILURES = {
     title: "需要管理员权限",
     hint: "建虚拟网卡需要管理员权限。关掉客户端，右键「以管理员身份运行」。",
   },
+  // 安卓上 tun 的两种：没给 VPN 权限、别的原因
+  vpnDenied: {
+    title: "没有允许建立 VPN 连接",
+    hint: "Meshora 靠系统的 VPN 功能组网（只接管网里的地址，上网不受影响）。点「重试」，在弹出的对话框里点「确定」。",
+  },
+  vpn: {
+    title: "VPN 连接没建起来",
+    hint: "手机上开着别的 VPN 的话，先关掉它再点「重试」。系统同一时间只让一个 VPN 工作。",
+  },
   bind: {
     title: "端口被占用",
     hint: "有别的程序占着 Meshora 要用的 UDP 端口。关掉它再试。",
@@ -1259,6 +1284,7 @@ function failureKind(error) {
   if (kind === "rejected" && message.includes("解散")) return "rejectedDeleted";
   if (kind === "rejected" && message.includes("找不到这个网络")) return "rejectedNoNetwork";
   if (kind === "rejected" && /建网络|网络已经满|不让别人建|最多 \d+ 个/.test(message)) return "rejectedCreate";
+  if (kind === "tun" && PHONE) return /没有允许/.test(message) ? "vpnDenied" : "vpn";
   if (kind === "tun" && /wintun\.dll/i.test(message)) return "tunDriver";
   if (kind === "tun" && /拒绝访问|access is denied|\(os error 5\)/i.test(message)) return "tunAdmin";
   return kind;
@@ -1320,7 +1346,7 @@ function titlebar() {
 
 function shell() {
   main = h("main");
-  document.getElementById("app").replaceChildren(pass.build(), h("div", { class: "column" }, titlebar(), main));
+  document.getElementById("app").replaceChildren(pass.build(), h("div", { class: "column" }, PHONE ? null : titlebar(), main));
 }
 
 function viewFor(ov) {

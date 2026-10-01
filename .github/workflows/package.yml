@@ -122,11 +122,104 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  # 安卓客户端：和桌面端同一份界面、同一套节点代码，网卡由 VpnService 建（crates/meshora-android、crates/meshora-vpn）。
+  # 一个 APK 里带 arm64（手机）和 x86_64（模拟器）两份。Android 工程由 tauri android init 每次现生成，不入库
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # 打包工具的版本钉死：它会被拿来执行，供应链的账要算清
+      TAURI_CLI: "@tauri-apps/cli@2.12.0"
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install --no-self-update && rustup target add aarch64-linux-android x86_64-linux-android
+
+      # runner 自带 Android SDK、NDK 和 JDK 17
+      - name: APK
+        working-directory: crates/meshora-android
+        run: |
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          npx --yes "$TAURI_CLI" android init --ci
+          npx --yes "$TAURI_CLI" icon ../meshora-desktop/icons/icon.png
+          npx --yes "$TAURI_CLI" android build --ci --apk --target aarch64 --target x86_64
+          find gen/android/app/build/outputs -name '*.apk' -exec ls -la {} \;
+
+      # 签名。安卓只让同一把钥匙签的新版本覆盖安装：发版用仓库里存着的那把（ANDROID_KEYSTORE），
+      # 换了就没法升级。没配（比如别人的 fork、PR）就现生成一把，只能拿来试装
+      - name: 签名
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TAG_BUILD: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --locked --format-version 1 |
+            jq -r '.packages[] | select(.name == "meshora-android") | .version')
+          apk=$(find crates/meshora-android/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          if [[ -n $KEYSTORE ]]; then
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/meshora.p12"
+          elif [[ $TAG_BUILD == true ]]; then
+            echo "发版要用固定的签名钥匙：仓库里没有 ANDROID_KEYSTORE" >&2
+            exit 1
+          else
+            KS_PASS=throwaway
+            openssl req -x509 -newkey rsa:3072 -nodes -days 30 -subj "/CN=Meshora test build" \
+              -keyout "$RUNNER_TEMP/k.pem" -out "$RUNNER_TEMP/c.pem"
+            openssl pkcs12 -export -inkey "$RUNNER_TEMP/k.pem" -in "$RUNNER_TEMP/c.pem" \
+              -name meshora -passout "pass:$KS_PASS" -out "$RUNNER_TEMP/meshora.p12"
+            echo "::warning::没有 ANDROID_KEYSTORE，用的是临时钥匙：这个 APK 只能试装，不能升级"
+          fi
+          mkdir -p dist
+          "$tools/zipalign" -p -f 4 "$apk" "$RUNNER_TEMP/aligned.apk"
+          KS_PASS="$KS_PASS" "$tools/apksigner" sign --ks "$RUNNER_TEMP/meshora.p12" --ks-type PKCS12 \
+            --ks-pass env:KS_PASS --out "dist/Meshora-$version-android.apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify --print-certs "dist/Meshora-$version-android.apk"
+          rm -f "$RUNNER_TEMP/meshora.p12" "$RUNNER_TEMP/k.pem"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: meshora-android
+          path: dist/*.apk
+          if-no-files-found: error
+
+  # 在模拟器里装上、打开：起得来、不崩，日志和截图留下来看
+  android-emulator:
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: meshora-android
+          path: apk
+      # 模拟器要 KVM
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash scripts/android-smoke.sh apk/*.apk smoke
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-smoke
+          path: smoke/
+          if-no-files-found: ignore
+
   # 打标签时建 Release。建成草稿：安装程序没有代码签名、发布前要有人真装一遍，由人检查过再点发布。
   # 0.x 和带 "-" 的版本标成预发布
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [desktop, server]
+    needs: [desktop, server, android, android-emulator]
     runs-on: ubuntu-latest
     permissions:
       contents: write

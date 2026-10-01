@@ -1,0 +1,29 @@
+[package]
+name = "meshora-android"
+description = "Meshora 的安卓客户端：和桌面端同一个界面、同一套节点代码，网卡由系统的 VpnService 建"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "meshora_android"
+# 安卓上 Tauri 把它编成 .so 装进 APK
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# 只在安卓（真用）和 Windows（编得过、本机检查得到）上编。Linux 的 CI 不必为它装 WebKit
+[target.'cfg(any(windows, target_os = "android"))'.dependencies]
+meshora-desktop = { path = "../meshora-desktop" }
+meshorad = { path = "../meshorad" }
+tauri.workspace = true
+tauri-plugin-meshora-vpn = { path = "../meshora-vpn" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(any(windows, target_os = "android"))'.build-dependencies]
+tauri-build = { workspace = true }
+
+[lints]
+workspace = true

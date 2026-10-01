@@ -277,6 +277,7 @@ async fn run(up: Up) -> Result<(), String> {
         relay_only: up.relay_only,
         name: up.name,
         hosting: meshorad::Hosting::default(),
+        open_tun: None,
     })
     .await
     .map_err(|err| err.to_string())?;

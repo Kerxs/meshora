@@ -1,6 +1,6 @@
 [package]
 name = "meshora-tun"
-description = "Meshora 的虚拟网卡：Linux 用 /dev/net/tun，Windows 用 wintun。平台相关的 unsafe 集中在这里"
+description = "Meshora 的虚拟网卡：Linux 用 /dev/net/tun，Windows 用 wintun，安卓接 VpnService 的描述符。平台相关的 unsafe 集中在这里"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ publish.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]

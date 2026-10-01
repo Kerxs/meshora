@@ -13,9 +13,19 @@ const CAPACITY: usize = 500;
 #[derive(Clone, Default)]
 pub struct LogBuffer {
     lines: Arc<Mutex<VecDeque<String>>>,
+    /// 每条日志再抄一份给它（安卓上抄进 logcat，`adb logcat` 看得到）
+    mirror: Option<fn(&str)>,
 }
 
 impl LogBuffer {
+    /// 每条日志除了留在内存里，再交给 `mirror` 一份。
+    pub fn with_mirror(mirror: fn(&str)) -> Self {
+        Self {
+            mirror: Some(mirror),
+            ..Self::default()
+        }
+    }
+
     /// 现在留着的所有行，从旧到新。
     pub fn lines(&self) -> Vec<String> {
         self.lines
@@ -27,6 +37,9 @@ impl LogBuffer {
     }
 
     fn push(&self, text: &str) {
+        if let Some(mirror) = self.mirror {
+            mirror(text);
+        }
         let mut lines = self
             .lines
             .lock()

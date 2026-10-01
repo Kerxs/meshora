@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use meshora_control::{AdminHandle, AdminRequest, ControlError, Entry, NameSetter, Status};
 use meshora_dataplane::PeerStatus;
 use meshora_types::{NodeSecret, Path};
-use meshorad::{Hosting, NetworkCode, Node, Options, StartError};
+use meshorad::{Hosting, NetworkCode, Node, Options, StartError, TunOpener};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -237,6 +237,8 @@ pub enum AdminAction {
 pub struct Overview {
     /// 客户端版本。
     pub version: &'static str,
+    /// 跑在哪：`windows`、`android`。界面按它藏掉别的平台用不上的东西（标题栏、本机当主机、Windows 的网络设置）
+    pub platform: &'static str,
     /// 本机公钥：网络主人要把它加进名单。
     pub id: String,
     /// 见 [`Settings::name`]。
@@ -310,6 +312,8 @@ struct State {
 
 struct Shared {
     secret: NodeSecret,
+    /// 怎么建虚拟网卡：安卓上请 VpnService 建，别处是 `None`（节点自己建）
+    open_tun: Option<TunOpener>,
     store: Store,
     logs: LogBuffer,
     state: Mutex<State>,
@@ -340,12 +344,22 @@ pub struct Controller {
 impl Controller {
     /// 从这个目录读私钥和设置。私钥读不出来（文件坏了）就报错 —— 不能悄悄换一个身份。
     pub fn new(dir: impl Into<PathBuf>, logs: LogBuffer) -> io::Result<Self> {
+        Self::with_tun_opener(dir, logs, None)
+    }
+
+    /// 和 [`new`](Self::new) 一样，只是虚拟网卡由 `open_tun` 来建（安卓上是 VpnService）。
+    pub fn with_tun_opener(
+        dir: impl Into<PathBuf>,
+        logs: LogBuffer,
+        open_tun: Option<TunOpener>,
+    ) -> io::Result<Self> {
         let store = Store::new(dir);
         let secret = store.load_or_create_key()?;
         let settings = store.load_settings();
         Ok(Self {
             shared: Arc::new(Shared {
                 secret,
+                open_tun,
                 store,
                 logs,
                 state: Mutex::new(State {
@@ -374,6 +388,7 @@ impl Controller {
         };
         Overview {
             version: env!("CARGO_PKG_VERSION"),
+            platform: std::env::consts::OS,
             id: self.shared.secret.public_key().to_string(),
             name: state.settings.name.clone(),
             network: state.settings.network.clone(),
@@ -744,7 +759,7 @@ async fn run(
         None => (network.clone(), Hosting::default()),
     };
     let started = tokio::select! {
-        started = start(&shared.secret, &dial, entry, metric, name, extra) => started,
+        started = start(&shared.secret, &dial, entry, metric, name, extra, shared.open_tun.clone()) => started,
         _ = &mut stop => return,
     };
     let mut node = match started {
@@ -843,6 +858,7 @@ async fn start(
     metric: Option<u32>,
     name: String,
     hosting: Hosting,
+    open_tun: Option<TunOpener>,
 ) -> Result<Node, Failure> {
     let coord = network.resolve().await.map_err(|err| {
         Failure::new(
@@ -863,6 +879,7 @@ async fn start(
         relay_only: false,
         name: name.clone(),
         hosting: hosting.clone(),
+        open_tun: open_tun.clone(),
     };
     let started = match meshorad::start(options(PORT)).await {
         Err(StartError::Bind(_, err)) if err.kind() == io::ErrorKind::AddrInUse => {

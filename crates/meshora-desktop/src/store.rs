@@ -36,8 +36,11 @@ pub struct Settings {
     pub hosting: bool,
 }
 
-/// 这台电脑的名字，取不到是空串
+/// 这台电脑的名字，取不到是空串。安卓上没有计算机名可取，叫"我的手机"
 fn computer_name() -> String {
+    if cfg!(target_os = "android") {
+        return "我的手机".into();
+    }
     let name = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_default();
