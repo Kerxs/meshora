@@ -1,7 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
-  "description": "主窗口：只能调客户端自己的命令，不开放文件、Shell 之类的系统能力",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "主窗口：只能调客户端自己的命令和自绘标题栏要的窗口操作（拖动、最小化、藏到托盘），不开放文件、Shell 之类的系统能力",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-hide"
+  ]
 }

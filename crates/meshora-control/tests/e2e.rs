@@ -80,6 +80,7 @@ fn config(secret: &NodeSecret, coord: &Coord, local_port: u16) -> Config {
         keepalive: NonZeroU16::new(25),
         relay_only: false,
         name: String::new(),
+        hosting: Default::default(),
     }
 }
 
@@ -169,6 +170,7 @@ async fn start_hub(dir: &std::path::Path) -> Coord {
         hub: Some(meshora_coord::HubConfig {
             dir: dir.to_path_buf(),
             limits: meshora_coord::HubLimits::default(),
+            creators: None,
         }),
     })
     .unwrap();
@@ -585,6 +587,7 @@ async fn a_member_removed_from_the_state_file_is_told_and_stops() {
         keepalive: NonZeroU16::new(25),
         relay_only: false,
         name: String::new(),
+        hosting: Default::default(),
     })
     .await
     .expect("凭邀请码加入");

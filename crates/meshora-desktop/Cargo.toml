@@ -19,11 +19,16 @@ meshorad = { path = "../meshorad" }
 meshora-types.workspace = true
 meshora-control.workspace = true
 meshora-dataplane.workspace = true
+meshora-proto.workspace = true
+# 本机当主机：协调服务和中继跑在客户端进程里
+meshora-coord.workspace = true
+meshora-relay.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+igd-next.workspace = true
 
 # 界面只做 Windows（1.0.0 只做 Windows）。别的平台上可执行文件只打一句话，
 # Linux 的 CI 也就不必为了编译它装 WebKit。节点的启停、状态汇总不依赖界面，在哪都能编译、能测
@@ -34,10 +39,6 @@ tauri-plugin-single-instance.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
 tauri-build = { workspace = true }
-
-[dev-dependencies]
-# 测试里起一个真的协调服务，看"不在名单里"的提示对不对
-meshora-coord.workspace = true
 
 [lints]
 workspace = true

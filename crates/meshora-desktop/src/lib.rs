@@ -11,5 +11,6 @@
 #[cfg(windows)]
 pub mod app;
 pub mod controller;
+pub mod host;
 pub mod logs;
 pub mod store;

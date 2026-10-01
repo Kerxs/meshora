@@ -9,15 +9,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use meshora_control::{ControlError, NameSetter, Status};
+use meshora_control::{AdminHandle, AdminRequest, ControlError, Entry, NameSetter, Status};
 use meshora_dataplane::PeerStatus;
 use meshora_types::{NodeSecret, Path};
-use meshorad::{NetworkCode, Node, Options, StartError};
-use serde::Serialize;
+use meshorad::{Hosting, NetworkCode, Node, Options, StartError};
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use crate::host::{self, Host, HostInfo};
 use crate::logs::LogBuffer;
 use crate::store::{MAX_NAME_CHARS, Settings, Store};
 
@@ -35,6 +36,11 @@ const ONLINE_WINDOW: Duration = Duration::from_secs(180);
 const REFRESH: Duration = Duration::from_secs(1);
 /// 停一个节点最多等多久
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 官方服务器：托管很多网络的协调服务，客户端"建网络"默认用它。`公钥@地址:端口`。
+///
+/// 还没上线，先空着；设置里的 [`Settings::official_server`] 可以填一个。
+pub const OFFICIAL_SERVER: Option<&str> = None;
+
 /// 设网络类别时，网卡刚建好、系统还没把它归到哪个网络，要隔一会儿再试。最多试这么久
 #[cfg(windows)]
 const PROFILE_PATIENCE: Duration = Duration::from_secs(60);
@@ -134,6 +140,95 @@ pub struct PeerRow {
     pub tx: u64,
 }
 
+/// 网主看到的一个成员。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RosterMemberRow {
+    /// 公钥。
+    pub id: String,
+    /// 名字。
+    pub name: String,
+    /// overlay 地址。
+    pub ip: String,
+    /// 此刻在线。
+    pub online: bool,
+    /// 是网主。
+    pub owner: bool,
+}
+
+/// 网主看到的一个带限制的邀请码。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteRow {
+    /// 带着这个邀请码的完整网络码，复制了直接能发。
+    pub code: String,
+    /// 只有邀请码本身（作废时用）。
+    pub invite: String,
+    /// 还能用几次。
+    pub uses_left: Option<u32>,
+    /// 过期时间（UNIX 秒）。
+    pub expires: Option<u64>,
+}
+
+/// 网主看到的网络。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RosterView {
+    /// 网络名。
+    pub name: String,
+    /// 带长期邀请码的网络码。
+    pub code: Option<String>,
+    /// 成员。
+    pub members: Vec<RosterMemberRow>,
+    /// 带限制的邀请码。
+    pub invites: Vec<InviteRow>,
+}
+
+/// 在哪儿建网络。
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CreateAt {
+    /// 官方服务器。
+    Official,
+    /// 自己的服务器：`公钥@地址:端口`。
+    Server {
+        /// 服务器地址。
+        code: String,
+    },
+    /// 本机当主机：协调服务、中继跑在这台电脑上。
+    ThisPc,
+}
+
+/// 网主在界面上能做的事。
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AdminAction {
+    /// 把一个成员移出。
+    Kick {
+        /// 成员的公钥。
+        id: String,
+    },
+    /// 新建一个带限制的邀请码。
+    NewInvite {
+        /// 能用几次。
+        uses: Option<u32>,
+        /// 几小时后过期。
+        hours: Option<u32>,
+    },
+    /// 作废一个带限制的邀请码。
+    RevokeInvite {
+        /// 邀请码。
+        invite: String,
+    },
+    /// 换掉长期邀请码。
+    RotateInvite,
+    /// 改网络名。
+    Rename {
+        /// 新名字。
+        name: String,
+    },
+    /// 解散网络。
+    Delete,
+}
+
 /// 界面要的一切，每秒一份。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,6 +257,16 @@ pub struct Overview {
     pub coord_connected: bool,
     /// 网里的其他人。
     pub peers: Vec<PeerRow>,
+    /// 见 [`Settings::onboarded`]。
+    pub onboarded: bool,
+    /// 能建网络的官方服务器地址（设置里填的优先），还没有是 `None`。
+    pub official_server: Option<String>,
+    /// 自己添加的服务器。
+    pub servers: Vec<String>,
+    /// 本机是这个网络的网主时：成员和邀请码。
+    pub roster: Option<RosterView>,
+    /// 本机当主机时：朋友连不连得进来、公网地址。
+    pub hosting: Option<HostInfo>,
 }
 
 /// 连上之后的快照
@@ -195,6 +300,10 @@ struct State {
     profile: Option<Background>,
     /// 节点跑着时改名字用
     renamer: Option<NameSetter>,
+    /// 节点跑着时管理网络用
+    admin: Option<AdminHandle>,
+    /// 本机当主机时跑着的协调服务和中继。断开时留着（朋友之间照样通），离开网络时停掉
+    host: Option<Arc<Host>>,
 }
 
 struct Shared {
@@ -244,6 +353,8 @@ impl Controller {
                     runner: None,
                     profile: None,
                     renamer: None,
+                    admin: None,
+                    host: None,
                 }),
                 ops: tokio::sync::Mutex::new(()),
             }),
@@ -272,6 +383,11 @@ impl Controller {
             me: state.snapshot.me.clone(),
             coord_connected: state.snapshot.coord_connected,
             peers: state.snapshot.peers.clone(),
+            onboarded: state.settings.onboarded,
+            official_server: official_server(&state.settings),
+            servers: state.settings.servers.clone(),
+            roster: roster_view(&state),
+            hosting: state.host.as_ref().map(|host| host.info.clone()),
         }
     }
 
@@ -305,21 +421,153 @@ impl Controller {
         self.stop_runner().await;
         let (stop, stop_rx) = oneshot::channel();
         let mut state = self.shared.state();
+        // 换了一个网络：不再是本机当主机的那个，本机的主机停掉
+        if state.settings.network.as_deref() != Some(network.to_string().as_str()) {
+            state.settings.hosting = false;
+            state.host = None;
+        }
         state.settings.network = Some(network.to_string());
         self.shared.save(&state.settings);
+        let hosting = state.settings.hosting;
         let metric = state.settings.prefer_broadcast.then_some(BROADCAST_METRIC);
         let name = state.settings.name.clone();
         state.phase = Phase::Connecting;
         state.snapshot = Snapshot::default();
+        let entry = network.entry();
         let task = tokio::spawn(run(
             Arc::clone(&self.shared),
             network,
+            entry,
             metric,
             name,
+            hosting,
             stop_rx,
         ));
         state.runner = Some(Runner { stop, task });
         Ok(())
+    }
+
+    /// 在一台服务器上建一个网络，自己当网主。建好之后网络码存下来，和加入的网络一样用。
+    ///
+    /// 和 [`connect`](Self::connect) 一样马上返回，建得怎么样看 [`overview`](Self::overview)。
+    pub async fn create(&self, at: CreateAt, name: String) -> Result<(), String> {
+        let _op = self.shared.ops.lock().await;
+        let here = at == CreateAt::ThisPc;
+        let text = match at {
+            CreateAt::Official => official_server(&self.shared.state().settings)
+                .ok_or("官方服务器还没上线：先用你自己的服务器，或者在本机当主机")?,
+            CreateAt::Server { code } => code,
+            // 真正的地址等主机起来才知道，先占个位
+            CreateAt::ThisPc => NetworkCode::new(
+                self.shared.secret.public_key(),
+                ([127, 0, 0, 1], host::COORD_PORT).into(),
+            )
+            .to_string(),
+        };
+        let server: NetworkCode = text.trim().parse().map_err(|err| format!("{err}"))?;
+        if server.network.is_some() || server.invite.is_some() {
+            return Err("这是一个网络的网络码，不是服务器地址：要加入它，用\"加入网络\"".into());
+        }
+        self.stop_runner().await;
+        let (stop, stop_rx) = oneshot::channel();
+        let mut state = self.shared.state();
+        state.settings.hosting = here;
+        if !here {
+            state.host = None;
+        }
+        self.shared.save(&state.settings);
+        let metric = state.settings.prefer_broadcast.then_some(BROADCAST_METRIC);
+        let me = state.settings.name.clone();
+        state.phase = Phase::Connecting;
+        state.snapshot = Snapshot::default();
+        let entry = Entry::Create { name };
+        let task = tokio::spawn(run(
+            Arc::clone(&self.shared),
+            server,
+            entry,
+            metric,
+            me,
+            here,
+            stop_rx,
+        ));
+        state.runner = Some(Runner { stop, task });
+        Ok(())
+    }
+
+    /// 网主管理网络。新建、换掉的邀请码以完整网络码的形式返回，复制了直接能发。
+    pub async fn admin(&self, action: AdminAction) -> Result<Option<String>, String> {
+        let (handle, code) = {
+            let state = self.shared.state();
+            let handle = state.admin.clone().ok_or("还没连上网络")?;
+            let code = state
+                .settings
+                .network
+                .as_deref()
+                .and_then(|text| text.parse::<NetworkCode>().ok())
+                .ok_or("还没有网络码")?;
+            (handle, code)
+        };
+        let delete = action == AdminAction::Delete;
+        let rotate = action == AdminAction::RotateInvite;
+        let request = match action {
+            AdminAction::Kick { id } => AdminRequest::Kick {
+                member: id.parse().map_err(|_| "成员的 ID 不对".to_string())?,
+            },
+            AdminAction::NewInvite { uses, hours } => AdminRequest::NewInvite { uses, hours },
+            AdminAction::RevokeInvite { invite } => AdminRequest::RevokeInvite {
+                code: invite.parse().map_err(|_| "邀请码不对".to_string())?,
+            },
+            AdminAction::RotateInvite => AdminRequest::RotateInvite,
+            AdminAction::Rename { name } => AdminRequest::Rename { name },
+            AdminAction::Delete => AdminRequest::Delete,
+        };
+        let invite = handle.request(request).await?;
+        if delete {
+            // 网络没了：断开、忘掉它
+            self.forget().await;
+            return Ok(None);
+        }
+        let full = invite.map(|invite| {
+            let mut full = code.clone();
+            full.invite = Some(invite);
+            full.to_string()
+        });
+        if rotate && let Some(full) = &full {
+            // 长期邀请码换了：存着的网络码也跟着换，下次分享的就是新的
+            let mut state = self.shared.state();
+            state.settings.network = Some(full.clone());
+            self.shared.save(&state.settings);
+        }
+        Ok(full)
+    }
+
+    /// 走完了首次打开的引导。
+    pub fn set_onboarded(&self) {
+        let mut state = self.shared.state();
+        state.settings.onboarded = true;
+        self.shared.save(&state.settings);
+    }
+
+    /// 记下一台自己的服务器，建网络时可以选。
+    pub fn add_server(&self, code: &str) -> Result<String, String> {
+        let server: NetworkCode = code.trim().parse().map_err(|err| format!("{err}"))?;
+        if server.network.is_some() || server.invite.is_some() {
+            return Err("这是一个网络的网络码，不是服务器地址".into());
+        }
+        let text = server.to_string();
+        let mut state = self.shared.state();
+        if !state.settings.servers.contains(&text) {
+            state.settings.servers.push(text.clone());
+            self.shared.save(&state.settings);
+        }
+        Ok(text)
+    }
+
+    /// 忘掉一台自己的服务器。
+    pub fn remove_server(&self, code: &str) {
+        let mut state = self.shared.state();
+        state.settings.servers.retain(|s| s != code);
+        self.shared.save(&state.settings);
     }
 
     /// 断开。虚拟网卡随之删掉。
@@ -331,7 +579,7 @@ impl Controller {
         state.snapshot = Snapshot::default();
     }
 
-    /// 断开并忘掉网络码。
+    /// 断开并忘掉网络码。本机当主机的话，主机也停掉（路由器上的端口映射一并删掉）。
     pub async fn forget(&self) {
         let _op = self.shared.ops.lock().await;
         self.stop_runner().await;
@@ -339,6 +587,8 @@ impl Controller {
         state.phase = Phase::Idle;
         state.snapshot = Snapshot::default();
         state.settings.network = None;
+        state.settings.hosting = false;
+        state.host = None;
         self.shared.save(&state.settings);
     }
 
@@ -415,6 +665,7 @@ impl Controller {
             let mut state = self.shared.state();
             state.profile = None;
             state.renamer = None;
+            state.admin = None;
             state.runner.take()
         };
         if let Some(Runner { stop, mut task }) = runner {
@@ -431,12 +682,67 @@ impl Controller {
 async fn run(
     shared: Arc<Shared>,
     network: NetworkCode,
+    entry: Entry,
     metric: Option<u32>,
     name: String,
+    hosting: bool,
     mut stop: oneshot::Receiver<()>,
 ) {
+    // 本机当主机：先把本机的协调服务、中继起起来
+    let host = if hosting {
+        let started = tokio::select! {
+            started = ensure_host(&shared) => started,
+            _ = &mut stop => return,
+        };
+        match started {
+            Ok(host) => Some(host),
+            Err(message) => {
+                warn!(%message, "本机当主机没起来");
+                shared.state().phase = Phase::Failed(Failure::new(FailureKind::Other, message));
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    // 建网络：先在服务器上建好、把网络码存下来，再像加入一样连进去。
+    // 本机当主机时，连的是局域网地址，存下来给朋友的是公网地址
+    let (network, entry) = match entry {
+        Entry::Create { name: title } => {
+            let (dial, share) = match &host {
+                Some(host) => (host.local.clone(), host.share.clone()),
+                None => (network.clone(), network.server()),
+            };
+            let created = tokio::select! {
+                created = create_remote(&shared, &dial, &share, &title, &name) => created,
+                _ = &mut stop => return,
+            };
+            match created {
+                Ok(code) => {
+                    let entry = code.entry();
+                    (code, entry)
+                }
+                Err(failure) => {
+                    warn!(message = %failure.message, "建网络失败");
+                    shared.state().phase = Phase::Failed(failure);
+                    return;
+                }
+            }
+        }
+        other => (network, other),
+    };
+    // 本机当主机：自己用局域网地址连，网络 ID、邀请码照旧
+    let (dial, extra) = match &host {
+        Some(host) => {
+            let mut dial = host.local.clone();
+            dial.network = network.network;
+            dial.invite = network.invite;
+            (dial, host.hosting.clone())
+        }
+        None => (network.clone(), Hosting::default()),
+    };
     let started = tokio::select! {
-        started = start(&shared.secret, &network, metric, name) => started,
+        started = start(&shared.secret, &dial, entry, metric, name, extra) => started,
         _ = &mut stop => return,
     };
     let mut node = match started {
@@ -453,6 +759,7 @@ async fn run(
         state.phase = Phase::Connected;
         state.snapshot = snapshot(&node);
         state.renamer = Some(node.name_setter());
+        state.admin = Some(node.admin());
         // 关着的时候什么都不动：网卡是新建的，本来就是系统默认的类别
         if state.settings.private_network {
             state.profile = Some(set_profile(node.tun_name().to_owned(), true));
@@ -484,11 +791,56 @@ async fn run(
     }
 }
 
+/// 在服务器上建一个网络，存下它的网络码（服务器地址 + 网络 ID + 邀请码）
+async fn create_remote(
+    shared: &Shared,
+    server: &NetworkCode,
+    share: &NetworkCode,
+    title: &str,
+    me: &str,
+) -> Result<NetworkCode, Failure> {
+    let coord = server.resolve().await.map_err(|err| {
+        Failure::new(
+            FailureKind::Resolve,
+            format!("找不到服务器 {}：{err}", server.host),
+        )
+    })?;
+    let config = meshora_control::Config {
+        secret: shared.secret.clone(),
+        coord,
+        coord_key: server.coord_key,
+        entry: Entry::Create {
+            name: title.to_owned(),
+        },
+        local_port: PORT,
+        keepalive: None,
+        relay_only: false,
+        name: me.to_owned(),
+        hosting: Default::default(),
+    };
+    let (id, invite) = meshora_control::create_network(&config, title)
+        .await
+        .map_err(|err| match err {
+            ControlError::Rejected(reason) => Failure::new(FailureKind::Rejected, reason),
+            err => Failure::new(FailureKind::Unreachable, format!("建网络失败：{err}")),
+        })?;
+    let mut code = share.server();
+    code.network = Some(id);
+    code.invite = Some(invite);
+    info!(network = %id, "网络建好了");
+    let mut state = shared.state();
+    state.settings.network = Some(code.to_string());
+    shared.save(&state.settings);
+    Ok(code)
+}
+
 async fn start(
     secret: &NodeSecret,
     network: &NetworkCode,
+    entry: Entry,
     metric: Option<u32>,
     name: String,
+    hosting: Hosting,
 ) -> Result<Node, Failure> {
     let coord = network.resolve().await.map_err(|err| {
         Failure::new(
@@ -500,7 +852,7 @@ async fn start(
         secret: secret.clone(),
         coord,
         coord_key: network.coord_key,
-        entry: network.entry(),
+        entry: entry.clone(),
         port,
         tun: TUN_NAME.into(),
         mtu: MTU,
@@ -508,6 +860,7 @@ async fn start(
         keepalive: NonZeroU16::new(KEEPALIVE),
         relay_only: false,
         name: name.clone(),
+        hosting: hosting.clone(),
     };
     let started = match meshorad::start(options(PORT)).await {
         Err(StartError::Bind(_, err)) if err.kind() == io::ErrorKind::AddrInUse => {
@@ -559,6 +912,61 @@ fn set_profile(tun: String, private: bool) -> Background {
         #[cfg(not(windows))]
         info!(%tun, private, "只有 Windows 有网络类别，不用设");
     }))
+}
+
+/// 本机的主机：已经跑着就用它，没有就起一个
+async fn ensure_host(shared: &Shared) -> Result<Arc<Host>, String> {
+    if let Some(host) = shared.state().host.clone() {
+        return Ok(host);
+    }
+    let dir = shared.store.dir().join("host");
+    let host = Arc::new(host::start(&dir, shared.secret.public_key()).await?);
+    shared.state().host = Some(Arc::clone(&host));
+    Ok(host)
+}
+
+/// 能用的官方服务器地址：设置里填的优先
+fn official_server(settings: &Settings) -> Option<String> {
+    settings
+        .official_server
+        .clone()
+        .or_else(|| OFFICIAL_SERVER.map(str::to_owned))
+}
+
+/// 网主看到的网络：控制面收到的成员清单，邀请码拼成完整的网络码
+fn roster_view(state: &State) -> Option<RosterView> {
+    let roster = state.admin.as_ref()?.roster().borrow().clone()?;
+    let code: NetworkCode = state.settings.network.as_deref()?.parse().ok()?;
+    let with = |invite| {
+        let mut full = code.clone();
+        full.invite = Some(invite);
+        full.to_string()
+    };
+    Some(RosterView {
+        name: roster.name,
+        code: roster.invite.map(with),
+        members: roster
+            .members
+            .into_iter()
+            .map(|m| RosterMemberRow {
+                id: m.key.to_string(),
+                name: m.name,
+                ip: m.overlay_ip.to_string(),
+                online: m.online,
+                owner: m.owner,
+            })
+            .collect(),
+        invites: roster
+            .invites
+            .into_iter()
+            .map(|i| InviteRow {
+                code: with(i.code),
+                invite: i.code.to_string(),
+                uses_left: i.uses_left,
+                expires: i.expires,
+            })
+            .collect(),
+    })
 }
 
 fn snapshot(node: &Node) -> Snapshot {
@@ -830,6 +1238,78 @@ mod tests {
         assert!(
             overview.network.unwrap().ends_with(&format!("#{invite}")),
             "存下的网络码带着邀请码，下次自动连也用得上"
+        );
+        controller.forget().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_network_created_on_a_server_is_kept_even_if_the_adapter_fails() {
+        let dir = TempDir::new("create");
+        let controller = controller(&dir);
+        let coord_secret = NodeSecret::generate();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(meshora_coord::serve(
+            meshora_coord::Config {
+                secret: coord_secret.clone(),
+                nodes: vec![],
+                state: None,
+                overlay: "100.64.0.0/10".parse().unwrap(),
+                probe: None,
+                relays: vec![],
+                hub: Some(meshora_coord::HubConfig {
+                    dir: dir.0.join("hub"),
+                    limits: meshora_coord::HubLimits::default(),
+                    creators: None,
+                }),
+            },
+            listener,
+            None,
+        ));
+        let server = NetworkCode::new(coord_secret.public_key(), addr).to_string();
+
+        // 不是服务器地址（带着邀请码）的不收
+        assert!(
+            controller
+                .create(
+                    CreateAt::Server {
+                        code: format!("{server}#{}", meshora_types::Invite::generate())
+                    },
+                    "x".into()
+                )
+                .await
+                .is_err()
+        );
+        // 官方服务器还没上线
+        assert!(
+            controller
+                .create(CreateAt::Official, "x".into())
+                .await
+                .is_err()
+        );
+
+        controller
+            .create(
+                CreateAt::Server {
+                    code: server.clone(),
+                },
+                "周末开黑".into(),
+            )
+            .await
+            .unwrap();
+        let overview = phase_settles(&controller).await;
+        // 网卡建不建得起看权限；网络码不管怎样都已经存下：服务器地址 + 网络 ID + 邀请码
+        match &overview.error {
+            None => assert_eq!(overview.phase, "connected"),
+            Some(failure) => assert_eq!(failure.kind, FailureKind::Tun, "{}", failure.message),
+        }
+        let saved: NetworkCode = overview.network.unwrap().parse().unwrap();
+        assert_eq!(saved.server().to_string(), server);
+        assert!(saved.network.is_some() && saved.invite.is_some());
+        assert_eq!(
+            Store::new(&dir.0).load_settings().network,
+            Some(saved.to_string()),
+            "存进了设置"
         );
         controller.forget().await;
     }

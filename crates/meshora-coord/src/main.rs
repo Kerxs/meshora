@@ -358,6 +358,7 @@ async fn run(args: Args) -> Result<(), String> {
     let hub = args.hub.map(|dir| HubConfig {
         dir,
         limits: args.limits.clone(),
+        creators: None,
     });
     let hosting = hub.is_some();
     let legacy = !args.nodes.is_empty() || args.state.is_some();

@@ -81,11 +81,12 @@ function formatBytes(n) {
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }
 
-// 网络码里给人看的部分：地址。邀请码是秘密，不往界面上摆
+// 网络码里给人看的部分：地址。邀请码是秘密，不往界面上摆；网络 ID 太长，也不摆
 function hostOf(code) {
   const text = (code || "").split("#")[0];
   const at = text.lastIndexOf("@");
-  return at < 0 ? text : text.slice(at + 1);
+  const addr = at < 0 ? text : text.slice(at + 1);
+  return addr.split("/")[0];
 }
 
 // 同一个 ID 永远是同一个颜色，好认人
@@ -153,8 +154,10 @@ function spark(points, width, height) {
 
 const state = {
   overview: null,
-  /** 用户选的页：home（网络 / 加入）、friends、settings */
+  /** 用户选的页：home（网络 / 开始）、friends、admin、settings */
   page: "home",
+  /** 引导里选了"建网络"还是"加入网络" */
+  startTab: null,
   view: null,
   current: null,
   /** 每个朋友最近的延迟，按 ID */
@@ -274,10 +277,11 @@ const pass = {
       ? [
           ["home", "网络", `${online}/${ov.peers.length}`],
           ["friends", "朋友", String(ov.peers.length)],
+          ...(ov.roster ? [["admin", "管理", ""]] : []),
           ["settings", "设置", ""],
         ]
       : [
-          ["home", ov.phase === "connecting" ? "连接中" : ov.phase === "failed" ? "没连上" : "加入网络", ""],
+          ["home", ov.phase === "connecting" ? "连接中" : ov.phase === "failed" ? "没连上" : "开始", ""],
           ["settings", "设置", ""],
         ];
     const key = items.map((i) => i[0] + i[1]).join();
@@ -459,6 +463,17 @@ function friendCard(peer) {
 
 const views = {};
 
+/** 本机当主机时，朋友连不连得进来 */
+const HOST_REACH = {
+  open: "本机当主机 · 朋友连得进来",
+  cgnat: "本机当主机 · 运营商级 NAT，外面连不进来",
+  unknown: "本机当主机 · 只有局域网里的人进得来",
+};
+const HOST_REACH_HINT = {
+  cgnat: "你的宽带没有公网地址（运营商级 NAT）：外面的朋友连不进来。换官方服务器或者你自己的服务器建网络。",
+  unknown: "路由器不支持（或者没开）UPnP，没法自动开端口：只有和你在同一个局域网的人进得来。在路由器上打开 UPnP，或者换服务器建网络。",
+};
+
 views.overview = {
   mount(ov) {
     this.down = h("b");
@@ -468,6 +483,13 @@ views.overview = {
     this.empty = h("div", { class: "empty-map" }, "还没有别人。朋友凭网络码加入后，就会出现在这里。");
     this.grid = h("div", { class: "friends" });
     this.cards = new Map();
+    this.hostChip = h("span", { class: "chip" });
+    this.invite = h(
+      "button",
+      { class: "btn sm", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => state.overview.roster?.code && copy(state.overview.roster.code, "网络码") },
+      "邀请朋友",
+    );
+    this.extras = h("div", { class: "map-extras" }, this.invite, this.hostChip);
     this.onResize = () => {
       this.graph.redraw();
       this.graph.update(state.overview);
@@ -482,7 +504,7 @@ views.overview = {
         h(
           "div",
           { class: "map-head" },
-          h("div", {}, h("b", {}, "你的网"), h("span", {}, "点一个人复制他的地址")),
+          h("div", {}, h("b", {}, "你的网"), h("span", {}, "点一个人复制他的地址"), this.extras),
           h("div", { class: "stats" }, h("div", {}, h("span", {}, "下行"), this.down), h("div", {}, h("span", {}, "上行"), this.up), h("div", {}, h("span", {}, "直连 / 中继"), this.paths)),
         ),
         this.graph.el,
@@ -503,6 +525,12 @@ views.overview = {
     this.up.textContent = `${formatBytes(state.speed.tx)}/s`;
     this.paths.textContent = `${online.filter((p) => p.route === "direct").length} / ${online.filter((p) => p.route === "relay").length}`;
     this.empty.hidden = ov.peers.length > 0;
+    this.invite.hidden = !ov.roster?.code;
+    const reach = ov.hosting?.reach;
+    this.hostChip.hidden = !reach;
+    this.hostChip.className = `chip ${reach === "open" ? "ok" : "warn"}`;
+    this.hostChip.textContent = HOST_REACH[reach] || "";
+    this.hostChip.title = reach === "open" ? `公网地址 ${ov.hosting.publicIp}` : HOST_REACH_HINT[reach] || "";
     // 第一次 update 在 mount 里，SVG 还没进文档、量不出尺寸：放进微任务，那时已经插进去了。
     // 不用 requestAnimationFrame：窗口藏在托盘里时它不触发
     queueMicrotask(() => this.graph.update(ov));
@@ -635,6 +663,27 @@ views.settings = {
     this.network = h("div", {}, h("div", { class: "group" }, "网络"), settingRow("网络码", null, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.network, "网络码") }, "复制"), h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => act("forget") }, "离开这个网络")));
     this.network.querySelector(".t").append(this.code, this.codeNote);
 
+    this.serverList = h("div");
+    const newServer = h("input", { class: "field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
+    const addServer = async () => {
+      try {
+        await invoke("add_server", { code: newServer.value });
+        newServer.value = "";
+        toast("记下了");
+      } catch (err) {
+        toast(String(err));
+      }
+      refresh();
+    };
+    newServer.addEventListener("keydown", (event) => event.key === "Enter" && addServer());
+    this.serverGroup = h(
+      "div",
+      {},
+      h("div", { class: "group" }, "我的服务器"),
+      this.serverList,
+      settingRow("添加一台", "自己架的 meshora-coord（--hub）：公钥@地址:端口。建网络时可以选它", newServer, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: addServer }, "添加")),
+    );
+
     this.logs = h("pre", { class: "logs" }, "…");
     this.logs.hidden = true;
     let timer = 0;
@@ -679,6 +728,7 @@ views.settings = {
         settingRow("把 Meshora 设为专用网络", "朋友连不进你开的房间时再打开。代价：你对专用网络共享的东西（比如共享文件夹），网里的人也能访问", this.private),
         settingRow("打开时自动连接", "启动客户端时自动连上次的网络", this.auto),
         this.network,
+        this.serverGroup,
         h("div", { class: "group" }, "排查"),
         settingRow("日志", "出问题时复制下来，发给帮你排查的人。里面有 IP 地址，没有密钥", showLogs, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: async () => copy((await invoke("logs")).join("\n"), "日志") }, "复制")),
         this.logs,
@@ -697,6 +747,15 @@ views.settings = {
     if (this.broadcast.checked !== ov.preferBroadcast) this.broadcast.checked = ov.preferBroadcast;
     if (this.private.checked !== ov.privateNetwork) this.private.checked = ov.privateNetwork;
     if (this.auto.checked !== ov.autoConnect) this.auto.checked = ov.autoConnect;
+    const serverKey = ov.servers.join();
+    if (serverKey !== this.serverKey) {
+      this.serverKey = serverKey;
+      this.serverList.replaceChildren(
+        ...ov.servers.map((server) =>
+          settingRow(hostOf(server), null, h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: async () => { await invoke("remove_server", { code: server }); refresh(); } }, "忘掉")),
+        ),
+      );
+    }
     this.network.hidden = !ov.network;
     this.code.textContent = ov.network ? ov.network.replace(/#.*$/, "#••••••") : "";
     this.codeNote.textContent = ov.network && ov.network.includes("#") ? "带着邀请码：发给谁，谁就能加入这个网络。只发给要一起玩的人" : "";
@@ -705,9 +764,184 @@ views.settings = {
 
 // ---------- 加入、连接中、出错 ----------
 
-views.join = {
+// ---------- 确认框 ----------
+
+/** 问一句"确定吗"。返回用户点没点确定 */
+function confirmBox(title, text, okLabel) {
+  return new Promise((resolve) => {
+    const close = (answer) => {
+      scrim.remove();
+      document.removeEventListener("keydown", onKey);
+      resolve(answer);
+    };
+    const onKey = (event) => event.key === "Escape" && close(false);
+    const ok = h("button", { class: "btn wide danger", glass: "clear", type: "button", onclick: () => close(true) }, okLabel);
+    const scrim = h(
+      "div",
+      { class: "modal-scrim", onclick: (event) => event.target === scrim && close(false) },
+      h(
+        "section",
+        { class: "dialog narrow", glass: "", "glass-corner-radius": "26", role: "alertdialog", "aria-modal": "true" },
+        h("h2", {}, title),
+        h("p", {}, text),
+        h("div", { class: "row center-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: () => close(false) }, "取消"), ok),
+      ),
+    );
+    document.addEventListener("keydown", onKey);
+    document.body.append(scrim);
+    setTimeout(() => ok.focus(), 30);
+  });
+}
+
+// ---------- 第一次打开：引导 ----------
+
+views.onboarding = {
   mount(ov) {
-    const area = h("textarea", { placeholder: "公钥@地址:端口#邀请码", spellcheck: "false", "aria-label": "网络码" });
+    this.step = 0;
+    this.body = h("div", { class: "welcome" });
+    const el = h("div", { class: "view center" }, h("section", { class: "dialog welcome-card", glass: "", "glass-corner-radius": "28" }, this.body));
+    this.draw(ov);
+    return el;
+  },
+  draw(ov) {
+    if (this.step === 0) {
+      const name = h("input", { class: "field wide-field", maxlength: "32", spellcheck: "false", "aria-label": "你的名字" });
+      name.value = ov.name;
+      const next = async () => {
+        const wanted = name.value.trim();
+        if (!wanted) {
+          toast("起个名字吧，朋友看到的就是它");
+          name.focus();
+          return;
+        }
+        try {
+          await invoke("set_name", { name: wanted });
+        } catch (err) {
+          toast(String(err));
+          return;
+        }
+        this.step = 1;
+        this.draw(ov);
+      };
+      name.addEventListener("keydown", (event) => event.key === "Enter" && next());
+      this.body.replaceChildren(
+        h("div", { class: "welcome-logo" }, LOGO()),
+        h("h1", {}, "欢迎使用 Meshora"),
+        h("p", {}, "和朋友组成一个虚拟局域网：不管在哪，打局域网游戏就像坐在一起。"),
+        h("label", { class: "label" }, "朋友会看到你叫"),
+        name,
+        h("div", { class: "row center-row" }, h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: next }, "下一步")),
+      );
+      setTimeout(() => name.focus(), 50);
+      return;
+    }
+    const pick = async (tab) => {
+      state.startTab = tab;
+      try {
+        await invoke("set_onboarded");
+      } catch (err) {
+        toast(String(err));
+      }
+      refresh();
+    };
+    this.body.replaceChildren(
+      h("h1", {}, "你想做什么？"),
+      h("p", {}, "随时都能换：建了网络也能去加入别人的。"),
+      h(
+        "div",
+        { class: "paths" },
+        h("button", { class: "path", glass: "clear", "glass-corner-radius": "22", type: "button", onclick: () => pick("create") }, h("b", {}, "建一个网络"), h("span", {}, "我来当网主，把网络码发给朋友")),
+        h("button", { class: "path", glass: "clear", "glass-corner-radius": "22", type: "button", onclick: () => pick("join") }, h("b", {}, "加入朋友的网络"), h("span", {}, "朋友已经发给我一个网络码")),
+      ),
+    );
+  },
+  update() {},
+};
+
+// ---------- 没连上时：建网络 / 加入网络 ----------
+
+/** 建网络选位置：一组单选按钮 */
+function choices(options, selected, onPick) {
+  const buttons = options.map((option) =>
+    h(
+      "button",
+      { class: "choice", type: "button", role: "radio", "aria-checked": String(option.value === selected), disabled: option.disabled || null, onclick: () => pick(option.value) },
+      h("b", {}, option.label),
+      h("span", {}, option.hint),
+    ),
+  );
+  const pick = (value) => {
+    buttons.forEach((button, i) => button.setAttribute("aria-checked", String(options[i].value === value)));
+    onPick(value);
+  };
+  return h("div", { class: "choices", role: "radiogroup" }, buttons);
+}
+
+views.start = {
+  mount(ov) {
+    // ---- 建网络 ----
+    this.netName = h("input", { class: "field wide-field", maxlength: "32", spellcheck: "false", "aria-label": "网络名" });
+    this.netName.value = `${ov.name || "我"}的网络`;
+    this.where = ov.officialServer ? "official" : "thisPc";
+    this.server = h("input", { class: "field wide-field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
+    this.server.value = ov.servers[0] || "";
+    const serverRow = h("div", { class: "server-row" }, this.server);
+    serverRow.hidden = this.where !== "server";
+    const createError = h("div", { class: "field-error", role: "alert" });
+    const createButton = h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "建网络");
+    const options = [
+      { value: "official", label: "官方服务器", hint: ov.officialServer ? "最省事：朋友在哪都能连进来" : "还没上线", disabled: !ov.officialServer },
+      { value: "thisPc", label: "本机当主机", hint: "不用服务器。路由器要支持 UPnP，这台电脑开着网络才在" },
+      { value: "server", label: "我的服务器", hint: "自己架的 meshora-coord（--hub）" },
+    ];
+    const picker = choices(options, this.where, (value) => {
+      this.where = value;
+      serverRow.hidden = value !== "server";
+      createError.textContent = "";
+    });
+    createButton.addEventListener("click", async () => {
+      createError.textContent = "";
+      const name = this.netName.value.trim();
+      if (!name) {
+        createError.textContent = "给网络起个名字";
+        return;
+      }
+      let at = { kind: this.where };
+      if (this.where === "server") {
+        try {
+          at = { kind: "server", code: await invoke("add_server", { code: this.server.value }) };
+        } catch (err) {
+          createError.textContent = String(err);
+          return;
+        }
+      }
+      createButton.disabled = true;
+      try {
+        await invoke("create", { at, name });
+        state.page = "home";
+        refresh();
+      } catch (err) {
+        createError.textContent = String(err);
+      } finally {
+        createButton.disabled = false;
+      }
+    });
+    this.create = h(
+      "section",
+      { class: "dialog", glass: "", "glass-corner-radius": "26" },
+      h("h2", {}, "建一个网络"),
+      h("p", {}, "你当网主，把网络码发给朋友。"),
+      h("label", { class: "label" }, "网络名"),
+      this.netName,
+      h("label", { class: "label" }, "建在哪"),
+      picker,
+      serverRow,
+      createError,
+      h("div", { class: "row end-row" }, createButton),
+    );
+
+    // ---- 加入网络 ----
+    const area = h("textarea", { placeholder: "公钥@地址:端口/网络ID#邀请码", spellcheck: "false", "aria-label": "网络码" });
     const error = h("div", { class: "field-error", role: "alert" });
     const button = h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加入");
     const submit = async () => {
@@ -736,36 +970,189 @@ views.join = {
       }
     });
     area.addEventListener("input", () => (error.textContent = ""));
-
+    this.area = area;
     this.savedHost = h("span", { class: "mono" });
     this.saved = h(
       "div",
       { class: "row split" },
       h("span", { class: "hint" }, "上次的网络 ", this.savedHost),
-      h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("connect", {}) }, "重新连接"),
-      h("button", { class: "btn danger", glass: "clear", type: "button", onclick: () => act("forget") }, "忘掉"),
+      h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => act("connect", {}) }, "重新连接"),
+      h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => act("forget") }, "忘掉"),
     );
-    const el = h(
-      "div",
-      { class: "view center" },
-      h(
-        "section",
-        { class: "dialog", glass: "", "glass-corner-radius": "26" },
-        h("h2", {}, "加入一个联机网络"),
-        h("p", {}, "把建网络的人发给你的网络码贴进来。"),
-        area,
-        error,
-        h("div", { class: "row" }, h("span", { class: "hint" }, "网络码里没有邀请码？", h("button", { class: "link", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制你的 ID"), " 发给建网络的人"), button),
-        this.saved,
-      ),
+    this.join = h(
+      "section",
+      { class: "dialog", glass: "", "glass-corner-radius": "26" },
+      h("h2", {}, "加入朋友的网络"),
+      h("p", {}, "把朋友发给你的网络码贴进来。"),
+      area,
+      error,
+      h("div", { class: "row" }, h("span", { class: "hint" }, "网络码里没有邀请码？", h("button", { class: "link", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制你的 ID"), " 发给建网络的人"), button),
+      this.saved,
     );
+    const el = h("div", { class: "view center" }, h("div", { class: "start" }, this.create, this.join));
     this.update(ov);
-    if (!ov.network) setTimeout(() => area.focus(), 50);
+    // 引导里选了哪个，就先把光标放在哪
+    const tab = state.startTab;
+    state.startTab = null;
+    setTimeout(() => (tab === "create" ? this.netName : area).focus(), 50);
     return el;
   },
   update(ov) {
     this.saved.hidden = !ov.network;
     this.savedHost.textContent = hostOf(ov.network);
+  },
+};
+
+// ---------- 网主：管理网络 ----------
+
+function inviteText(invite) {
+  const parts = [];
+  if (invite.usesLeft !== null && invite.usesLeft !== undefined) parts.push(invite.usesLeft === 1 ? "一次性" : `还能用 ${invite.usesLeft} 次`);
+  if (invite.expires) {
+    const left = invite.expires * 1000 - Date.now();
+    const hours = Math.max(0, Math.round(left / 3600_000));
+    parts.push(hours >= 24 ? `${Math.round(hours / 24)} 天后过期` : hours >= 1 ? `${hours} 小时后过期` : "快过期了");
+  }
+  return parts.join(" · ") || "长期有效";
+}
+
+async function admin(action, done) {
+  try {
+    const code = await invoke("admin", { action });
+    if (done) done(code);
+  } catch (err) {
+    toast(String(err));
+  }
+  refresh();
+}
+
+views.admin = {
+  mount(ov) {
+    this.title = h("input", { class: "field", maxlength: "32", spellcheck: "false", "aria-label": "网络名" });
+    this.title.addEventListener("change", () => {
+      const name = this.title.value.trim();
+      if (name && name !== state.overview.roster?.name) admin({ kind: "rename", name }, () => toast("网络名已保存"));
+    });
+    this.title.addEventListener("keydown", (event) => event.key === "Enter" && this.title.blur());
+    this.code = h("span", { class: "code" });
+    this.invites = h("div", { class: "invite-list" });
+    this.members = h("div", { class: "member-list" });
+    this.memberCount = h("span");
+    const copyCode = () => state.overview.roster?.code && copy(state.overview.roster.code, "网络码");
+    const el = h(
+      "div",
+      { class: "view" },
+      h(
+        "section",
+        { class: "card", glass: "", "glass-corner-radius": "22" },
+        h("div", { class: "group" }, "网络"),
+        settingRow("网络名", "网里的人在你的网络码旁边看到的名字", this.title),
+        h("div", { class: "group" }, "邀请朋友"),
+        settingRow(
+          "网络码",
+          "发给谁，谁就能加入。泄露了就换一个：旧的立刻作废，已经在网里的人不受影响",
+          h("button", { class: "btn sm", glass: "clear", type: "button", onclick: copyCode }, "复制"),
+          h(
+            "button",
+            {
+              class: "btn sm",
+              glass: "clear",
+              type: "button",
+              onclick: async () => {
+                if (await confirmBox("换一个网络码？", "旧的网络码立刻作废。已经在网里的人不受影响，还没加入的要用新的。", "换"))
+                  admin({ kind: "rotateInvite" }, (code) => code && copy(code, "新的网络码"));
+              },
+            },
+            "换一个",
+          ),
+        ),
+        this.invites,
+        h(
+          "div",
+          { class: "row" },
+          h("span", { class: "hint" }, "只想邀请一个人？发一个用一次就作废、或者到时候就过期的："),
+          h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: 1, hours: null }, (code) => code && copy(code, "一次性网络码")) }, "一次性"),
+          h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: null, hours: 24 }, (code) => code && copy(code, "24 小时网络码")) }, "24 小时"),
+        ),
+        h("div", { class: "group" }, "成员 ", this.memberCount),
+        this.members,
+        h("div", { class: "group" }, "解散"),
+        settingRow(
+          "解散这个网络",
+          "所有人立刻断开，网络码作废，网络删掉。不能撤销",
+          h(
+            "button",
+            {
+              class: "btn sm danger",
+              glass: "clear",
+              type: "button",
+              onclick: async () => {
+                if (await confirmBox("解散这个网络？", "所有人立刻断开，网络码作废，网络删掉。不能撤销。", "解散")) {
+                  state.page = "home";
+                  admin({ kind: "delete" }, () => toast("网络解散了"));
+                }
+              },
+            },
+            "解散",
+          ),
+        ),
+      ),
+    );
+    el.querySelectorAll(".set .t")[1].append(this.code);
+    this.update(ov);
+    return el;
+  },
+  update(ov) {
+    const roster = ov.roster;
+    if (!roster) return;
+    if (document.activeElement !== this.title && this.title.value !== roster.name) this.title.value = roster.name;
+    this.code.textContent = roster.code ? roster.code.replace(/#.*$/, "#••••••") : "";
+    const inviteKey = roster.invites.map((i) => i.invite + i.usesLeft + i.expires).join();
+    if (inviteKey !== this.inviteKey) {
+      this.inviteKey = inviteKey;
+      this.invites.replaceChildren(
+        ...roster.invites.map((invite) =>
+          h(
+            "div",
+            { class: "set" },
+            h("div", { class: "t" }, h("b", {}, inviteText(invite)), h("span", { class: "code" }, `#${invite.invite.slice(0, 6)}…`)),
+            h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(invite.code, "网络码") }, "复制"),
+            h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => admin({ kind: "revokeInvite", invite: invite.invite }, () => toast("作废了")) }, "作废"),
+          ),
+        ),
+      );
+    }
+    this.memberCount.textContent = `${roster.members.length} 人 · ${roster.members.filter((m) => m.online).length} 在线`;
+    const memberKey = roster.members.map((m) => m.id + m.name + m.online).join();
+    if (memberKey !== this.memberKey) {
+      this.memberKey = memberKey;
+      this.members.replaceChildren(
+        ...roster.members.map((member) =>
+          h(
+            "div",
+            { class: "set" },
+            h("div", { class: `ava sm ${colorClass(member.id)}` }, initialOf(member)),
+            h("div", { class: "t" }, h("b", {}, nameOf(member), member.owner ? h("span", { class: "tag" }, "网主") : null), h("span", { class: "mono" }, member.ip)),
+            h("span", { class: member.online ? "route direct" : "route off" }, member.online ? "● 在线" : "○ 不在线"),
+            member.owner
+              ? null
+              : h(
+                  "button",
+                  {
+                    class: "btn sm danger",
+                    glass: "clear",
+                    type: "button",
+                    onclick: async () => {
+                      if (await confirmBox(`把 ${nameOf(member)} 移出网络？`, "他马上断开。手里的网络码还有效的话，他还能再加回来 —— 想让他回不来，接着换一个网络码。", "移出"))
+                        admin({ kind: "kick", id: member.id }, () => toast("移出了"));
+                    },
+                  },
+                  "移出",
+                ),
+          ),
+        ),
+      );
+    }
   },
 };
 
@@ -812,6 +1199,18 @@ const FAILURES = {
     title: "你已被移出这个网络",
     hint: "建网络的人把你移出了。想回来的话，向对方要一个新的网络码。",
   },
+  rejectedDeleted: {
+    title: "这个网络解散了",
+    hint: "网主解散了这个网络。点「换一个网络」去建一个新的，或者加入别的网络。",
+  },
+  rejectedNoNetwork: {
+    title: "找不到这个网络",
+    hint: "网络可能已经被网主解散了，或者网络码抄错了。向建网络的人要一个新的网络码。",
+  },
+  rejectedCreate: {
+    title: "建不了网络",
+    hint: "服务器不让建：看下面的原因（比如建的网络太多了）。",
+  },
   rejectedFull: {
     title: "网络已满",
     hint: "这个网络的人数到上限了。联系建网络的人。",
@@ -857,6 +1256,9 @@ function failureKind(error) {
   if (kind === "rejected" && message.includes("邀请码不对")) return "rejectedInvite";
   if (kind === "rejected" && message.includes("不接受凭邀请码")) return "rejectedClosed";
   if (kind === "rejected" && message.includes("网络已满")) return "rejectedFull";
+  if (kind === "rejected" && message.includes("解散")) return "rejectedDeleted";
+  if (kind === "rejected" && message.includes("找不到这个网络")) return "rejectedNoNetwork";
+  if (kind === "rejected" && /建网络|网络已经满|不让别人建|最多 \d+ 个/.test(message)) return "rejectedCreate";
   if (kind === "tun" && /wintun\.dll/i.test(message)) return "tunDriver";
   if (kind === "tun" && /拒绝访问|access is denied|\(os error 5\)/i.test(message)) return "tunAdmin";
   return kind;
@@ -903,21 +1305,39 @@ views.failed = {
 
 let main;
 
+/** 自绘的标题栏：拖它移动窗口；最小化、关（关 = 藏到托盘，连接不断） */
+function titlebar() {
+  const win = () => window.__TAURI__?.window?.getCurrentWindow?.();
+  const icon = (d) => s("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" }, s("path", { d, stroke: "currentColor", "stroke-width": 1.4, "stroke-linecap": "round", fill: "none" }));
+  return h(
+    "header",
+    { class: "titlebar", "data-tauri-drag-region": "" },
+    h("span", { class: "grow", "data-tauri-drag-region": "" }),
+    h("button", { class: "tb-btn", type: "button", title: "最小化", "aria-label": "最小化", onclick: () => win()?.minimize() }, icon("M2.5 6h7")),
+    h("button", { class: "tb-btn close", type: "button", title: "关到托盘（连接不断）", "aria-label": "关闭", onclick: () => win()?.hide() }, icon("M3 3l6 6M9 3l-6 6")),
+  );
+}
+
 function shell() {
   main = h("main");
-  document.getElementById("app").replaceChildren(pass.build(), main);
+  document.getElementById("app").replaceChildren(pass.build(), h("div", { class: "column" }, titlebar(), main));
 }
 
 function viewFor(ov) {
+  if (!ov.onboarded) return "onboarding";
   if (state.page === "settings") return "settings";
-  if (ov.phase === "connected") return state.page === "friends" ? "friends" : "overview";
+  if (ov.phase === "connected") {
+    if (state.page === "admin" && ov.roster) return "admin";
+    return state.page === "friends" ? "friends" : "overview";
+  }
   if (ov.phase === "connecting") return "connecting";
   if (ov.phase === "failed") return "failed";
-  return "join";
+  return "start";
 }
 
 function render(ov) {
   state.overview = ov;
+  document.getElementById("app").classList.toggle("solo", !ov.onboarded);
   pass.update(ov);
   const name = viewFor(ov);
   if (name !== state.view) {

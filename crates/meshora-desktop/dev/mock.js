@@ -1,12 +1,13 @@
 // 在普通浏览器里看界面用的假后端：不需要管理员权限、不建网卡。
 // 用法：在 crates/meshora-desktop 下起一个静态服务器，打开 dev/index.html?s=<场景>
-// 场景：join、saved、connecting、connected、empty、rejected、invite、tun、unreachable
+// 场景：onboarding、join、saved、connecting、connected、owner、host、empty、rejected、invite、deleted、tun、unreachable
 "use strict";
 
 (() => {
   const scenario = new URLSearchParams(location.search).get("s") || "join";
   const id = "mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY=";
-  const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443#3q2-7wEYkQ6n0Cf8Hs5VYA";
+  const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443/pZQ0bJbVv2u3Xy1a9cD8eF#3q2-7wEYkQ6n0Cf8Hs5VYA";
+  const server = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443";
   const peers = [
     { id: "Kx81ZrT0pQv3Yb7Nc2Lw5Df8Gh1Jk4Ms6Aa9Ee0Ii2U=", name: "小明", ip: "100.64.0.1", route: "direct", rttMs: 14, jitterMs: 3, lossPercent: 2, online: true, rx: 18_734_112, tx: 9_201_554 },
     { id: "Pm42VcX9sB1nQ7rT3yH5jK8lZ0wE2dF4gA6uI9oO1eU=", name: "老王的笔记本", ip: "100.64.0.2", route: "relay", rttMs: 48, jitterMs: 4, online: true, rx: 2_048_331, tx: 1_530_227 },
@@ -20,6 +21,11 @@
     preferBroadcast: true,
     autoConnect: true,
     privateNetwork: false,
+    onboarded: true,
+    officialServer: null,
+    servers: [server],
+    roster: null,
+    hosting: null,
     phase: "idle",
     error: null,
     me: null,
@@ -27,11 +33,28 @@
     peers: [],
   };
   const me = { ip: "100.64.0.3", prefix: 10, tun: "Meshora" };
+  const roster = {
+    name: "周末开黑",
+    code,
+    members: [
+      { id, name: "阿杰的台式机", ip: "100.64.0.3", online: true, owner: true },
+      ...peers.map((p) => ({ id: p.id, name: p.name, ip: p.ip, online: p.online, owner: false })),
+    ],
+    invites: [{ code: code.replace(/#.*/, "#Xk9pQ2mT7vB4nL8cW1yH5a"), invite: "Xk9pQ2mT7vB4nL8cW1yH5a", usesLeft: 1, expires: null }],
+  };
   const scenarios = {
+    onboarding: { onboarded: false },
     join: {},
     saved: { network: code },
     connecting: { network: code, phase: "connecting" },
     connected: { network: code, phase: "connected", me, coordConnected: true, peers },
+    owner: { network: code, phase: "connected", me, coordConnected: true, peers, roster },
+    host: { network: code, phase: "connected", me, coordConnected: true, peers, roster, hosting: { reach: "cgnat", publicIp: "100.72.3.9", lanIp: "192.168.1.20" } },
+    deleted: {
+      network: code,
+      phase: "failed",
+      error: { kind: "rejected", message: "这个网络已经被网主解散了" },
+    },
     empty: { network: code, phase: "connected", me, coordConnected: false, peers: [] },
     rejected: {
       network: code,
@@ -95,6 +118,49 @@
     },
     set_private_network({ on }) {
       ov = { ...ov, privateNetwork: on };
+    },
+    set_onboarded() {
+      ov = { ...ov, onboarded: true };
+    },
+    add_server({ code: text }) {
+      if (!text.includes("@")) throw "服务器地址应为 公钥@地址:端口，没找到 @";
+      if (!ov.servers.includes(text)) ov = { ...ov, servers: [...ov.servers, text] };
+      return text;
+    },
+    remove_server({ code: text }) {
+      ov = { ...ov, servers: ov.servers.filter((s) => s !== text) };
+    },
+    create({ at, name }) {
+      if (at.kind === "official" && !ov.officialServer) throw "官方服务器还没上线";
+      ov = { ...ov, phase: "connecting", error: null };
+      setTimeout(() => {
+        ov = {
+          ...ov,
+          phase: "connected",
+          network: code,
+          me,
+          coordConnected: true,
+          peers: [],
+          roster: { ...roster, name, members: [roster.members[0]], invites: [] },
+          hosting: at.kind === "thisPc" ? { reach: "open", publicIp: "203.0.113.5", lanIp: "192.168.1.20" } : null,
+        };
+      }, 1200);
+    },
+    admin({ action }) {
+      const r = ov.roster;
+      if (!r) throw "只有网主能管理这个网络";
+      if (action.kind === "kick") ov = { ...ov, roster: { ...r, members: r.members.filter((m) => m.id !== action.id) }, peers: ov.peers.filter((p) => p.id !== action.id) };
+      if (action.kind === "rename") ov = { ...ov, roster: { ...r, name: action.name } };
+      if (action.kind === "revokeInvite") ov = { ...ov, roster: { ...r, invites: r.invites.filter((i) => i.invite !== action.invite) } };
+      if (action.kind === "newInvite") {
+        const invite = Math.random().toString(36).slice(2, 12).padEnd(22, "x");
+        const entry = { code: code.replace(/#.*/, "#" + invite), invite, usesLeft: action.uses, expires: action.hours ? Math.round(Date.now() / 1000) + action.hours * 3600 : null };
+        ov = { ...ov, roster: { ...r, invites: [...r.invites, entry] } };
+        return entry.code;
+      }
+      if (action.kind === "rotateInvite") return code.replace(/#.*/, "#NewNewNewNewNewNewNew1");
+      if (action.kind === "delete") ov = { ...ov, phase: "idle", network: null, roster: null, me: null, peers: [] };
+      return null;
     },
     set_name({ name }) {
       const cleaned = name.trim().slice(0, 32);

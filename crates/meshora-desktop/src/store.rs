@@ -26,6 +26,14 @@ pub struct Settings {
     pub private_network: bool,
     /// 给网里别人看的名字。第一次打开时取这台电脑的名字（Windows 的计算机名）。
     pub name: String,
+    /// 走完了第一次打开时的引导。
+    pub onboarded: bool,
+    /// 自己添加的服务器（托管很多网络的协调服务）：`公钥@地址:端口`，建网络时可以选。
+    pub servers: Vec<String>,
+    /// 官方服务器的地址，覆盖客户端里写死的那个（自建了一台"官方服务器"的人用）。
+    pub official_server: Option<String>,
+    /// 现在的网络是本机当主机建的：连之前先把本机的协调服务、中继起起来。
+    pub hosting: bool,
 }
 
 /// 这台电脑的名字，取不到是空串
@@ -47,6 +55,10 @@ impl Default for Settings {
             auto_connect: true,
             private_network: false,
             name: computer_name(),
+            onboarded: false,
+            servers: Vec::new(),
+            official_server: None,
+            hosting: false,
         }
     }
 }
@@ -60,6 +72,11 @@ impl Store {
     /// 用这个目录。还不存在也没关系，第一次写的时候建。
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
+    }
+
+    /// 这个目录。
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
     }
 
     /// 本机的私钥。第一次运行时生成一把存起来 —— 私钥就是这台电脑在网里的身份，换了就是另一个人。
@@ -90,6 +107,15 @@ impl Store {
 
     /// 读设置。文件不在或者坏了就用默认值 —— 设置坏了不该让客户端打不开。
     pub fn load_settings(&self) -> Settings {
+        let mut settings = self.read_settings();
+        // 1.0.0 的设置文件没有这一项：已经加入过网络的人不用再走引导
+        if settings.network.is_some() {
+            settings.onboarded = true;
+        }
+        settings
+    }
+
+    fn read_settings(&self) -> Settings {
         let path = self.dir.join(SETTINGS_FILE);
         match fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|err| {
@@ -168,6 +194,10 @@ pub(crate) mod tests {
             auto_connect: true,
             private_network: true,
             name: "阿杰的台式机".into(),
+            onboarded: true,
+            servers: vec!["key@play.example.com:7443".into()],
+            official_server: None,
+            hosting: true,
         };
         store.save_settings(&settings).unwrap();
         assert_eq!(store.load_settings(), settings);

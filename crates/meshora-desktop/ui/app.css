@@ -890,3 +890,282 @@ td.spark-cell .spark {
     transition-duration: 1ms !important;
   }
 }
+
+/* ---------- 自绘标题栏 ---------- */
+
+.column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.column main {
+  flex: 1;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 28px;
+  margin: calc(var(--sp-2) * -1) 0 var(--sp-2);
+  flex: none;
+}
+
+.tb-btn {
+  width: 32px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.tb-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tb-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.tb-btn.close:hover {
+  background: rgba(255, 90, 90, 0.75);
+  color: #fff;
+}
+
+/* 第一次打开：只有引导，不要通行证 */
+#app.solo {
+  grid-template-columns: 1fr;
+}
+
+#app.solo .pass {
+  display: none;
+}
+
+/* ---------- 引导 ---------- */
+
+.welcome-card {
+  width: min(520px, 100%);
+  text-align: center;
+}
+
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.welcome h1 {
+  margin: 0;
+  font-size: var(--fs-head);
+}
+
+.welcome p {
+  margin: 0;
+}
+
+.welcome-logo svg {
+  width: 56px;
+  height: 56px;
+}
+
+.welcome .label {
+  align-self: stretch;
+  text-align: left;
+}
+
+.welcome .wide-field {
+  width: 100%;
+}
+
+.paths {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+  width: 100%;
+  margin-top: var(--sp-2);
+}
+
+.path {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-5) var(--sp-4);
+  border: 0;
+  border-radius: var(--r-card);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.path b {
+  font-size: var(--fs-title);
+}
+
+.path span {
+  font-size: var(--fs-sec);
+  color: var(--dim);
+}
+
+/* ---------- 开始：建网络 / 加入网络 ---------- */
+
+.start {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+  width: min(980px, 100%);
+  align-items: start;
+}
+
+.start .dialog {
+  width: auto;
+}
+
+.label {
+  display: block;
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-size: var(--fs-cap);
+  font-weight: 600;
+  color: var(--dim);
+}
+
+.wide-field {
+  width: 100%;
+}
+
+.mono-field {
+  font-family: var(--mono);
+  font-size: var(--fs-cap);
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-field);
+  background: rgba(255, 255, 255, 0.03);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
+}
+
+.choice span {
+  font-size: var(--fs-cap);
+  color: var(--dim);
+}
+
+.choice[aria-checked="true"] {
+  border-color: var(--brand);
+  background: rgba(122, 156, 255, 0.16);
+}
+
+.choice:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.server-row {
+  margin-top: var(--sp-2);
+}
+
+.row.end-row {
+  justify-content: flex-end;
+}
+
+.row.center-row {
+  justify-content: center;
+}
+
+/* ---------- 网状图上方：邀请、主机状态 ---------- */
+
+.map-extras {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--h-ctl-sm);
+  padding: 0 var(--sp-3);
+  border-radius: calc(var(--h-ctl-sm) / 2);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: var(--fs-cap);
+  font-weight: 600;
+  color: var(--dim);
+}
+
+.chip.ok {
+  color: var(--good);
+}
+
+.chip.warn {
+  color: var(--mid);
+}
+
+/* ---------- 管理 ---------- */
+
+.tag,
+.set .t .tag {
+  display: inline-block;
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-2);
+  border-radius: 6px;
+  background: rgba(122, 156, 255, 0.2);
+  color: var(--brand);
+  font-size: var(--fs-cap);
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.member-list .set,
+.invite-list .set {
+  padding: var(--sp-2) 0;
+}
+
+/* ---------- 确认框 ---------- */
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 10, 30, 0.45);
+  animation: fade 160ms var(--ease) both;
+}
+
+.modal-scrim .dialog {
+  text-align: center;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 1000px) {
+  .start {
+    grid-template-columns: 1fr;
+    width: min(520px, 100%);
+  }
+}

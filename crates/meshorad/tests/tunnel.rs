@@ -168,6 +168,7 @@ async fn start_echo_node(case: &Case, secret: &NodeSecret, coord: &Coord) -> Ech
         keepalive: NonZeroU16::new(25),
         relay_only: case.relay_only,
         name: String::new(),
+        hosting: Default::default(),
     })
     .await
     .unwrap();

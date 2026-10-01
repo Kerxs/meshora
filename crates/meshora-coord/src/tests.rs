@@ -869,6 +869,7 @@ async fn start_hub(state: &TempState, limits: HubLimits) -> (Coord, meshora_rela
         hub: Some(HubConfig {
             dir: state.0.parent().unwrap().to_path_buf(),
             limits,
+            creators: None,
         }),
     })
     .unwrap();

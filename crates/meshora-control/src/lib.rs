@@ -152,6 +152,28 @@ pub struct Config {
     pub relay_only: bool,
     /// 给网里别人看的名字，空串是不起。连上后告诉协调服务；连着的时候用 [`NameSetter`] 改。
     pub name: String,
+    /// 本机自己当主机（协调服务、中继跑在本机）时要的额外设置；平时是空的。
+    pub hosting: Hosting,
+}
+
+/// 本机当主机时的额外设置。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Hosting {
+    /// 额外上报的端点：路由器上用 UPnP 映射出来的公网端点。本机探测公网地址时
+    /// 绕回自己的协调服务，看到的只是局域网地址，别人得靠它才找得到直连的路。
+    pub extra_endpoints: Vec<SocketAddr>,
+    /// 地址别名（公网地址，本机实际用的地址）：协调服务告诉大家的中继、探测地址是公网的，
+    /// 本机自己去连它们时换成局域网地址 —— 不少路由器不支持从里面绕回自己的公网地址。
+    pub aliases: Vec<(SocketAddr, SocketAddr)>,
+}
+
+impl Hosting {
+    fn resolve(&self, addr: SocketAddr) -> SocketAddr {
+        self.aliases
+            .iter()
+            .find(|(public, _)| *public == addr)
+            .map_or(addr, |(_, local)| *local)
+    }
 }
 
 /// 连着的时候改名字。见 [`Session::name_setter`]。
@@ -436,6 +458,25 @@ impl Session {
     }
 }
 
+/// 只建网络、不留下来：连上 hub 模式的协调服务，新建一个网络（自己当网主），拿到网络 ID 和
+/// 长期有效的邀请码就断开。之后照常用 [`Entry::Join`] 连进去。
+///
+/// 和"连上之后再建好网卡"分开做：网卡建不起来（没有管理员权限之类）的时候，
+/// 建好的网络也已经拿在手里了，不会成为一个谁都进不去、还占着名额的网络。
+pub async fn create_network(
+    config: &Config,
+    name: &str,
+) -> Result<(NetworkId, Invite), ControlError> {
+    let entry = Entry::Create {
+        name: name.to_owned(),
+    };
+    let (welcome, _connection) = connect_once(config, &entry, &config.name).await?;
+    match (welcome.network, welcome.created) {
+        (Some(network), Some(invite)) => Ok((network, invite)),
+        _ => Err(ControlError::Protocol("协调服务没说新网络的 ID 和邀请码")),
+    }
+}
+
 async fn connect_once(
     config: &Config,
     entry: &Entry,
@@ -585,6 +626,7 @@ struct Node {
     local_port: u16,
     keepalive: Option<NonZeroU16>,
     relay_only: bool,
+    hosting: Hosting,
     dataplane: Arc<dyn DataPlane>,
     /// 协调服务给的中继，按它排的顺序
     relays: Vec<Path>,
@@ -613,6 +655,7 @@ impl Node {
             local_port: config.local_port,
             keepalive: config.keepalive,
             relay_only: config.relay_only,
+            hosting: config.hosting.clone(),
             dataplane,
             relays: Vec::new(),
             probe: None,
@@ -638,13 +681,13 @@ impl Node {
             .iter()
             .map(|relay| Path::Relay {
                 relay: relay.key,
-                addr: relay.addr,
+                addr: self.hosting.resolve(relay.addr),
             })
             .collect();
         for state in self.peers.values_mut() {
             state.paths.retain_relays(&self.relays);
         }
-        self.probe = welcome.probe;
+        self.probe = welcome.probe.map(|probe| self.hosting.resolve(probe));
         // 新连接上，协调服务可能不记得本机的端点了：下个节拍重新上报
         self.reported = None;
         self.next_probe = Instant::now();
@@ -956,6 +999,11 @@ impl Node {
             && !endpoints.contains(&reflexive)
         {
             endpoints.push(reflexive);
+        }
+        for extra in &self.hosting.extra_endpoints {
+            if !endpoints.contains(extra) {
+                endpoints.push(*extra);
+            }
         }
         endpoints
     }

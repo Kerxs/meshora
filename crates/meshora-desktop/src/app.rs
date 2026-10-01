@@ -6,7 +6,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
-use crate::controller::{Controller, Overview};
+use crate::controller::{AdminAction, Controller, CreateAt, Overview};
 use crate::logs::LogBuffer;
 
 #[tauri::command]
@@ -17,6 +17,38 @@ fn overview(controller: State<'_, Controller>) -> Overview {
 #[tauri::command]
 async fn connect(controller: State<'_, Controller>, code: Option<String>) -> Result<(), String> {
     controller.connect(code).await
+}
+
+#[tauri::command]
+async fn create(
+    controller: State<'_, Controller>,
+    at: CreateAt,
+    name: String,
+) -> Result<(), String> {
+    controller.create(at, name).await
+}
+
+#[tauri::command]
+async fn admin(
+    controller: State<'_, Controller>,
+    action: AdminAction,
+) -> Result<Option<String>, String> {
+    controller.admin(action).await
+}
+
+#[tauri::command]
+fn set_onboarded(controller: State<'_, Controller>) {
+    controller.set_onboarded();
+}
+
+#[tauri::command]
+fn add_server(controller: State<'_, Controller>, code: String) -> Result<String, String> {
+    controller.add_server(&code)
+}
+
+#[tauri::command]
+fn remove_server(controller: State<'_, Controller>, code: String) {
+    controller.remove_server(&code);
 }
 
 #[tauri::command]
@@ -69,14 +101,19 @@ fn show_main(app: &AppHandle) {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
     let show = MenuItem::with_id(app, "show", "打开 Meshora", true, None::<&str>)?;
+    let disconnect = MenuItem::with_id(app, "disconnect", "断开连接", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出（断开连接）", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &disconnect, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Meshora")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main(app),
+            "disconnect" => {
+                let controller = app.state::<Controller>().inner().clone();
+                tauri::async_runtime::spawn(async move { controller.disconnect().await });
+            }
             "quit" => app.exit(0),
             _ => {}
         })
@@ -166,6 +203,11 @@ pub fn run() {
             set_auto_connect,
             set_private_network,
             set_name,
+            create,
+            admin,
+            set_onboarded,
+            add_server,
+            remove_server,
             logs
         ])
         .build(tauri::generate_context!())

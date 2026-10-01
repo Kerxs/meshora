@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::info;
 
-pub use meshora_control::{AdminHandle, AdminResult, Entry};
+pub use meshora_control::{AdminHandle, AdminResult, Entry, Hosting};
 pub use meshora_control::{AdminRequest, Roster, RosterInvite, RosterMember};
 pub use network::{NetworkCode, ParseNetworkCodeError};
 
@@ -48,6 +48,8 @@ pub struct Options {
     pub relay_only: bool,
     /// 给网里别人看的名字，空串是不起。
     pub name: String,
+    /// 本机当主机时的额外设置，见 [`Hosting`]。
+    pub hosting: Hosting,
 }
 
 /// 启动失败的原因。
@@ -115,6 +117,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         keepalive: options.keepalive,
         relay_only: options.relay_only,
         name: options.name,
+        hosting: options.hosting,
     })
     .await
     .map_err(StartError::Register)?;

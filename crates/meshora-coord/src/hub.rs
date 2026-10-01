@@ -26,6 +26,8 @@ pub struct HubConfig {
     pub dir: PathBuf,
     /// 限额。
     pub limits: HubLimits,
+    /// 只有这些公钥能建网络；`None` 是谁都能建。客户端在本机当主机时只许自己建。
+    pub creators: Option<Vec<NodeKey>>,
 }
 
 /// hub 模式的限额。谁都能建网络，资源得有个边。
@@ -62,6 +64,7 @@ impl Default for HubLimits {
 pub(crate) struct Hub {
     dir: PathBuf,
     pub limits: HubLimits,
+    creators: Option<Vec<NodeKey>>,
     overlay: Ipv4Net,
     networks: HashMap<NetworkId, Arc<Network>>,
     /// 每个来源最近一小时建网络的时刻
@@ -121,6 +124,7 @@ impl Hub {
         Ok(Self {
             dir: config.dir,
             limits: config.limits,
+            creators: config.creators,
             overlay,
             networks,
             creations: HashMap::new(),
@@ -146,6 +150,11 @@ impl Hub {
         name: &str,
         source: IpAddr,
     ) -> Result<(Arc<Network>, Invite), String> {
+        if let Some(creators) = &self.creators
+            && !creators.contains(&owner)
+        {
+            return Err("这台服务器不让别人建网络".into());
+        }
         let now = Instant::now();
         let recent = self.creations.entry(source).or_default();
         recent.retain(|at| now.duration_since(*at) < Duration::from_secs(3600));
