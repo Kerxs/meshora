@@ -134,6 +134,17 @@ if ! adb logcat -d -s Meshora | grep -q "网卡已建好"; then
   echo "VpnService 的网卡没建起来" >&2
   exit 1
 fi
+# 手机上的排版：网络页、设置页各截一张（CI 的产物里看）
+adb exec-out screencap -p > "$out/network.png"
+tap "设置" || true
+sleep 2
+adb exec-out screencap -p > "$out/settings.png"
+size=$(adb shell wm size | tr -d $'\r' | grep -oE '[0-9]+x[0-9]+$' | tail -1)
+w=${size%x*}
+h=${size#*x}
+adb shell input swipe $((w / 2)) $((h * 3 / 4)) $((w / 2)) $((h / 4)) 400 || true
+sleep 1
+adb exec-out screencap -p > "$out/settings-2.png"
 # 留时间给另一边 ping
-sleep 60
+sleep 50
 echo "安卓这边走完了"

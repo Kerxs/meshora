@@ -27,7 +27,9 @@ flate2 = { workspace = true }
 tauri.workspace = true
 mslnk.workspace = true
 winreg.workspace = true
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_SystemInformation"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_SystemInformation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_SystemServices"] }
+# 安装程序的"选安装位置"对话框（系统的选文件夹窗口）
+tauri-plugin-dialog = "2.8"
 
 [build-dependencies]
 flate2 = { workspace = true }

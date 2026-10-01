@@ -88,49 +88,157 @@ textarea {
   flex: 1;
 }
 
-/* ---------- 背景 ---------- */
+/* ---------- 背景：流体 ----------
+ * 几团彩色光像液体一样缓慢流动：各自沿一条闭合路径漂移、转动，横竖缩放不一样（被拉长、压扁），重叠处交融。
+ * 光团由 sky.js 建：外层 .flow 跟着指针轻轻偏一点（--px、--py 乘各自的 --k），里层 .orb 按关键帧流动。
+ * 每团只有一层渐变、只动变换：Glassium 每帧把它们收进场景，玻璃折射的也是动的 */
 
 .sky {
   position: fixed;
   inset: 0;
   overflow: hidden;
+  --px: 0px;
+  --py: 0px;
+}
+
+.flow {
+  position: absolute;
+  inset: 0;
+  translate: calc(var(--px) * var(--k, 1)) calc(var(--py) * var(--k, 1));
+  transition: translate 1.8s var(--ease);
 }
 
 .orb {
   position: absolute;
   border-radius: 50%;
+  animation: var(--path) var(--dur) ease-in-out infinite alternate;
+  animation-delay: var(--delay, 0s);
+}
+
+.sky.paused .orb {
+  animation-play-state: paused;
 }
 
 .orb-a {
-  width: 760px;
-  height: 760px;
-  left: -220px;
-  top: -260px;
+  --path: flow-a;
+  --dur: 26s;
+  width: 70vmax;
+  height: 70vmax;
+  left: -22vmax;
+  top: -26vmax;
   background: radial-gradient(circle, #2f5bff 0%, rgba(47, 91, 255, 0) 68%);
 }
 
 .orb-b {
-  width: 680px;
-  height: 680px;
-  right: -160px;
-  top: 60px;
+  --path: flow-b;
+  --dur: 33s;
+  width: 62vmax;
+  height: 62vmax;
+  right: -16vmax;
+  top: 4vmax;
   background: radial-gradient(circle, #8a4dff 0%, rgba(138, 77, 255, 0) 66%);
 }
 
 .orb-c {
-  width: 620px;
-  height: 620px;
-  left: 260px;
-  bottom: -330px;
+  --path: flow-c;
+  --dur: 41s;
+  width: 58vmax;
+  height: 58vmax;
+  left: 22vmax;
+  bottom: -30vmax;
   background: radial-gradient(circle, #13c7a0 0%, rgba(19, 199, 160, 0) 64%);
 }
 
 .orb-d {
-  width: 360px;
-  height: 360px;
-  right: 240px;
-  bottom: -120px;
+  --path: flow-d;
+  --dur: 29s;
+  width: 34vmax;
+  height: 34vmax;
+  right: 20vmax;
+  bottom: -10vmax;
   background: radial-gradient(circle, #ff6f61 0%, rgba(255, 111, 97, 0) 66%);
+}
+
+.orb-e {
+  --path: flow-e;
+  --dur: 37s;
+  --delay: -9s;
+  width: 30vmax;
+  height: 30vmax;
+  left: 34vmax;
+  top: 6vmax;
+  background: radial-gradient(circle, #3fb8ff 0%, rgba(63, 184, 255, 0) 66%);
+}
+
+.orb-f {
+  --path: flow-f;
+  --dur: 47s;
+  --delay: -21s;
+  width: 26vmax;
+  height: 26vmax;
+  left: -4vmax;
+  bottom: 4vmax;
+  background: radial-gradient(circle, #d65bff 0%, rgba(214, 91, 255, 0) 66%);
+}
+
+/* 每团一条路径：漂移、转动、横竖缩放不同步 —— 圆被拉成椭圆再转过去，看上去像液体在流 */
+@keyframes flow-a {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  35% { transform: translate(9vmax, 6vmax) rotate(40deg) scale(1.18, 0.86); }
+  70% { transform: translate(3vmax, 12vmax) rotate(95deg) scale(0.9, 1.12); }
+  100% { transform: translate(-4vmax, 4vmax) rotate(140deg) scale(1.08, 0.95); }
+}
+
+@keyframes flow-b {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  40% { transform: translate(-10vmax, 8vmax) rotate(-50deg) scale(0.85, 1.2); }
+  75% { transform: translate(-4vmax, 16vmax) rotate(-110deg) scale(1.15, 0.9); }
+  100% { transform: translate(-12vmax, 6vmax) rotate(-160deg) scale(1, 1.05); }
+}
+
+@keyframes flow-c {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  30% { transform: translate(12vmax, -6vmax) rotate(60deg) scale(1.2, 0.85); }
+  65% { transform: translate(-6vmax, -12vmax) rotate(120deg) scale(0.88, 1.15); }
+  100% { transform: translate(-14vmax, -4vmax) rotate(180deg) scale(1.1, 0.92); }
+}
+
+@keyframes flow-d {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  45% { transform: translate(-14vmax, -10vmax) rotate(70deg) scale(1.35, 0.8); }
+  100% { transform: translate(-6vmax, -20vmax) rotate(150deg) scale(0.9, 1.25); }
+}
+
+@keyframes flow-e {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  50% { transform: translate(14vmax, 10vmax) rotate(-80deg) scale(1.3, 0.8); }
+  100% { transform: translate(-8vmax, 18vmax) rotate(-170deg) scale(0.85, 1.2); }
+}
+
+@keyframes flow-f {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  50% { transform: translate(18vmax, -8vmax) rotate(90deg) scale(1.25, 0.85); }
+  100% { transform: translate(30vmax, 4vmax) rotate(200deg) scale(0.9, 1.2); }
+}
+
+/* 手机上光团少两团、流得更慢：省电 */
+.phone .orb-e,
+.phone .orb-f {
+  display: none;
+}
+
+.phone .orb {
+  animation-duration: calc(var(--dur) * 1.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb {
+    animation: none !important;
+  }
+
+  .flow {
+    transition: none !important;
+  }
 }
 
 /* ---------- 框架 ---------- */
@@ -148,6 +256,7 @@ textarea {
 
 /* 按钮：胶囊。玻璃由 glass 属性画，这里只管尺寸和字 */
 .btn {
+  flex: none;
   height: var(--h-ctl);
   padding: 0 var(--sp-4);
   border: 0;
@@ -222,8 +331,9 @@ textarea::placeholder {
   color: var(--faint);
 }
 
+/* 开关用 Glassium 的默认尺寸：旋钮宽 = 高 × 13/8，轨道比 64px 窄，旋钮就占满整条、成了一块白胶囊 */
 glass-switch {
-  width: 46px;
+  width: 64px;
   height: 28px;
   flex: none;
 }
@@ -459,13 +569,56 @@ main {
   min-width: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
+}
+
+main:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
 
 .view {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
+  width: min(820px, 100%);
   min-height: 100%;
+  margin: 0 auto;
+}
+
+/* 一页的标题 */
+.page-head {
+  padding: var(--sp-2) var(--sp-1) 0;
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: var(--fs-head);
+  font-weight: 700;
+}
+
+.page-head p {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sec);
+  color: var(--dim);
+}
+
+/* 一组设置一张卡片 */
+.panel {
+  padding: var(--sp-4) var(--sp-5) var(--sp-2);
+}
+
+.panel-title {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-cap);
+  font-weight: 700;
+  color: var(--faint);
+  letter-spacing: 0.05em;
+}
+
+.panel-title span span {
+  margin-left: var(--sp-2);
+  font-weight: 600;
 }
 
 .view.center {
@@ -725,6 +878,30 @@ td.spark-cell .spark {
 
 .set .t {
   flex: 1;
+  min-width: 0;
+}
+
+.set > .btn,
+.set > glass-switch {
+  flex: none;
+}
+
+/* 上下排：标题和说明一整行，输入框、长内容和按钮在下面 */
+.set.stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+
+.set.stack .ctl {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.set.stack .ctl .field {
+  flex: 1;
+  width: auto;
   min-width: 0;
 }
 
@@ -1202,6 +1379,94 @@ td.spark-cell .spark {
   margin-left: var(--sp-2);
 }
 
+/* ---------- 动画 ----------
+ * 一套时长：快（按下、悬停）、中（切页、弹窗）、慢（出现、完成），曲线都是 --ease。只动 transform 和 opacity，
+ * 不碰布局；玻璃（Glassium）每帧跟着变换和不透明度走。系统要求减少动画时，下面的规则会把时长压到 1ms */
+
+:root {
+  --t-fast: 160ms;
+  --t-mid: 240ms;
+  --t-slow: 360ms;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* 切页：新页面里的卡片依次浮上来（--i 由 app.js 按顺序写） */
+.view.enter > * {
+  animation: rise var(--t-mid) var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+/* 列表里新来的一项（朋友卡片） */
+.enter-item {
+  animation: rise var(--t-mid) var(--ease) both;
+}
+
+/* 确认框：放大出现 */
+.modal-scrim .dialog {
+  animation: pop var(--t-mid) var(--ease) both;
+}
+
+/* 连上了：通行证上的地址浮现（从隐藏变显示时动画会重新跑） */
+.pass .me:not([hidden]) {
+  animation: rise var(--t-slow) var(--ease) both;
+}
+
+/* 网状图换了人、换了路：重画的那一份淡入 */
+.graph > * {
+  animation: fade var(--t-slow) var(--ease) both;
+}
+
+/* 按钮：悬停微亮，按下轻轻一缩 */
+.btn,
+.choice,
+.path,
+.update-chip,
+.tb-btn,
+.nav button {
+  transition: transform var(--t-fast) var(--ease), filter var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled),
+.choice:hover:not(:disabled),
+.path:hover {
+  filter: brightness(1.15);
+}
+
+/* 键盘焦点：细白圈。别用浏览器默认的黑框；鼠标点出来的焦点不画 */
+.btn:focus-visible,
+.choice:focus-visible,
+.path:focus-visible,
+.tb-btn:focus-visible,
+.nav button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+}
+
+.btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.btn:active:not(:disabled),
+.choice:active:not(:disabled),
+.path:active,
+.update-chip:active:not(:disabled),
+.nav button:active {
+  transform: scale(0.97);
+}
+
 /* ---------- 手机（安卓客户端，html.phone） ----------
  * 一栏：通行证缩成顶上一张卡（状态、你的地址、断开），内容在下面滚，导航是底部一条胶囊。
  * 尺寸还是上面那一套，只是换了摆法 */
@@ -1323,6 +1588,27 @@ td.spark-cell .spark {
 
 .phone .start {
   grid-template-columns: 1fr;
+}
+
+/* 设置行：手机上横着放不下，标题和说明一整行，按钮换到下一行靠右（开关、成员行照旧左右排） */
+.phone .set:has(> .t > span):not(:has(> glass-switch)):not(:has(> .ava)) {
+  flex-wrap: wrap;
+}
+
+.phone .set:has(> .t > span):not(:has(> glass-switch)):not(:has(> .ava)) > .t {
+  flex: 1 1 100%;
+}
+
+.phone .set > .t + .btn {
+  margin-left: auto;
+}
+
+.phone .panel {
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
+}
+
+.phone .page-head {
+  padding: var(--sp-1) var(--sp-1) 0;
 }
 
 /* 卡片标题和说明上下排：横着放，标题会被挤成竖排 */

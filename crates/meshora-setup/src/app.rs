@@ -1,7 +1,11 @@
 //! Tauri 那一层：一个窗口、几个命令，进度用事件报给界面。
 
+use std::path::PathBuf;
+
+use meshora_setup::{acl, location};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::install;
 
@@ -15,6 +19,8 @@ struct Info {
     version: &'static str,
     /// 装到哪
     dir: String,
+    /// 能不能改位置：没装过才能改；装着的升级、重装都装回原处
+    movable: bool,
     /// 已经装着的版本
     installed: Option<String>,
 }
@@ -40,7 +46,8 @@ fn info() -> Info {
             "install"
         },
         version: env!("CARGO_PKG_VERSION"),
-        dir: install::install_dir().display().to_string(),
+        dir: install::current_dir().display().to_string(),
+        movable: install::installed_dir().is_none(),
         installed: install::installed_version(),
     }
 }
@@ -66,11 +73,48 @@ async fn background(
     .map_err(|err| format!("安装程序出错：{err}"))?
 }
 
+/// 弹系统的选文件夹窗口，选好换算成安装目录、查一遍能不能装。用户取消是 `None`；不能装就说为什么
 #[tauri::command]
-async fn install(app: AppHandle, desktop: Option<bool>) -> Result<(), String> {
+async fn pick_dir(app: AppHandle) -> Result<Option<String>, String> {
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("选一个文件夹，Meshora 装在它下面")
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|err| format!("选文件夹的窗口出错：{err}"))?;
+    let Some(chosen) = chosen else {
+        return Ok(None);
+    };
+    let chosen = chosen
+        .into_path()
+        .map_err(|_| "选的不是本机的文件夹".to_string())?;
+    let target = location::target_dir(&chosen)?;
+    acl::check_target(&target)?;
+    Ok(Some(target.display().to_string()))
+}
+
+#[tauri::command]
+async fn install(app: AppHandle, desktop: Option<bool>, dir: Option<String>) -> Result<(), String> {
     let update = has_flag("--update");
+    // 装着的就装回原处；没装过用界面选的（install 里还会再查一遍）
+    let dir = match install::installed_dir() {
+        Some(existing) => existing,
+        None => match dir {
+            Some(dir) => location::target_dir(&PathBuf::from(dir))?,
+            None => install::default_dir(),
+        },
+    };
     background(app, move |progress| {
-        install::install(&install::Options { desktop, update }, progress)
+        install::install(
+            &install::Options {
+                dir,
+                desktop,
+                update,
+            },
+            progress,
+        )
     })
     .await
 }
@@ -97,8 +141,9 @@ pub fn run() {
         return;
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            info, install, uninstall, launch, quit
+            info, pick_dir, install, uninstall, launch, quit
         ])
         .run(tauri::generate_context!())
         .expect("安装程序启动失败");

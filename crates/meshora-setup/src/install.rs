@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use winreg::RegKey;
 use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS};
 
-use meshora_setup::payload;
+use meshora_setup::{acl, payload};
 
 /// 不弹控制台窗口
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -23,12 +23,27 @@ const UNINSTALL_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstal
 /// 我们写的卸载项里有这个值；没有的是 1.0.0 的 NSIS 写的
 const OURS: &str = "MeshoraSetup";
 
-/// 安装目录：`Program Files\Meshora`
-pub fn install_dir() -> PathBuf {
+/// 默认的安装目录：`Program Files\Meshora`
+pub fn default_dir() -> PathBuf {
     let base = std::env::var_os("ProgramW6432")
         .or_else(|| std::env::var_os("ProgramFiles"))
         .map_or_else(|| PathBuf::from(r"C:\Program Files"), PathBuf::from);
     base.join("Meshora")
+}
+
+/// 已经装着的话，装在哪（卸载项里的 InstallLocation）。升级、更新都装回原处
+pub fn installed_dir() -> Option<PathBuf> {
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(UNINSTALL_KEY)
+        .ok()?;
+    let dir: String = key.get_value("InstallLocation").ok()?;
+    let dir = PathBuf::from(dir.trim_matches('"'));
+    dir.is_absolute().then_some(dir)
+}
+
+/// 现在该用的安装目录：装着的就是原处，没装过就是默认位置
+pub fn current_dir() -> PathBuf {
+    installed_dir().unwrap_or_else(default_dir)
 }
 
 /// 已经装着的版本（卸载项里的 DisplayVersion）
@@ -146,6 +161,8 @@ fn shortcut(target: &Path, link: &Path) -> Result<(), String> {
 
 /// 装的时候怎么选。
 pub struct Options {
+    /// 装到哪（已经按 `location::target_dir` 换算过）。
+    pub dir: PathBuf,
     /// 桌面上放不放快捷方式。`None` 是照旧（更新时：原来有就留着，没有也不加）。
     pub desktop: Option<bool>,
     /// 是客户端自己发起的更新：先等它退出。
@@ -158,7 +175,9 @@ pub fn install(options: &Options, progress: &dyn Fn(&str, u8)) -> Result<(), Str
     if !files.iter().any(|f| f.name == "meshora.exe") {
         return Err("这是开发时编的安装程序，没带着 Meshora 本身：用发布页上下载的那个".into());
     }
-    let dir = install_dir();
+    let dir = options.dir.clone();
+    // 界面传来的位置不直接信：再查一遍它和上面每一层普通账户都动不了
+    acl::check_target(&dir)?;
 
     progress("关掉正在运行的 Meshora", 5);
     stop_running(if options.update {
@@ -171,6 +190,8 @@ pub fn install(options: &Options, progress: &dyn Fn(&str, u8)) -> Result<(), Str
 
     progress("复制文件", 20);
     std::fs::create_dir_all(&dir).map_err(|err| format!("建不了 {}：{err}", dir.display()))?;
+    // 先收紧权限再写文件：wintun.dll 一写进去，这个目录就得只有管理员能改
+    acl::lock_down(&dir)?;
     let total = files.iter().map(|f| f.data.len()).sum::<usize>().max(1);
     let mut done = 0;
     for file in &files {
@@ -227,7 +248,12 @@ pub fn install(options: &Options, progress: &dyn Fn(&str, u8)) -> Result<(), Str
 
 /// 卸。`purge` 时连本机的私钥和设置一起删（删了就是换了一个身份）
 pub fn uninstall(purge: bool, progress: &dyn Fn(&str, u8)) -> Result<(), String> {
-    let dir = install_dir();
+    // 卸载程序就在安装目录里：用它自己所在的目录，不靠注册表
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .filter(|dir| dir.join("meshora.exe").exists())
+        .unwrap_or_else(current_dir);
     progress("关掉正在运行的 Meshora", 10);
     stop_running(Duration::ZERO)?;
 
@@ -279,7 +305,7 @@ pub fn uninstall(purge: bool, progress: &dyn Fn(&str, u8)) -> Result<(), String>
 
 /// 装完打开 Meshora
 pub fn launch() -> Result<(), String> {
-    Command::new(install_dir().join("meshora.exe"))
+    Command::new(current_dir().join("meshora.exe"))
         .spawn()
         .map(drop)
         .map_err(|err| format!("打不开 Meshora：{err}"))

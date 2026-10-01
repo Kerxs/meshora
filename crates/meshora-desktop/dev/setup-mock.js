@@ -1,5 +1,5 @@
 // 在普通浏览器里看安装程序界面用的假后端。打开 dev/setup.html?s=<场景>
-// 场景：fresh（新装）、upgrade（升级）、update（客户端发起的更新）、fail（装到一半出错）、uninstall
+// 场景：fresh（新装）、upgrade（升级）、update（客户端发起的更新）、fail（装到一半出错）、uninstall、badpick（选了不能装的位置）
 "use strict";
 
 (() => {
@@ -18,7 +18,12 @@
       version: "1.1.0",
       dir: "C:\\Program Files\\Meshora",
       installed: ["upgrade", "update", "uninstall"].includes(scenario) ? "1.0.0" : null,
+      movable: !["upgrade", "update", "uninstall"].includes(scenario),
     }),
+    pick_dir: () => {
+      if (scenario === "badpick") throw String.raw`D:\Games 普通账户也能改（所有者是 S-1-5-21-1-2-3-1001（不是管理员）），装在这下面不安全：别的程序能把 Meshora 整个换掉。选磁盘根目录（比如 D:\）或者 Program Files 下面`;
+      return String.raw`D:\Meshora`;
+    },
     install: async () => {
       await steps([["关掉正在运行的 Meshora", 5], ["卸掉旧版本", 12], ["复制文件", 20], ["复制文件", 55], ["复制文件", 80]]);
       if (scenario === "fail") throw "写不了 C:\\Program Files\\Meshora\\wintun.dll：拒绝访问。 (os error 5)";

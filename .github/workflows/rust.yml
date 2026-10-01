@@ -50,6 +50,9 @@ jobs:
       # wintun 和桌面端界面（Tauri）那部分代码只在 Windows 上才编译得到，lint 也只能在这里做
       - if: runner.os == 'Windows'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # 安装程序收紧安装目录权限那一步要管理员权限（改所有者）：CI 的 Windows 机器上有，本地普通用户跑时跳过
+      - if: runner.os == 'Windows'
+        run: cargo test -p meshora-setup --lib --locked -- --ignored
       # Windows 上真的创建网卡要 wintun.dll。从官网下载，核对压缩包的哈希和 DLL 的签名（脚本里），
       # 放到测试程序和 meshorad.exe 旁边 —— 代码只从可执行文件所在的目录加载它，不走系统搜索路径
       - if: runner.os == 'Windows'

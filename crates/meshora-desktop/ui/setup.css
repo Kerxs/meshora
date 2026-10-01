@@ -1,4 +1,6 @@
-/* 安装程序。尺寸、颜色、按钮、标题栏都来自 app.css，这里只摆版面。窗口固定 600×460 */
+/* 安装程序。尺寸、颜色、按钮、标题栏、流体背景都来自 app.css，这里只摆版面和几段动画。窗口固定 600×460。
+ *
+ * 一块玻璃面板不动，里面的页（.page）左右滑：新页从右边进来、旧页往左出去（后退反过来）。 */
 
 #setup {
   position: relative;
@@ -12,10 +14,35 @@
   margin-top: calc(var(--sp-2) * -1);
 }
 
+.tb-name {
+  padding-left: var(--sp-1);
+  font-size: var(--fs-cap);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+/* 步骤点：当前这一步拉长成一小段 */
+.dots {
+  display: flex;
+  gap: 6px;
+}
+
+.dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  transition: width var(--t-mid) var(--ease), background var(--t-mid) var(--ease);
+}
+
+.dots i.on {
+  width: 18px;
+  background: #fff;
+}
+
 #setup main {
   flex: 1;
-  display: grid;
-  place-items: center;
   min-height: 0;
 }
 
@@ -23,52 +50,143 @@
   width: 100%;
   height: 100%;
   border-radius: var(--r-panel);
-  padding: var(--sp-5) var(--sp-6);
+  overflow: hidden;
+}
+
+.stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- 页与页之间滑动 ---------- */
+
+.page {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
+  padding: var(--sp-5) var(--sp-6);
   text-align: center;
-  animation: page 280ms var(--ease) both;
 }
 
-@keyframes page {
-  from { opacity: 0; transform: translateY(6px); }
+.page.from-right {
+  animation: from-right var(--t-mid) var(--ease) both;
 }
 
-.setup-logo svg {
-  width: 44px;
-  height: 44px;
+.page.from-left {
+  animation: from-left var(--t-mid) var(--ease) both;
 }
 
-.setup-panel h1 {
+.page.to-left {
+  animation: to-left var(--t-mid) var(--ease) both;
+  pointer-events: none;
+}
+
+.page.to-right {
+  animation: to-right var(--t-mid) var(--ease) both;
+  pointer-events: none;
+}
+
+@keyframes from-right {
+  from { opacity: 0; transform: translateX(48px); }
+}
+
+@keyframes from-left {
+  from { opacity: 0; transform: translateX(-48px); }
+}
+
+@keyframes to-left {
+  to { opacity: 0; transform: translateX(-48px); }
+}
+
+@keyframes to-right {
+  to { opacity: 0; transform: translateX(48px); }
+}
+
+/* ---------- 文字 ---------- */
+
+.page h1 {
   margin: 0;
   font-size: var(--fs-head);
 }
 
-.setup-panel .sub {
+.page .sub {
   margin: 0;
   max-width: 420px;
   color: var(--dim);
   user-select: text;
 }
 
-.setup-panel .sub.err {
+.page .sub.err {
   color: var(--bad);
 }
 
-.setup-panel .warn {
+.page .ver {
   margin: 0;
-  max-width: 420px;
-  font-size: var(--fs-cap);
-  color: var(--mid);
+  font-size: var(--fs-sec);
+  font-weight: 600;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
+
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* ---------- 欢迎：Logo 一点点画出来 ---------- */
+
+.logo {
+  width: 72px;
+  height: 72px;
+  margin-bottom: var(--sp-2);
+  overflow: visible;
+}
+
+.logo .l {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 420ms var(--ease) forwards;
+  animation-delay: calc(240ms + var(--i) * 70ms);
+}
+
+.logo .n {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop-node 360ms cubic-bezier(0.3, 1.5, 0.5, 1) both;
+  animation-delay: calc(var(--i) * 90ms);
+}
+
+@keyframes draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes pop-node {
+  from { opacity: 0; transform: scale(0.2); }
+}
+
+/* 欢迎页其余的东西跟在 Logo 后面依次浮上来 */
+.welcome > :not(.logo) {
+  animation: rise var(--t-slow) var(--ease) both;
+}
+
+.welcome > h1 { animation-delay: 300ms; }
+.welcome > .ver { animation-delay: 360ms; }
+.welcome > .sub { animation-delay: 420ms; }
+.welcome > .actions { animation-delay: 500ms; }
+
+/* ---------- 选项 ---------- */
 
 .opts {
   width: 100%;
-  max-width: 440px;
-  margin-top: var(--sp-1);
+  max-width: 460px;
+  margin-top: var(--sp-2);
   padding: 0 var(--sp-4);
   border: 1px solid var(--line);
   border-radius: var(--r-card);
@@ -80,7 +198,8 @@
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  min-height: 48px;
+  min-height: 52px;
+  padding: var(--sp-2) 0;
   border-bottom: 1px solid var(--line);
 }
 
@@ -101,51 +220,142 @@
 }
 
 .opt .t .dir {
+  margin-top: 2px;
   font-size: var(--fs-sec);
-  color: var(--dim);
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
-.actions {
-  display: flex;
-  justify-content: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
+.opt .t .note.err {
+  color: var(--bad);
+  animation: rise var(--t-fast) var(--ease) both;
 }
 
-/* 进度条：填充宽度由脚本按百分比设（CSSOM，不写内联样式） */
-.meter {
-  width: 100%;
-  max-width: 420px;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--well);
-  border: 1px solid var(--line);
-  overflow: hidden;
+.options > * {
+  animation: rise var(--t-mid) var(--ease) both;
 }
 
-.meter i {
-  display: block;
-  width: 0;
-  height: 100%;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #3d6bff, #5ff0c0);
-  transition: width 240ms var(--ease);
-}
+.options > :nth-child(2) { animation-delay: 60ms; }
+.options > :nth-child(3) { animation-delay: 120ms; }
+.options > :nth-child(4) { animation-delay: 180ms; }
+.options > :nth-child(5) { animation-delay: 240ms; }
 
-.pct {
+/* 卸载页：打开"删除私钥"时警告浮出来 */
+.page .warn {
+  margin: 0;
+  max-width: 440px;
   font-size: var(--fs-cap);
-  color: var(--faint);
+  color: var(--mid);
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity var(--t-mid) var(--ease), transform var(--t-mid) var(--ease);
+}
+
+.page .warn.on {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- 安装中：环形进度 ---------- */
+
+.ring {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  margin-bottom: var(--sp-2);
+}
+
+.ring svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ring .track,
+.ring .arc {
+  fill: none;
+  stroke-width: 8;
+}
+
+.ring .track {
+  stroke: rgba(255, 255, 255, 0.12);
+}
+
+.ring .arc {
+  stroke: #5ff0c0;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--t-slow) var(--ease);
+}
+
+.ring .pct {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  grid-auto-flow: column;
+  align-items: baseline;
+}
+
+.ring .pct b {
+  font-size: 34px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-/* 键盘焦点：细白圈，别用浏览器默认的黑框 */
-.setup-panel .btn:focus-visible,
-.tb-btn:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.55);
-  outline-offset: 2px;
+.ring .pct span {
+  font-size: var(--fs-sec);
+  color: var(--dim);
 }
 
-.setup-panel .btn:focus:not(:focus-visible) {
-  outline: none;
+/* 换步骤时那行字淡出再淡入 */
+.step.swap {
+  animation: swap var(--t-mid) var(--ease);
+}
+
+@keyframes swap {
+  0% { opacity: 0.2; transform: translateY(4px); }
+}
+
+/* ---------- 完成、出错 ---------- */
+
+.mark {
+  width: 76px;
+  height: 76px;
+  margin-bottom: var(--sp-2);
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mark circle,
+.mark path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+.mark circle {
+  animation: draw 480ms var(--ease) forwards;
+}
+
+.mark path {
+  animation: draw 320ms var(--ease) 380ms forwards;
+}
+
+.mark.ok {
+  stroke: #5ff0c0;
+}
+
+.mark.bad {
+  stroke: var(--bad);
+  animation: shake 420ms ease 700ms both;
+}
+
+@keyframes shake {
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
+}
+
+.result > :not(.mark) {
+  animation: rise var(--t-slow) var(--ease) both;
+  animation-delay: 300ms;
 }

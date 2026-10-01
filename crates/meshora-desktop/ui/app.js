@@ -3,6 +3,8 @@
 // 两条规矩：
 // - 数据一律用 textContent 放进页面（朋友的名字是别人随便填的），不拼 HTML
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
+// 背景的光团要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
+import "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 
 // 开关是 Glassium 的组件：它们后面的背景也要收进场景，玻璃才折射得到
@@ -564,7 +566,14 @@ function syncList(container, rows, peers, make) {
   const ordered = peers.map((peer) => {
     seen.add(peer.id);
     let row = rows.get(peer.id);
-    if (!row) rows.set(peer.id, (row = make(peer)));
+    if (!row) {
+      rows.set(peer.id, (row = make(peer)));
+      // 新来的人浮上来；一开始就有的那批跟着切页的动画走，不再单独动
+      if (container.isConnected) {
+        row.el.classList.add("enter-item");
+        setTimeout(() => row.el.classList.remove("enter-item"), 600);
+      }
+    }
     row.update(peer);
     return row.el;
   });
@@ -663,8 +672,24 @@ function updateText(ov) {
   return ov.checkUpdates ? "还没检查过" : "自动检查关着";
 }
 
+/** 一行：标题和说明在左，开关、小按钮靠右 */
 function settingRow(title, desc, ...controls) {
   return h("div", { class: "set" }, h("div", { class: "t" }, h("b", {}, title), desc ? h("span", {}, desc) : null), ...controls);
+}
+
+/** 一行：标题和说明在上，输入框、长内容和它的按钮在下面一整行（横着放会把字挤成一列） */
+function stackRow(title, desc, ...controls) {
+  return h("div", { class: "set stack" }, h("div", { class: "t" }, h("b", {}, title), desc ? h("span", {}, desc) : null), h("div", { class: "ctl" }, ...controls));
+}
+
+/** 一页的标题 */
+function pageHead(title, sub) {
+  return h("header", { class: "page-head" }, h("h1", {}, title), sub ? h("p", {}, sub) : null);
+}
+
+/** 一张卡片：一组设置。title 可以是文字，也可以是节点（比如带人数） */
+function panel(title, ...rows) {
+  return h("section", { class: "card panel", glass: "", "glass-corner-radius": "22" }, title ? h("h2", { class: "panel-title" }, title) : null, ...rows);
 }
 
 /** Glassium 的开关。用户切换时调后端，失败就拨回去 */
@@ -728,8 +753,15 @@ views.settings = {
 
     this.code = h("span", { class: "code" });
     this.codeNote = h("span");
-    this.network = h("div", {}, h("div", { class: "group" }, "网络"), settingRow("网络码", null, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.network, "网络码") }, "复制"), h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => act("forget") }, "离开这个网络")));
-    this.network.querySelector(".t").append(this.code, this.codeNote);
+    const codeRow = stackRow(
+      "网络码",
+      null,
+      h("span", { class: "grow" }),
+      h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.network, "网络码") }, "复制"),
+      h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => act("forget") }, "离开这个网络"),
+    );
+    codeRow.querySelector(".t").append(this.code, this.codeNote);
+    this.network = panel("网络", codeRow);
 
     this.serverList = h("div");
     const newServer = h("input", { class: "field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
@@ -744,12 +776,10 @@ views.settings = {
       refresh();
     };
     newServer.addEventListener("keydown", (event) => event.key === "Enter" && addServer());
-    this.serverGroup = h(
-      "div",
-      {},
-      h("div", { class: "group" }, "我的服务器"),
+    this.serverGroup = panel(
+      "我的服务器",
       this.serverList,
-      settingRow("添加一台", "自己架的 meshora-coord（--hub）：公钥@地址:端口。建网络时可以选它", newServer, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: addServer }, "添加")),
+      stackRow("添加一台", "自己架的 meshora-coord（--hub）：公钥@地址:端口。建网络时可以选它", newServer, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: addServer }, "添加")),
     );
 
     this.logs = h("pre", { class: "logs" }, "…");
@@ -782,31 +812,29 @@ views.settings = {
     );
     this.stopLogs = () => clearInterval(timer);
 
+    const idRow = settingRow("你的 ID", "建网络的人要把它加进名单时用。只代表这台设备，不是密码", h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制"));
+    idRow.querySelector(".t").append(h("span", { class: "code" }, ov.id));
     const el = h(
       "div",
       { class: "view" },
-      h(
-        "section",
-        { class: "card", glass: "", "glass-corner-radius": "22" },
-        h("div", { class: "group" }, "你"),
-        settingRow("你的名字", "网里的人看到的就是它。改了马上生效", this.name),
-        settingRow("你的 ID", null, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制")),
-        h("div", { class: "group" }, "联机"),
+      pageHead("设置", "你的名字、联机方式、网络和更新"),
+      panel("你", stackRow("你的名字", "网里的人看到的就是它。改了马上生效", this.name), idRow),
+      panel(
+        "联机",
         // 这两项是 Windows 的网卡设置（跃点数、网络类别），手机上没有
         PHONE ? null : settingRow("让游戏的广播走 Meshora（推荐）", "朋友的房间才会出现在局域网列表里。改了会重新连接", this.broadcast),
         PHONE ? null : settingRow("把 Meshora 设为专用网络", "朋友连不进你开的房间时再打开。代价：你对专用网络共享的东西（比如共享文件夹），网里的人也能访问", this.private),
         settingRow("打开时自动连接", "启动客户端时自动连上次的网络", this.auto),
-        this.network,
-        this.serverGroup,
-        h("div", { class: "group" }, "更新"),
-        settingRow("自动检查更新", "每 6 小时问一次 GitHub 有没有新版本。新版本有签名，核对过才装", this.checkUpdates),
-        this.versionRow,
-        h("div", { class: "group" }, "排查"),
+      ),
+      this.network,
+      this.serverGroup,
+      panel("更新", settingRow("自动检查更新", "每 6 小时问一次 GitHub 有没有新版本。新版本有签名，核对过才装", this.checkUpdates), this.versionRow),
+      panel(
+        "排查",
         settingRow("日志", "出问题时复制下来，发给帮你排查的人。里面有 IP 地址，没有密钥", showLogs, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: async () => copy((await invoke("logs")).join("\n"), "日志") }, "复制")),
         this.logs,
       ),
     );
-    el.querySelectorAll(".set .t")[1].append(h("span", { class: "code" }, ov.id));
     this.update(ov);
     return el;
   },
@@ -1126,15 +1154,14 @@ views.admin = {
     const el = h(
       "div",
       { class: "view" },
-      h(
-        "section",
-        { class: "card", glass: "", "glass-corner-radius": "22" },
-        h("div", { class: "group" }, "网络"),
-        settingRow("网络名", "网里的人在你的网络码旁边看到的名字", this.title),
-        h("div", { class: "group" }, "邀请朋友"),
-        settingRow(
+      pageHead("管理", "你是这个网络的网主：邀请朋友、管成员"),
+      panel("网络", stackRow("网络名", "网里的人在你的网络码旁边看到的名字", this.title)),
+      panel(
+        "邀请朋友",
+        stackRow(
           "网络码",
           "发给谁，谁就能加入。泄露了就换一个：旧的立刻作废，已经在网里的人不受影响",
+          h("span", { class: "grow" }),
           h("button", { class: "btn sm", glass: "clear", type: "button", onclick: copyCode }, "复制"),
           h(
             "button",
@@ -1158,9 +1185,10 @@ views.admin = {
           h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: 1, hours: null }, (code) => code && copy(code, "一次性网络码")) }, "一次性"),
           h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: null, hours: 24 }, (code) => code && copy(code, "24 小时网络码")) }, "24 小时"),
         ),
-        h("div", { class: "group" }, "成员 ", this.memberCount),
-        this.members,
-        h("div", { class: "group" }, "解散"),
+      ),
+      panel(h("span", {}, "成员 ", this.memberCount), this.members),
+      panel(
+        "解散",
         settingRow(
           "解散这个网络",
           "所有人立刻断开，网络码作废，网络删掉。不能撤销",
@@ -1182,7 +1210,7 @@ views.admin = {
         ),
       ),
     );
-    el.querySelectorAll(".set .t")[1].append(this.code);
+    el.querySelectorAll(".set.stack .t")[1].append(this.code);
     this.update(ov);
     return el;
   },
@@ -1417,6 +1445,14 @@ function shell() {
   document.getElementById("app").replaceChildren(pass.build(), h("div", { class: "column" }, PHONE ? null : titlebar(), main));
 }
 
+/** 切页的动画：新页面里的卡片依次浮上来（样式在 app.css 的"动画"一节）。跑完把 class 摘掉，后面的更新不再触发 */
+function enter(view) {
+  [...view.children].forEach((child, i) => child.style.setProperty("--i", String(Math.min(i, 8))));
+  view.classList.add("enter");
+  setTimeout(() => view.classList.remove("enter"), 900);
+  return view;
+}
+
 function viewFor(ov) {
   if (!ov.onboarded) return "onboarding";
   if (state.page === "settings") return "settings";
@@ -1438,7 +1474,7 @@ function render(ov) {
     state.current?.unmount?.();
     state.view = name;
     state.current = Object.create(views[name]);
-    main.replaceChildren(state.current.mount(ov));
+    main.replaceChildren(enter(state.current.mount(ov)));
     main.scrollTop = 0;
   } else {
     state.current.update(ov);
