@@ -263,7 +263,7 @@ const pass = {
     this.host.textContent = hostOf(ov.network);
     this.coord.textContent = connected ? `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}` : ov.phase === "connecting" ? "正在连接" : "没连上";
     this.leave.hidden = !(connected || ov.phase === "connecting");
-    this.version.textContent = `Meshora ${ov.version} · Pre-alpha`;
+    this.version.textContent = `Meshora ${ov.version}`;
     this.updateNav(ov);
   },
 

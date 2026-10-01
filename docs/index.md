@@ -104,8 +104,8 @@ Meshora 想提供的是：**开源、可以完全自建、以联机为唯一目�
 <HomeSection title="常见问题" more="/guide/faq" moreText="更多问题">
 
 **现在能用吗？**
-还不能用于实际联机。M1 正在做：在 Linux 上从源码编译，两台机器之间能经加密隧道 ping 通；
-但没在两台真的 Windows 机器之间试过，没在真实网络里测过打洞，也没经过安全审查。
+1.0.0 已经发布，可以下载试用（[桌面客户端](/guide/desktop)）。但它还没在两台真的 Windows 电脑之间拿真的游戏
+验证过，没在真实网络里测过打洞，也没经过安全审查 —— 先当成尝鲜，别指望它一定行。
 
 **每个人的电脑都要装吗？**
 要。每个参与联机的人都装一个 Meshora，加入同一个网络。
@@ -119,15 +119,15 @@ Meshora 想提供的是：**开源、可以完全自建、以联机为唯一目�
 
 </HomeSection>
 
-<HomeSection eyebrow="Pre-alpha" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
+<HomeSection eyebrow="1.0.0" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
 
-**M1 开发中。有了能运行的程序，但没有可下载的二进制，也还不适合实际使用。**
+**1.0.0 已发布：Windows 桌面客户端的安装包和 Linux 服务端可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，安装包没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过 —— 欢迎试用，把结果告诉我们。
 
 核心引擎用 Rust 写，数据面采用 WireGuard 协议（[boringtun](https://github.com/cloudflare/boringtun) 用户态实现），
 控制面自研。在 Linux 上，两台机器之间已经能经加密隧道 ping 通 ——
 能直连时走直连，在 NAT 后面先打洞，打不通时经中继。Windows 的[桌面客户端](/guide/desktop)也写好了：
-贴一个网络码就能加入。还没有的：两台真的 Windows 机器之间的实测、
-真实网络里的打洞验证、安全审查，以及 1.0.0 最关键的一项 —— 游戏广播的转发（数据面已经写了，还没拿真的游戏试过）。
+贴一个网络码就能加入，游戏的广播、组播也转发给网里的每个人。还没有的：两台真的 Windows 机器之间的实测、
+真实网络里的打洞验证、安全审查、安装包的代码签名 —— 广播转发也还没拿真的游戏试过。
 
 **1.0.0 只做局域网游戏联机。** 其余方向都在 1.0 之后。
 

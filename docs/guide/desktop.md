@@ -1,8 +1,8 @@
 # 桌面客户端
 
-::: warning 开发中，还没有正式发布
-客户端的代码、界面、打包流程都有了，在一台 Windows 11 上以管理员身份实测连通过（见[实测](#实测)）。
-但**还没有发布过安装包**，也**还没在两台真的 Windows 电脑之间、拿真的游戏试过**。
+::: warning 1.0.0 刚发布，还没在真实环境里验证过
+在一台 Windows 11 上以管理员身份实测连通过（见[实测](#实测)），但**还没在两台真的 Windows 电脑之间、拿真的游戏试过**，
+安装包也**没有代码签名**。
 :::
 
 1.0.0 面向的是玩家，不能要求他们开命令行。桌面客户端就是给他们用的：**贴一个网络码，点加入。**
@@ -23,8 +23,8 @@
 
 ## 下载
 
-安装包发在 [GitHub Releases](https://github.com/Kerxs/meshora/releases)，**现在那里还是空的** —— 还没发布过任何版本。
-发布以后，每个版本附一个 `SHA256SUMS.txt`，装之前核对一下安装包没被换过：
+安装包发在 [GitHub Releases](https://github.com/Kerxs/meshora/releases)，最新是 1.0.0。
+每个版本附一个 `SHA256SUMS.txt`，装之前核对一下安装包没被换过：
 
 ```powershell
 Get-FileHash -Algorithm SHA256 .\Meshora_*_x64-setup.exe
@@ -54,7 +54,7 @@ ID 只代表这台电脑，不是密码，可以放心发。
 
 0. 从 [Releases](https://github.com/Kerxs/meshora/releases) 下载 `meshora-server-<版本>-linux-x86_64.tar.gz`
    （ARM 的服务器用 `aarch64` 那个），核对 SHA-256 后解压。里面是 `meshora-coord` 和 `meshorad`，静态链接，
-   哪个 Linux 发行版都能跑。还没发布过版本之前，只能从源码编译：`cargo build --release -p meshora-coord -p meshorad`
+   哪个 Linux 发行版都能跑。别的系统从源码编译：`cargo build --release -p meshora-coord -p meshorad`
 
 1. 生成服务器的私钥：
 
