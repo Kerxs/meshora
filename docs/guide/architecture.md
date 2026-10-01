@@ -82,8 +82,8 @@ M1 已经按这里的设计造出了主干，在 Linux 上能跑通。两层之�
   wintun     utun        tun      VpnService     tun
 ```
 
-第一个目标平台是 **Windows**，而且 **1.0.0 只做 Windows** —— 1.0.0 只做[局域网游戏联机](/guide/lan-play)，
-玩这类游戏的人绝大多数在 Windows 上。其余平台都在 [1.0 之后](/guide/roadmap#_1-0-之后)。
+客户端只做 **Windows** 和**安卓** —— 1.0.0 只做[局域网游戏联机](/guide/lan-play)，玩这类游戏的人绝大多数在 Windows 上，
+手机上的联机游戏次之。安卓客户端和 Windows 的共用节点代码和界面，只有虚拟网卡换成了系统的 VpnService。
 
 更长远看，Windows 上的分应用分流（[Application Routing](/guide/roadmap#application-routing)）也是最难的一块，
 先在 Windows 上打好底子，能更早暴露设计问题。

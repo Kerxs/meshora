@@ -89,7 +89,8 @@ export default defineConfig({
           items: [
             { text: '它解决什么问题', link: '/guide/what-is-meshora' },
             { text: '局域网联机：1.0.0 做什么', link: '/guide/lan-play' },
-            { text: '桌面客户端', link: '/guide/desktop' },
+            { text: 'Windows 客户端', link: '/guide/desktop' },
+            { text: '安卓客户端', link: '/guide/android' },
             { text: '核心概念', link: '/guide/concepts' }
           ]
         },

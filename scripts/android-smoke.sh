@@ -79,7 +79,7 @@ PY
 )
     if [[ -n $point ]]; then
       local y=${point#* } height
-      height=$(adb shell wm size | tr -d '' | grep -oE '[0-9]+$' | tail -1)
+      height=$(adb shell wm size | tr -d $'\r' | grep -oE '[0-9]+$' | tail -1)
       # 被键盘挡住、或者在屏幕下面：收起键盘、往上滑一点再找
       if adb shell dumpsys input_method | grep -q "mInputShown=true"; then
         echo "收起键盘"
