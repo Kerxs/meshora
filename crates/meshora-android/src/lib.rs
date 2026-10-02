@@ -11,7 +11,7 @@
 #[allow(unsafe_code)]
 mod logcat;
 
-use meshora_desktop::controller::{AdminAction, Controller, CreateAt, Overview};
+use meshora_desktop::controller::{AdminAction, Controller, CreateAt, DirectCode, Overview};
 use meshora_desktop::logs::LogBuffer;
 use meshora_desktop::update::UpdateView;
 use tauri::{Manager, State};
@@ -41,6 +41,39 @@ async fn admin(
     action: AdminAction,
 ) -> Result<Option<String>, String> {
     controller.admin(action).await
+}
+
+#[tauri::command]
+async fn direct_host(controller: State<'_, Controller>) -> Result<(), String> {
+    controller.direct_host().await
+}
+
+#[tauri::command]
+async fn direct_join(
+    controller: State<'_, Controller>,
+    code: String,
+) -> Result<DirectCode, String> {
+    controller.direct_join(&code).await
+}
+
+#[tauri::command]
+async fn direct_reply(controller: State<'_, Controller>) -> Result<DirectCode, String> {
+    controller.direct_reply().await
+}
+
+#[tauri::command]
+async fn direct_offer(controller: State<'_, Controller>) -> Result<DirectCode, String> {
+    controller.direct_offer().await
+}
+
+#[tauri::command]
+async fn direct_accept(controller: State<'_, Controller>, code: String) -> Result<String, String> {
+    controller.direct_accept(&code).await
+}
+
+#[tauri::command]
+fn direct_remove(controller: State<'_, Controller>, id: String) -> Result<(), String> {
+    controller.direct_remove(&id)
 }
 
 #[tauri::command]
@@ -187,7 +220,13 @@ pub fn run() {
             logs,
             check_update,
             set_check_updates,
-            apply_update
+            apply_update,
+            direct_host,
+            direct_join,
+            direct_reply,
+            direct_offer,
+            direct_accept,
+            direct_remove
         ])
         .run(tauri::generate_context!())
         .expect("Meshora 启动失败");

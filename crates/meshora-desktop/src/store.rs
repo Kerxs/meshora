@@ -36,6 +36,34 @@ pub struct Settings {
     pub hosting: bool,
     /// 自动查有没有新版本（向 GitHub 要更新清单）。
     pub check_updates: bool,
+    /// 直连模式（不用服务器）的网络。有它时 [`network`](Self::network) 是空的。
+    pub direct: Option<DirectNet>,
+}
+
+/// 存着的直连网络：重启后照着它重新打洞。码里的公网端点可能已经变了，打不通就得重新交换连接码。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectNet {
+    /// 本机是房主。
+    pub host: bool,
+    /// 本机的 overlay 地址。
+    pub ip: String,
+    /// 认识的人：房主存每位朋友，朋友只存房主。
+    pub peers: Vec<DirectPeerSaved>,
+}
+
+/// 存着的一个直连 peer。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectPeerSaved {
+    /// 公钥（base64）。
+    pub key: String,
+    /// overlay 地址。
+    pub ip: String,
+    /// 名字。
+    pub name: String,
+    /// 候选端点。
+    pub endpoints: Vec<String>,
 }
 
 /// 这台电脑的名字，取不到是空串。安卓上没有计算机名可取，叫"我的手机"
@@ -65,6 +93,7 @@ impl Default for Settings {
             official_server: None,
             hosting: false,
             check_updates: true,
+            direct: None,
         }
     }
 }
@@ -115,7 +144,7 @@ impl Store {
     pub fn load_settings(&self) -> Settings {
         let mut settings = self.read_settings();
         // 1.0.0 的设置文件没有这一项：已经加入过网络的人不用再走引导
-        if settings.network.is_some() {
+        if settings.network.is_some() || settings.direct.is_some() {
             settings.onboarded = true;
         }
         settings
@@ -205,6 +234,16 @@ pub(crate) mod tests {
             official_server: None,
             hosting: true,
             check_updates: false,
+            direct: Some(DirectNet {
+                host: true,
+                ip: "100.96.0.1".into(),
+                peers: vec![DirectPeerSaved {
+                    key: "key".into(),
+                    ip: "100.96.0.2".into(),
+                    name: "小明".into(),
+                    endpoints: vec!["203.0.113.9:41641".into()],
+                }],
+            }),
         };
         store.save_settings(&settings).unwrap();
         assert_eq!(store.load_settings(), settings);

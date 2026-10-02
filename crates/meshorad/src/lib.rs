@@ -11,6 +11,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
+use meshora_control::direct::{DirectConfig, DirectHandle, DirectPeer, DirectSession, Role};
 use meshora_control::{Config, ControlError, NameSetter, Session, Status, Welcome};
 use meshora_dataplane::{DataPlane, PeerStatus};
 use meshora_tun::Pipes;
@@ -20,6 +21,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::info;
 
+pub use meshora_control::direct;
 pub use meshora_control::{AdminHandle, AdminResult, Entry, Hosting};
 pub use meshora_control::{AdminRequest, Roster, RosterInvite, RosterMember};
 pub use meshora_tun::{Tun, TunConfig};
@@ -100,7 +102,114 @@ pub struct Node {
     status: watch::Receiver<Status>,
     name: NameSetter,
     admin: AdminHandle,
+    direct: Option<DirectHandle>,
     control: JoinHandle<Result<(), ControlError>>,
+}
+
+/// 启动一个直连模式（不用服务器）的节点要的东西。
+pub struct DirectOptions {
+    /// 本机私钥。
+    pub secret: NodeSecret,
+    /// WireGuard 和控制报文共用的 UDP 端口，0 表示让系统挑。
+    pub port: u16,
+    /// 虚拟网卡的名字。
+    pub tun: String,
+    /// 虚拟网卡的 MTU。
+    pub mtu: u16,
+    /// 虚拟网卡的接口跃点数。
+    pub metric: Option<u32>,
+    /// persistent keepalive：打通的洞靠它维持。
+    pub keepalive: NonZeroU16,
+    /// 本机的 overlay 地址（房主是 [`direct::HOST_IP`]，朋友是房主码里分的）。
+    pub ip: std::net::Ipv4Addr,
+    /// 房主还是朋友。
+    pub role: Role,
+    /// 问哪些 STUN 服务器（`主机名:端口`），解析不了的跳过。
+    pub stun: Vec<String>,
+    /// 一开始就认识的 peer。
+    pub peers: Vec<DirectPeer>,
+    /// 自己建虚拟网卡的办法，见 [`TunOpener`]。
+    pub open_tun: Option<TunOpener>,
+}
+
+/// 启动一个直连模式的节点：不连任何服务器。顺序和 [`start`] 一样：网卡 → 数据面 → 控制面，
+/// 只是地址不是协调服务分的，是自己定的（房主）或者房主码里给的（朋友）。
+pub async fn start_direct(options: DirectOptions) -> Result<Node, StartError> {
+    info!(key = %options.secret.public_key(), "本机身份（直连模式）");
+    let socket = UdpSocket::bind(("0.0.0.0", options.port))
+        .map_err(|err| StartError::Bind(options.port, err))?;
+    let local_port = socket
+        .local_addr()
+        .map_err(|err| StartError::Bind(options.port, err))?
+        .port();
+
+    // 数据面的 socket 绑的是 IPv4，只问 IPv4 的 STUN 地址
+    let mut stun = Vec::new();
+    for host in &options.stun {
+        match tokio::net::lookup_host(host.as_str()).await {
+            Ok(addrs) => stun.extend(addrs.filter(SocketAddr::is_ipv4).take(1)),
+            Err(err) => info!(%host, %err, "解析不了 STUN 服务器，跳过"),
+        }
+    }
+
+    let session = DirectSession::new(DirectConfig {
+        secret: options.secret.clone(),
+        local_port,
+        keepalive: options.keepalive,
+        ip: options.ip,
+        role: options.role,
+        stun,
+        peers: options.peers,
+    });
+    let welcome = session.welcome().clone();
+
+    let tun_error = |err| StartError::Tun(options.tun.clone(), err);
+    let tun_config = TunConfig {
+        name: options.tun.clone(),
+        address: welcome.overlay_ip,
+        prefix_len: welcome.prefix_len,
+        mtu: options.mtu,
+        metric: options.metric,
+    };
+    let tun = match &options.open_tun {
+        Some(open) => open(&tun_config),
+        None => Tun::open(&tun_config),
+    }
+    .map_err(tun_error)?;
+    let tun_name = tun.name().to_owned();
+    let Pipes { from_tun, to_tun } = tun.spawn().map_err(tun_error)?;
+
+    let (events_tx, events_rx) = mpsc::unbounded_channel();
+    let sink = move |event| {
+        let _ = events_tx.send(event);
+    };
+    let dataplane = Arc::new(
+        UserspaceDataPlane::start(
+            &options.secret,
+            socket,
+            TunChannels { from_tun, to_tun },
+            Arc::new(sink),
+        )
+        .map_err(StartError::DataPlane)?,
+    );
+    dataplane.set_lan(welcome.overlay_ip, welcome.prefix_len);
+    // 房主替朋友们互相转发：朋友之间没交换过码
+    dataplane.set_forwarding(options.role == Role::Host);
+
+    let status = session.status();
+    let direct = session.handle();
+    let control =
+        tokio::spawn(session.run(Arc::clone(&dataplane) as Arc<dyn DataPlane>, events_rx));
+    Ok(Node {
+        welcome,
+        tun_name,
+        dataplane,
+        status,
+        name: NameSetter::detached(),
+        admin: AdminHandle::detached(),
+        direct: Some(direct),
+        control,
+    })
 }
 
 /// 启动一个节点。
@@ -180,6 +289,7 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         status,
         name,
         admin,
+        direct: None,
         control,
     })
 }
@@ -208,6 +318,11 @@ impl Node {
     /// 改名字用的把手：换一个给网里别人看的名字，不用重连。节点停了再用也无妨，只是没人收。
     pub fn name_setter(&self) -> NameSetter {
         self.name.clone()
+    }
+
+    /// 直连模式的把手（改 peer、看 NAT 情况）。连服务器的节点没有。
+    pub fn direct(&self) -> Option<&DirectHandle> {
+        self.direct.as_ref()
     }
 
     /// 数据面眼里每个 peer 的状态（握手、流量）。

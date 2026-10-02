@@ -94,6 +94,7 @@ export default defineConfig({
             { text: '局域网联机：做什么', link: '/guide/lan-play' },
             { text: 'Windows 客户端', link: '/guide/desktop' },
             { text: '安卓客户端', link: '/guide/android' },
+            { text: '不用服务器（直连）', link: '/guide/direct' },
             { text: '核心概念', link: '/guide/concepts' }
           ]
         },

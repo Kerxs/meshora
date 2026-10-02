@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use meshora_control::{AdminHandle, AdminRequest, ControlError, Entry, NameSetter, Status};
 use meshora_dataplane::PeerStatus;
 use meshora_types::{NodeSecret, Path};
-use meshorad::{Hosting, NetworkCode, Node, Options, StartError, TunOpener};
+use meshorad::direct::{self, DirectHandle, DirectPeer, Offer, Reply, Role};
+use meshorad::{DirectOptions, Hosting, NetworkCode, Node, Options, StartError, TunOpener};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -20,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::host::{self, Host, HostInfo};
 use crate::logs::LogBuffer;
-use crate::store::{MAX_NAME_CHARS, Settings, Store};
+use crate::store::{DirectNet, DirectPeerSaved, MAX_NAME_CHARS, Settings, Store};
 use crate::update::{self, UpdateView, Updater};
 
 /// 先试这个端口，被占了（比如同时开着 meshorad）就让系统挑一个。固定端口方便在路由器上做端口转发
@@ -33,6 +34,10 @@ const KEEPALIVE: u16 = 25;
 const BROADCAST_METRIC: u32 = 1;
 /// 多久没握手就不算在线。WireGuard 的会话 180 秒不续就作废，有 keepalive 时两分钟内必然续上
 const ONLINE_WINDOW: Duration = Duration::from_secs(180);
+/// 直连模式：生成连接码前，最多等 STUN 问多久
+const STUN_PATIENCE: Duration = Duration::from_secs(4);
+/// 直连模式：等节点起来最多等多久（建网卡、绑端口）
+const START_PATIENCE: Duration = Duration::from_secs(20);
 /// 界面状态多久刷新一次
 const REFRESH: Duration = Duration::from_secs(1);
 /// 停一个节点最多等多久
@@ -278,6 +283,34 @@ pub struct Overview {
     pub check_updates: bool,
     /// 有没有新版本。
     pub update: UpdateView,
+    /// 直连模式（不用服务器）时：角色、本机的公网端点、像不像对称型 NAT。
+    pub direct: Option<DirectView>,
+}
+
+/// 直连模式在界面上的样子。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectView {
+    /// 本机是房主。
+    pub host: bool,
+    /// STUN 问到的本机公网端点。
+    pub public_endpoint: Option<String>,
+    /// 两个 STUN 服务器看到的端点不一样：像是对称型 NAT，多半打不通。
+    pub symmetric: bool,
+    /// 这一轮 STUN 问完了。
+    pub checked: bool,
+}
+
+/// 生成好的一段连接码（房主码或回执码），和生成时本机的 NAT 情况。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectCode {
+    /// 连接码。
+    pub code: String,
+    /// 问没问到公网端点：没问到时码里只有局域网地址，只有同一个局域网的人连得上。
+    pub public: bool,
+    /// 像是对称型 NAT，多半打不通。
+    pub symmetric: bool,
 }
 
 /// 连上之后的快照
@@ -315,6 +348,10 @@ struct State {
     admin: Option<AdminHandle>,
     /// 本机当主机时跑着的协调服务和中继。断开时留着（朋友之间照样通），离开网络时停掉
     host: Option<Arc<Host>>,
+    /// 直连模式的节点跑着时：改 peer、看 NAT 情况用
+    direct: Option<DirectHandle>,
+    /// 房主发出去、还没收到回执的房主码里分出去的地址
+    pending: Vec<std::net::Ipv4Addr>,
 }
 
 struct Shared {
@@ -380,6 +417,8 @@ impl Controller {
                     renamer: None,
                     admin: None,
                     host: None,
+                    direct: None,
+                    pending: Vec::new(),
                 }),
                 ops: tokio::sync::Mutex::new(()),
             }),
@@ -416,6 +455,19 @@ impl Controller {
             hosting: state.host.as_ref().map(|host| host.info.clone()),
             check_updates: state.settings.check_updates,
             update: self.shared.updater.view(),
+            direct: state.settings.direct.as_ref().map(|net| {
+                let nat = state
+                    .direct
+                    .as_ref()
+                    .map(|handle| handle.nat().borrow().clone())
+                    .unwrap_or_default();
+                DirectView {
+                    host: net.host,
+                    public_endpoint: nat.public.map(|addr| addr.to_string()),
+                    symmetric: nat.symmetric,
+                    checked: nat.checked,
+                }
+            }),
         }
     }
 
@@ -434,6 +486,14 @@ impl Controller {
     }
 
     async fn connect_locked(&self, code: Option<String>) -> Result<(), String> {
+        // 没给网络码、存着的是直连网络：照着它重新打洞
+        if code.is_none() {
+            let saved = self.shared.state().settings.direct.clone();
+            if let Some(net) = saved {
+                self.start_direct(net).await;
+                return Ok(());
+            }
+        }
         let text = match code {
             Some(code) => code,
             None => self
@@ -455,6 +515,7 @@ impl Controller {
             state.host = None;
         }
         state.settings.network = Some(network.to_string());
+        state.settings.direct = None;
         self.shared.save(&state.settings);
         let hosting = state.settings.hosting;
         let metric = state.settings.prefer_broadcast.then_some(BROADCAST_METRIC);
@@ -500,6 +561,7 @@ impl Controller {
         let (stop, stop_rx) = oneshot::channel();
         let mut state = self.shared.state();
         state.settings.hosting = here;
+        state.settings.direct = None;
         if !here {
             state.host = None;
         }
@@ -616,8 +678,218 @@ impl Controller {
         state.snapshot = Snapshot::default();
         state.settings.network = None;
         state.settings.hosting = false;
+        state.settings.direct = None;
+        state.pending.clear();
         state.host = None;
         self.shared.save(&state.settings);
+    }
+
+    // ---------- 直连模式（不用服务器） ----------
+
+    /// 当房主建一个直连网络。之前当过房主的话接着用（朋友们都还在名单里）。马上返回，节点在后台起。
+    pub async fn direct_host(&self) -> Result<(), String> {
+        let _op = self.shared.ops.lock().await;
+        let net = match self.shared.state().settings.direct.clone() {
+            Some(net) if net.host => net,
+            _ => DirectNet {
+                host: true,
+                ip: direct::HOST_IP.to_string(),
+                peers: Vec::new(),
+            },
+        };
+        self.start_direct(net).await;
+        Ok(())
+    }
+
+    /// 朋友：读房主码，起节点，等问完公网地址，交回回执码（发给房主）。
+    pub async fn direct_join(&self, offer: &str) -> Result<DirectCode, String> {
+        let offer = Offer::decode(offer).map_err(|err| err.to_string())?;
+        if offer.host == self.shared.secret.public_key() {
+            return Err("这是你自己生成的房主码：要发给朋友，让朋友贴".into());
+        }
+        {
+            let _op = self.shared.ops.lock().await;
+            let net = DirectNet {
+                host: false,
+                ip: offer.guest_ip.to_string(),
+                peers: vec![DirectPeerSaved {
+                    key: offer.host.to_string(),
+                    ip: offer.host_ip.to_string(),
+                    name: offer.name.clone(),
+                    endpoints: offer.endpoints.iter().map(ToString::to_string).collect(),
+                }],
+            };
+            self.start_direct(net).await;
+        }
+        self.direct_reply().await
+    }
+
+    /// 朋友：再生成一次回执码（本机的公网端点变了、上一个过期了的时候）。
+    pub async fn direct_reply(&self) -> Result<DirectCode, String> {
+        let handle = self.direct_handle().await?;
+        let (net, name) = {
+            let state = self.shared.state();
+            (state.settings.direct.clone(), state.settings.name.clone())
+        };
+        let net = net.filter(|net| !net.host).ok_or("只有朋友才生成回执码")?;
+        let host = net.peers.first().ok_or("没有房主")?;
+        let nat = handle.wait_checked(STUN_PATIENCE).await;
+        let reply = Reply {
+            guest: self.shared.secret.public_key(),
+            host: host
+                .key
+                .parse()
+                .map_err(|_| "存着的房主公钥坏了".to_string())?,
+            guest_ip: handle.ip(),
+            name,
+            endpoints: nat.endpoints,
+            expires: direct::expires_from_now(),
+        };
+        Ok(DirectCode {
+            code: reply.encode(),
+            public: nat.public.is_some(),
+            symmetric: nat.symmetric,
+        })
+    }
+
+    /// 房主：给一位新朋友生成房主码，里面分给他一个还没用的地址。
+    pub async fn direct_offer(&self) -> Result<DirectCode, String> {
+        let handle = self.direct_handle().await?;
+        let (guest_ip, name) = {
+            let mut state = self.shared.state();
+            let net = state
+                .settings
+                .direct
+                .clone()
+                .filter(|net| net.host)
+                .ok_or("只有房主才生成房主码")?;
+            let used: Vec<std::net::Ipv4Addr> = net
+                .peers
+                .iter()
+                .filter_map(|peer| peer.ip.parse().ok())
+                .chain(state.pending.iter().copied())
+                .collect();
+            let ip = direct::NETWORK
+                .hosts()
+                .find(|ip| *ip != direct::HOST_IP && !used.contains(ip))
+                .ok_or("网里满了")?;
+            state.pending.push(ip);
+            (ip, state.settings.name.clone())
+        };
+        let nat = handle.wait_checked(STUN_PATIENCE).await;
+        let offer = Offer {
+            host: self.shared.secret.public_key(),
+            host_ip: handle.ip(),
+            guest_ip,
+            prefix_len: direct::NETWORK.prefix_len(),
+            name,
+            endpoints: nat.endpoints,
+            expires: direct::expires_from_now(),
+        };
+        Ok(DirectCode {
+            code: offer.encode(),
+            public: nat.public.is_some(),
+            symmetric: nat.symmetric,
+        })
+    }
+
+    /// 房主：读朋友发回来的回执码，把他加进名单，开始打洞。返回他的名字。
+    pub async fn direct_accept(&self, reply: &str) -> Result<String, String> {
+        let reply = Reply::decode(reply).map_err(|err| err.to_string())?;
+        if reply.host != self.shared.secret.public_key() {
+            return Err("这张回执码是回给别的房主的".into());
+        }
+        let handle = self.direct_handle().await?;
+        let mut state = self.shared.state();
+        let mut net = state
+            .settings
+            .direct
+            .clone()
+            .filter(|net| net.host)
+            .ok_or("只有房主才收回执码")?;
+        let key = reply.guest.to_string();
+        let ip = reply.guest_ip.to_string();
+        if net
+            .peers
+            .iter()
+            .any(|peer| peer.ip == ip && peer.key != key)
+        {
+            return Err("这个地址已经分给别人了：给这位朋友重新生成一个房主码".into());
+        }
+        net.peers.retain(|peer| peer.key != key);
+        net.peers.push(DirectPeerSaved {
+            key,
+            ip,
+            name: reply.name.clone(),
+            endpoints: reply.endpoints.iter().map(ToString::to_string).collect(),
+        });
+        state.pending.retain(|pending| *pending != reply.guest_ip);
+        handle.set_peers(direct_peers(&net));
+        state.settings.direct = Some(net);
+        self.shared.save(&state.settings);
+        info!(name = %reply.name, ip = %reply.guest_ip, "直连：加了一位朋友");
+        Ok(reply.name)
+    }
+
+    /// 房主：把一位朋友移出名单。
+    pub fn direct_remove(&self, id: &str) -> Result<(), String> {
+        let mut state = self.shared.state();
+        let mut net = state
+            .settings
+            .direct
+            .clone()
+            .filter(|net| net.host)
+            .ok_or("只有房主才能移人")?;
+        net.peers.retain(|peer| peer.key != id);
+        if let Some(handle) = &state.direct {
+            handle.set_peers(direct_peers(&net));
+        }
+        state.settings.direct = Some(net);
+        self.shared.save(&state.settings);
+        Ok(())
+    }
+
+    /// 停掉现在的节点，按 `net` 起一个直连节点（调用方拿着 ops 锁）
+    async fn start_direct(&self, net: DirectNet) {
+        self.stop_runner().await;
+        let (stop, stop_rx) = oneshot::channel();
+        let mut state = self.shared.state();
+        state.settings.network = None;
+        state.settings.hosting = false;
+        state.host = None;
+        if !net.host {
+            state.pending.clear();
+        }
+        state.settings.direct = Some(net.clone());
+        self.shared.save(&state.settings);
+        let metric = state.settings.prefer_broadcast.then_some(BROADCAST_METRIC);
+        state.phase = Phase::Connecting;
+        state.snapshot = Snapshot::default();
+        let task = tokio::spawn(run_direct(Arc::clone(&self.shared), net, metric, stop_rx));
+        state.runner = Some(Runner { stop, task });
+    }
+
+    /// 等直连节点起来，拿到它的把手
+    async fn direct_handle(&self) -> Result<DirectHandle, String> {
+        let started = Instant::now();
+        loop {
+            {
+                let state = self.shared.state();
+                if let Some(handle) = &state.direct {
+                    return Ok(handle.clone());
+                }
+                if let Phase::Failed(failure) = &state.phase {
+                    return Err(failure.message.clone());
+                }
+                if state.runner.is_none() {
+                    return Err("还没有直连网络".into());
+                }
+            }
+            if started.elapsed() > START_PATIENCE {
+                return Err("节点起得太慢，稍后再试".into());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// 改"让游戏的广播走 Meshora"。正连着的话按新设置重连 —— 跃点数是建网卡时设的。
@@ -682,7 +954,8 @@ impl Controller {
         tokio::spawn(async move { checking.update_loop().await });
         let wanted = {
             let state = self.shared.state();
-            state.settings.auto_connect && state.settings.network.is_some()
+            state.settings.auto_connect
+                && (state.settings.network.is_some() || state.settings.direct.is_some())
         };
         if wanted && let Err(err) = self.connect(None).await {
             warn!(%err, "自动连接失败");
@@ -751,6 +1024,7 @@ impl Controller {
             state.profile = None;
             state.renamer = None;
             state.admin = None;
+            state.direct = None;
             state.runner.take()
         };
         if let Some(Runner { stop, mut task }) = runner {
@@ -830,7 +1104,7 @@ async fn run(
         started = start(&shared.secret, &dial, entry, metric, name, extra, shared.open_tun.clone()) => started,
         _ = &mut stop => return,
     };
-    let mut node = match started {
+    let node = match started {
         Ok(node) => node,
         Err(failure) => {
             warn!(message = %failure.message, "连接失败");
@@ -851,6 +1125,11 @@ async fn run(
         }
     }
 
+    watch(&shared, node, stop).await;
+}
+
+/// 连上之后：每秒刷新一次快照，直到被叫停或者控制面退出
+async fn watch(shared: &Shared, mut node: Node, mut stop: oneshot::Receiver<()>) {
     let mut tick = tokio::time::interval(REFRESH);
     loop {
         tokio::select! {
@@ -874,6 +1153,89 @@ async fn run(
         }
         shared.state().snapshot = snapshot(&node);
     }
+}
+
+/// 存着的 peer 换成控制面要的样子，坏了的条目跳过
+fn direct_peers(net: &DirectNet) -> Vec<DirectPeer> {
+    net.peers
+        .iter()
+        .filter_map(|peer| {
+            Some(DirectPeer {
+                key: peer.key.parse().ok()?,
+                ip: peer.ip.parse().ok()?,
+                name: peer.name.clone(),
+                endpoints: peer
+                    .endpoints
+                    .iter()
+                    .filter_map(|addr| addr.parse().ok())
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+/// 后台任务：起一个直连节点（不连任何服务器），然后和 [`run`] 一样盯着它
+async fn run_direct(
+    shared: Arc<Shared>,
+    net: DirectNet,
+    metric: Option<u32>,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let Ok(ip) = net.ip.parse() else {
+        let message = "存着的直连地址坏了：离开这个网络，重新交换连接码";
+        warn!(%message);
+        shared.state().phase = Phase::Failed(Failure::new(FailureKind::Other, message));
+        return;
+    };
+    let role = if net.host { Role::Host } else { Role::Guest };
+    let options = |port| DirectOptions {
+        secret: shared.secret.clone(),
+        port,
+        tun: TUN_NAME.into(),
+        mtu: MTU,
+        metric,
+        keepalive: NonZeroU16::new(KEEPALIVE).unwrap_or(NonZeroU16::MIN),
+        ip,
+        role,
+        stun: direct::DEFAULT_STUN
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+        peers: direct_peers(&net),
+        open_tun: shared.open_tun.clone(),
+    };
+    let starting = async {
+        match meshorad::start_direct(options(PORT)).await {
+            Err(StartError::Bind(_, err)) if err.kind() == io::ErrorKind::AddrInUse => {
+                meshorad::start_direct(options(0)).await
+            }
+            other => other,
+        }
+    };
+    let started = tokio::select! {
+        started = starting => started,
+        _ = &mut stop => return,
+    };
+    let node = match started {
+        Ok(node) => node,
+        Err(err) => {
+            let failure = Failure::from_start(err);
+            warn!(message = %failure.message, "直连节点没起来");
+            shared.state().phase = Phase::Failed(failure);
+            return;
+        }
+    };
+    info!(ip = %node.welcome().overlay_ip, host = net.host, "直连节点已起来");
+    {
+        let mut state = shared.state();
+        state.phase = Phase::Connected;
+        state.snapshot = snapshot(&node);
+        state.direct = node.direct().cloned();
+        if state.settings.private_network {
+            state.profile = Some(set_profile(node.tun_name().to_owned(), true));
+        }
+    }
+    watch(&shared, node, stop).await;
 }
 
 /// 在服务器上建一个网络，存下它的网络码（服务器地址 + 网络 ID + 邀请码）

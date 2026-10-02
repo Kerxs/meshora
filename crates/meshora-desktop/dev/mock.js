@@ -1,6 +1,7 @@
 // 在普通浏览器里看界面用的假后端：不需要管理员权限、不建网卡。
 // 用法：在 crates/meshora-desktop 下起一个静态服务器，打开 dev/index.html?s=<场景>
-// 场景：onboarding、join、saved、connecting、connected、owner、host、update、empty、rejected、invite、deleted、tun、unreachable
+// 场景：onboarding、join、saved、connecting、connected、owner、host、update、empty、rejected、invite、deleted、tun、unreachable、
+// direct-host、direct-guest、direct-symmetric
 "use strict";
 
 (() => {
@@ -28,6 +29,7 @@
     hosting: null,
     checkUpdates: true,
     update: { status: "upToDate", version: null, notes: null, error: null },
+    direct: null,
     phase: "idle",
     error: null,
     me: null,
@@ -81,6 +83,30 @@
       peers,
       update: { status: "available", version: "1.0.1", notes: "修了一些东西", error: null },
     },
+    "direct-host": {
+      phase: "connected",
+      me: { ip: "100.96.0.1", prefix: 24, tun: "Meshora" },
+      coordConnected: true,
+      peers: [
+        { ...peers[0], ip: "100.96.0.2", route: "direct" },
+        { ...peers[2], ip: "100.96.0.3", route: "pending", online: false },
+      ],
+      direct: { host: true, publicEndpoint: "203.0.113.9:41641", symmetric: false, checked: true },
+    },
+    "direct-guest": {
+      phase: "connected",
+      me: { ip: "100.96.0.2", prefix: 24, tun: "Meshora" },
+      coordConnected: true,
+      peers: [{ ...peers[0], name: "房主", ip: "100.96.0.1", route: "direct" }],
+      direct: { host: false, publicEndpoint: "198.51.100.4:6000", symmetric: false, checked: true },
+    },
+    "direct-symmetric": {
+      phase: "connected",
+      me: { ip: "100.96.0.1", prefix: 24, tun: "Meshora" },
+      coordConnected: true,
+      peers: [],
+      direct: { host: true, publicEndpoint: "203.0.113.9:53122", symmetric: true, checked: true },
+    },
     unreachable: {
       network: code,
       phase: "failed",
@@ -118,7 +144,7 @@
       ov = { ...ov, phase: "idle", me: null, peers: [], error: null };
     },
     forget() {
-      ov = { ...ov, phase: "idle", me: null, peers: [], error: null, network: null };
+      ov = { ...ov, phase: "idle", me: null, peers: [], error: null, network: null, direct: null };
     },
     set_prefer_broadcast({ on }) {
       ov = { ...ov, preferBroadcast: on };
@@ -184,6 +210,28 @@
       if (action.kind === "delete") ov = { ...ov, phase: "idle", network: null, roster: null, me: null, peers: [] };
       return null;
     },
+    // 直连模式：码是假的，只为看界面
+    direct_host() {
+      ov = { ...ov, ...scenarios["direct-symmetric"], direct: { ...scenarios["direct-symmetric"].direct, symmetric: false } };
+    },
+    async direct_offer() {
+      await new Promise((r) => setTimeout(r, 400));
+      const sym = !!ov.direct?.symmetric;
+      return { code: "meshora-offer:AQEAAAAAdzWUAMx3gK2m9Q1rN0yEWZ4H2kq8s7Tj3fVb6hPpL1oZcX0nGyRaKuIeQwMdS5iJtB4f", public: true, symmetric: sym };
+    },
+    direct_accept({ code: text }) {
+      if (!text.trim().startsWith("meshora-reply:")) throw "这不是 Meshora 的连接码";
+      return "小明";
+    },
+    async direct_join() {
+      ov = { ...ov, ...scenarios["direct-guest"] };
+      await new Promise((r) => setTimeout(r, 400));
+      return { code: "meshora-reply:AQIAAAAAdzWUAJ3kq8s7Tj3fVb6hPpL1oZcX0nGyRaKuIeQwMdS5iJtB4fx9", public: false, symmetric: false };
+    },
+    direct_reply() {
+      return { code: "meshora-reply:AQIAAAAAdzWUAJ3kq8s7Tj3fVb6hPpL1oZcX0nGyRaKuIeQwMdS5iJtB4fx9", public: true, symmetric: false };
+    },
+    direct_remove() {},
     set_name({ name }) {
       const cleaned = name.trim().slice(0, 32);
       ov = { ...ov, name: cleaned };

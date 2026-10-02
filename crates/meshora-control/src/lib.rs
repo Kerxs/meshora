@@ -133,6 +133,15 @@ impl AdminHandle {
     pub fn roster(&self) -> watch::Receiver<Option<Roster>> {
         self.roster.clone()
     }
+
+    /// 没有协调服务（直连模式）时的把手：清单一直是 `None`，请求一律办不了。
+    pub fn detached() -> Self {
+        let (requests, _) = mpsc::unbounded_channel();
+        Self {
+            requests,
+            roster: watch::Sender::new(None).subscribe(),
+        }
+    }
 }
 
 /// 控制面的配置。
@@ -185,6 +194,11 @@ impl Hosting {
 pub struct NameSetter(Arc<watch::Sender<String>>);
 
 impl NameSetter {
+    /// 没有协调服务（直连模式）时的把手：改了也没人收。名字写在连接码里。
+    pub fn detached() -> Self {
+        Self(Arc::new(watch::Sender::new(String::new())))
+    }
+
     /// 换一个名字。连着协调服务就马上告诉它；断着的话重连时带上。
     pub fn set(&self, name: impl Into<String>) {
         let name = name.into();

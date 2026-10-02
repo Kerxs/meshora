@@ -1222,6 +1222,49 @@ td.spark-cell .spark {
   backdrop-filter: blur(24px) saturate(140%);
 }
 
+/* 直连模式的连接码弹窗 */
+.modal-scrim .sheet {
+  width: min(520px, calc(100vw - 32px));
+  text-align: left;
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sheet .step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.code-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: flex-end;
+}
+
+.code-area {
+  width: 100%;
+  height: 84px;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 12px;
+  resize: none;
+  word-break: break-all;
+}
+
+.dialog .warn-line {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-field);
+  background: rgba(255, 193, 85, 0.1);
+  color: var(--mid);
+  font-size: var(--fs-sec);
+}
+
 /* 毛玻璃面上的按钮：CSS 画，不用 Glassium */
 .btn.solid {
   background: rgba(255, 255, 255, 0.08);

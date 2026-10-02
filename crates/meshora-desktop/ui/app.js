@@ -128,7 +128,7 @@ function bars(peer) {
 }
 
 function route(peer) {
-  if (!peer.online) return h("span", { class: "route off" }, peer.route === "pending" ? "○ 等待中" : "○ 不在线");
+  if (!peer.online) return h("span", { class: "route off" }, peer.route === "pending" ? (state.overview?.direct ? "○ 正在打洞" : "○ 等待中") : "○ 不在线");
   if (peer.route === "direct") return h("span", { class: "route direct", title: "两台设备之间直接连通，游戏流量不经过第三方" }, "● 直连");
   return h("span", { class: "route relay", title: "打不通直连，经中继服务器转发（全程加密，中继看不到内容）" }, "◆ 经中继");
 }
@@ -483,6 +483,16 @@ function meCard() {
   const who = h("b");
   const host = h("span", { class: "mono" });
   const coord = h("span");
+  // 直连模式：房主邀请朋友，朋友再要一次回执码
+  const directButton = h("button", { class: "btn", glass: "clear", type: "button", hidden: true });
+  directButton.addEventListener("click", async () => {
+    if (state.overview.direct?.host) return inviteDirect();
+    try {
+      showReply(await invoke("direct_reply"));
+    } catch (err) {
+      toast(String(err));
+    }
+  });
   const el = h(
     "section",
     { class: "card me-card", glass: "frosted", "glass-corner-radius": "22" },
@@ -497,6 +507,7 @@ function meCard() {
       "div",
       { class: "me-actions" },
       h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(state.overview.me.ip, "地址") }, "复制地址"),
+      directButton,
       h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("disconnect") }, "断开"),
     ),
   );
@@ -505,8 +516,17 @@ function meCard() {
     update(ov) {
       ip.textContent = ov.me.ip;
       who.textContent = ov.name || "没起名字";
-      host.textContent = hostOf(ov.network);
-      coord.textContent = `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}`;
+      const d = ov.direct;
+      directButton.hidden = !d;
+      if (d) {
+        directButton.textContent = d.host ? "邀请朋友" : "回执码";
+        host.textContent = d.host ? "直连（你是房主）" : "直连";
+        const nat = d.publicEndpoint ? `公网 ${d.publicEndpoint}` : d.checked ? "没问到公网地址" : "正在问公网地址…";
+        coord.textContent = `${nat}${d.symmetric ? " · 像是对称型 NAT，可能打不通" : ""} · 网卡 ${ov.me.tun}`;
+      } else {
+        host.textContent = hostOf(ov.network);
+        coord.textContent = `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}`;
+      }
     },
   };
 }
@@ -892,6 +912,85 @@ views.settings = {
 // ---------- 确认框 ----------
 
 /** 问一句"确定吗"。返回用户点没点确定 */
+// ---------- 直连模式：交换连接码 ----------
+
+/** NAT 情况的提醒：没问到公网地址、像是对称型 NAT */
+function natWarnings(result) {
+  const lines = [];
+  if (!result.public) lines.push("没问到你的公网地址（STUN 服务器连不上）：码里只有局域网地址，只有和你在同一个局域网的人连得上。");
+  if (result.symmetric) lines.push("你的路由器像是对称型 NAT：直连多半打不通。打不通的话，换官方服务器建网络。");
+  return lines.map((line) => h("p", { class: "warn-line" }, line));
+}
+
+/** 一个盖在正文上的弹窗（CSS 毛玻璃，同 confirmBox），返回 { body, close } */
+function sheet(title, text) {
+  const body = h("div", { class: "sheet-body" });
+  const close = () => {
+    scrim.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (event) => event.key === "Escape" && close();
+  const scrim = h(
+    "div",
+    { class: "modal-scrim", onclick: (event) => event.target === scrim && close() },
+    h("section", { class: "dialog frost sheet", role: "dialog", "aria-modal": "true" }, h("h2", {}, title), h("p", {}, text), body),
+  );
+  document.addEventListener("keydown", onKey);
+  document.body.append(scrim);
+  return { body, close, scrim };
+}
+
+/** 只读的连接码和"复制"按钮 */
+function codeField(code, what) {
+  const area = h("textarea", { class: "code-area mono", readonly: "", spellcheck: "false", "aria-label": what }, code);
+  area.addEventListener("focus", () => area.select());
+  return h("div", { class: "code-box" }, area, h("button", { class: "btn solid primary", type: "button", onclick: () => copy(code, what) }, `复制${what}`));
+}
+
+/** 朋友：把回执码发给房主 */
+function showReply(result) {
+  const { body, close } = sheet("把回执码发给房主", "房主贴进去之后，两边同时开始打洞，通了就在网络页上看得到房主。");
+  body.append(codeField(result.code, "回执码"), ...natWarnings(result), h("div", { class: "row end-row" }, h("button", { class: "btn solid", type: "button", onclick: close }, "完成")));
+}
+
+/** 房主：给一位朋友生成房主码，再收他的回执码 */
+async function inviteDirect() {
+  const { body, close } = sheet("邀请一位朋友", "每位朋友一个房主码：发给他，他贴进\"加入网络\"，再把回执码发回来贴在下面。");
+  body.append(h("p", { class: "hint" }, "正在问公网地址…"));
+  let result;
+  try {
+    result = await invoke("direct_offer");
+  } catch (err) {
+    body.replaceChildren(h("p", { class: "field-error" }, String(err)), h("div", { class: "row end-row" }, h("button", { class: "btn solid", type: "button", onclick: close }, "关闭")));
+    return;
+  }
+  const reply = h("textarea", { class: "code-area mono", spellcheck: "false", placeholder: "meshora-reply: 开头的回执码", "aria-label": "回执码" });
+  const error = h("div", { class: "field-error", role: "alert" });
+  const accept = h("button", { class: "btn solid primary", type: "button" }, "加进来");
+  accept.addEventListener("click", async () => {
+    error.textContent = "";
+    accept.disabled = true;
+    try {
+      const name = await invoke("direct_accept", { code: reply.value });
+      toast(`${name || "朋友"}加进来了，正在打洞`);
+      close();
+      refresh();
+    } catch (err) {
+      error.textContent = String(err);
+    } finally {
+      accept.disabled = false;
+    }
+  });
+  reply.addEventListener("input", () => (error.textContent = ""));
+  body.replaceChildren(
+    h("div", { class: "step" }, h("b", {}, "1. 发给朋友"), codeField(result.code, "房主码")),
+    ...natWarnings(result),
+    h("div", { class: "step" }, h("b", {}, "2. 贴上他发回来的回执码"), reply),
+    error,
+    h("div", { class: "row end-row" }, h("button", { class: "btn solid", type: "button", onclick: close }, "以后再说"), accept),
+  );
+}
+
 // 盖在正文上的层（确认框）不用 Glassium：它的玻璃画在页面底下，盖不住上面的字，字会透上来。
 // 框和里面的按钮都用 CSS 画（.frost、.btn.solid）
 function confirmBox(title, text, okLabel, { cancelLabel = "取消", danger = true } = {}) {
@@ -1021,6 +1120,7 @@ views.start = {
       // 手机多半在运营商级 NAT 后面，换个网络地址就变，当不了主机
       PHONE ? null : { value: "thisPc", label: "本机当主机", hint: "不用服务器。路由器要支持 UPnP，这台电脑开着网络才在" },
       { value: "server", label: "我的服务器", hint: "自己架的 meshora-coord（--hub）" },
+      { value: "direct", label: "不用服务器（直连）", hint: "和每位朋友互发一段连接码，靠打洞直连。没有中继兜底，对称型 NAT 连不上" },
     ].filter(Boolean);
     const picker = choices(options, this.where, (value) => {
       this.where = value;
@@ -1029,6 +1129,20 @@ views.start = {
     });
     createButton.addEventListener("click", async () => {
       createError.textContent = "";
+      if (this.where === "direct") {
+        createButton.disabled = true;
+        try {
+          await invoke("direct_host");
+          state.page = "home";
+          refresh();
+          inviteDirect();
+        } catch (err) {
+          createError.textContent = String(err);
+        } finally {
+          createButton.disabled = false;
+        }
+        return;
+      }
       const name = this.netName.value.trim();
       if (!name) {
         createError.textContent = "给网络起个名字";
@@ -1069,7 +1183,7 @@ views.start = {
     );
 
     // ---- 加入网络 ----
-    const area = h("textarea", { placeholder: "公钥@地址:端口/网络ID#邀请码", spellcheck: "false", "aria-label": "网络码" });
+    const area = h("textarea", { placeholder: "网络码，或者房主发来的房主码（meshora-offer: 开头）", spellcheck: "false", "aria-label": "网络码" });
     const error = h("div", { class: "field-error", role: "alert" });
     const button = h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加入");
     const submit = async () => {
@@ -1080,8 +1194,19 @@ views.start = {
         return;
       }
       error.textContent = "";
+      if (code.startsWith("meshora-reply:")) {
+        error.textContent = "这是回执码：要贴在房主的\"邀请朋友\"里，不是这里";
+        return;
+      }
       button.disabled = true;
       try {
+        if (code.startsWith("meshora-offer:")) {
+          const result = await invoke("direct_join", { code });
+          state.page = "home";
+          refresh();
+          showReply(result);
+          return;
+        }
         await invoke("connect", { code });
         refresh();
       } catch (err) {
@@ -1111,7 +1236,7 @@ views.start = {
       "section",
       { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
       h("h2", {}, "加入朋友的网络"),
-      h("p", {}, "把朋友发给你的网络码贴进来。"),
+      h("p", {}, "把朋友发给你的网络码（或者直连的房主码）贴进来。"),
       area,
       error,
       h("div", { class: "row" }, h("span", { class: "hint" }, "网络码里没有邀请码？", h("button", { class: "link", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制你的 ID"), " 发给建网络的人"), button),
@@ -1136,8 +1261,8 @@ views.start = {
     return el;
   },
   update(ov) {
-    this.saved.hidden = !ov.network;
-    this.savedHost.textContent = hostOf(ov.network);
+    this.saved.hidden = !ov.network && !ov.direct;
+    this.savedHost.textContent = ov.direct ? (ov.direct.host ? "直连网络（你是房主）" : "直连网络") : hostOf(ov.network);
   },
 };
 
