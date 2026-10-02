@@ -119,15 +119,15 @@ Meshora 想提供的是：**开源、可以完全自建、以联机为唯一目�
 
 </HomeSection>
 
-<HomeSection eyebrow="1.0.1" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
+<HomeSection eyebrow="1.0.2" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
 
-**1.0.1 已发布：Windows 安装程序和安卓 APK 在 [Releases](https://github.com/Kerxs/meshora/releases/latest)。**
-装好打开，建网络默认用官方服务器；装过的客户端会自动更新。
+**1.0.2 已发布：Windows 安装程序和安卓 APK 在 [Releases](https://github.com/Kerxs/meshora/releases/latest)。**
+装好打开，建网络默认用官方服务器；也能完全不用服务器，和朋友互发连接码直连。装过的客户端会自动更新。
 
 做到的：在客户端里建网络、凭网络码加入、网主管理；打洞直连、打不通走中继；游戏的广播和组播转发给网里的每个人；
-安卓模拟器每次打包都经官方服务器真的连一次网。
+不用服务器的直连模式；安卓模拟器每次打包都经官方服务器真的连一次网。
 
-还没做到的：两台真的电脑之间拿真的游戏联机过、真实网络里的打洞验证、真手机上的验证、安全审查、
+还没做到的：两台真的电脑之间拿真的游戏联机过、真实网络里的打洞验证（包括直连模式）、真手机上的验证、安全审查、
 Windows 安装程序的代码签名（SmartScreen 会提示"未知发布者"）。
 
 **只做局域网游戏联机。** 其余方向都在 [1.0 之后](/guide/roadmap#_1-0-之后)。
