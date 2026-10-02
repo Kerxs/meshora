@@ -123,6 +123,34 @@ body,
   }
 }
 
+/*
+  触屏设备（手机、平板）上 glass.ts 不用 Glassium（滑动时玻璃跟不上字），这里用 CSS 毛玻璃顶上：
+  backdrop-filter 由合成器和滚动一起画。选择器和 glass.ts 的 RULES 对应
+*/
+@media (hover: none) and (pointer: coarse) {
+  .VPDoc .content-container,
+  .VPFeature,
+  .home-section,
+  .vp-doc div[class*="language-"],
+  .vp-doc .custom-block,
+  .VPButton.alt,
+  .VPSidebar,
+  .VPDocAsideOutline {
+    background-color: rgba(30, 34, 46, 0.58) !important;
+    backdrop-filter: blur(22px) saturate(140%);
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  }
+
+  .VPDoc .content-container {
+    background-color: rgba(12, 14, 20, 0.78) !important;
+  }
+
+  .VPButton.brand {
+    background-color: #3d6bff !important;
+  }
+}
+
 /* 侧边栏、大纲：和卡片一样的圆角，离边缘留点空 */
 .VPSidebar {
   border-radius: 0 22px 22px 0;

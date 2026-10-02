@@ -89,9 +89,9 @@
       coordConnected: true,
       peers: [
         { ...peers[0], ip: "100.96.0.2", route: "direct" },
-        { ...peers[2], ip: "100.96.0.3", route: "pending", online: false },
+        { ...peers[2], ip: "100.96.0.3", route: "pending", online: false, heard: false, candidates: ["198.51.100.7:41641", "192.168.3.5:41641"] },
       ],
-      direct: { host: true, publicEndpoint: "203.0.113.9:41641", symmetric: false, checked: true },
+      direct: { host: true, publicEndpoint: "203.0.113.9:41641", symmetric: false, checked: true, mapped: "203.0.113.9:41641", upnpTried: true },
     },
     "direct-guest": {
       phase: "connected",

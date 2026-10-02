@@ -39,10 +39,20 @@ function s(tag, props, ...children) {
   return el;
 }
 
+// 手机上不用 Glassium 画面板：它的玻璃画在页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、
+// 比主线程快一两帧，玻璃就落在文字后面。改用 CSS 毛玻璃（backdrop-filter），由合成器和滚动一起画，天然同步。
+// glass="x" 换成 data-glass="x"（样式在 app.css 的"手机：CSS 毛玻璃"），颜色、圆角走 CSSOM，别的 glass-* 丢掉
+function phoneGlass(el, key, value) {
+  if (key === "glass") el.setAttribute("data-glass", value === true ? "" : value);
+  else if (key === "glass-tint") el.style.setProperty("--glass-tint", value);
+  else if (key === "glass-corner-radius") el.style.borderRadius = `${value}px`;
+}
+
 function setProps(el, props) {
   for (const [key, value] of Object.entries(props || {})) {
     if (value === undefined || value === null || value === false) continue;
-    if (key === "class") el.setAttribute("class", value);
+    if (PHONE && (key === "glass" || key.startsWith("glass-"))) phoneGlass(el, key, value);
+    else if (key === "class") el.setAttribute("class", value);
     else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else el.setAttribute(key, value === true ? "" : value);
   }
@@ -429,12 +439,14 @@ function friendCard(peer) {
   const ms = h("span", { class: "fms" });
   const routeSlot = h("span");
   const sparkSlot = h("div");
+  const why = h("div", { class: "fwhy", hidden: true });
   const el = h(
     "div",
     { class: "fcard", glass: "frosted", "glass-corner-radius": "22", "glass-jelly": "", role: "button", tabindex: "0", title: "点一下复制地址" },
     h("div", { class: "ftop" }, avatar, h("div", { class: "who" }, name, ip), barsSlot),
     h("div", { class: "fmid" }, ms, routeSlot),
     sparkSlot,
+    why,
   );
   let current = peer;
   const copyIp = () => copy(current.ip, "地址");
@@ -460,8 +472,36 @@ function friendCard(peer) {
       else ms.replaceChildren("—");
       routeSlot.replaceChildren(route(next));
       sparkSlot.replaceChildren(spark(state.history.get(next.id) || [], 200, 30));
+      const stuck = state.overview?.direct && next.route === "pending";
+      why.hidden = !stuck;
+      if (stuck) why.textContent = punchHint(next);
     },
   };
+}
+
+/** 直连打洞没通时，卡在哪一边 */
+function punchHint(peer) {
+  if (peer.heard) return "收到过对方的报文，我们的还没到对方：多半是对方那边的防火墙或路由器挡了";
+  return "对方的报文一次都没到：可能是你这边的路由器挡了，或者有一边是对称型 NAT。点地址卡片上的\"诊断\"把信息发给帮你看的人";
+}
+
+/** 直连模式的诊断信息：一段纯文本，复制了发给帮忙排查的人。不含私钥，有 IP 地址 */
+async function directDiagnostics() {
+  const ov = state.overview;
+  const d = ov.direct || {};
+  const lines = [
+    `Meshora ${ov.version} · ${ov.platform} · 直连${d.host ? "（房主）" : "（朋友）"}`,
+    `本机地址 ${ov.me?.ip || "—"}`,
+    `公网端点（STUN）${d.publicEndpoint || "没问到"}${d.symmetric ? " · 两个 STUN 看到的不一样：像是对称型 NAT" : ""}`,
+    `UPnP ${d.mapped ? `开了 ${d.mapped}` : d.upnpTried ? "没开成" : "还在试"}`,
+    "",
+    ...ov.peers.map((p) => `${nameOf(p)} ${p.ip} · ${p.route}${p.online ? " · 在线" : ""} · ${p.heard ? "收到过对方报文" : "没收到过对方报文"} · 试过 ${(p.candidates || []).join(", ") || "（没有地址）"}`),
+  ];
+  let logs = [];
+  try {
+    logs = (await invoke("logs")).filter((line) => /直连|探测|报文|切换路径|STUN|UPnP/.test(line)).slice(-40);
+  } catch {}
+  return [...lines, "", "日志：", ...logs].join("\n");
 }
 
 const views = {};
@@ -485,6 +525,7 @@ function meCard() {
   const coord = h("span");
   // 直连模式：房主邀请朋友，朋友再要一次回执码
   const directButton = h("button", { class: "btn", glass: "clear", type: "button", hidden: true });
+  const diagButton = h("button", { class: "btn", glass: "clear", type: "button", hidden: true, onclick: async () => copy(await directDiagnostics(), "诊断信息") }, "诊断");
   directButton.addEventListener("click", async () => {
     if (state.overview.direct?.host) return inviteDirect();
     try {
@@ -508,6 +549,7 @@ function meCard() {
       { class: "me-actions" },
       h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(state.overview.me.ip, "地址") }, "复制地址"),
       directButton,
+      diagButton,
       h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("disconnect") }, "断开"),
     ),
   );
@@ -518,11 +560,13 @@ function meCard() {
       who.textContent = ov.name || "没起名字";
       const d = ov.direct;
       directButton.hidden = !d;
+      diagButton.hidden = !d;
       if (d) {
         directButton.textContent = d.host ? "邀请朋友" : "回执码";
         host.textContent = d.host ? "直连（你是房主）" : "直连";
         const nat = d.publicEndpoint ? `公网 ${d.publicEndpoint}` : d.checked ? "没问到公网地址" : "正在问公网地址…";
-        coord.textContent = `${nat}${d.symmetric ? " · 像是对称型 NAT，可能打不通" : ""} · 网卡 ${ov.me.tun}`;
+        const upnp = d.mapped ? " · 路由器开了端口（UPnP）" : "";
+        coord.textContent = `${nat}${upnp}${d.symmetric ? " · 像是对称型 NAT，可能打不通" : ""} · 网卡 ${ov.me.tun}`;
       } else {
         host.textContent = hostOf(ov.network);
         coord.textContent = `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}`;
@@ -917,6 +961,7 @@ views.settings = {
 /** NAT 情况的提醒：没问到公网地址、像是对称型 NAT */
 function natWarnings(result) {
   const lines = [];
+  if (result.mapped) return [h("p", { class: "ok-line" }, "路由器用 UPnP 为你开了端口：对方不用打洞也连得进来。")];
   if (!result.public) lines.push("没问到你的公网地址（STUN 服务器连不上）：码里只有局域网地址，只有和你在同一个局域网的人连得上。");
   if (result.symmetric) lines.push("你的路由器像是对称型 NAT：直连多半打不通。打不通的话，换官方服务器建网络。");
   return lines.map((line) => h("p", { class: "warn-line" }, line));

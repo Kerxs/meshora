@@ -17,6 +17,12 @@
  */
 const WIDE = '(min-width: 960px)'
 
+/**
+ * 触屏设备上一律不用 Glassium：它的玻璃画在页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、
+ * 比主线程快一两帧，玻璃就落在文字后面。这些设备上由 custom.css 的 CSS 毛玻璃（backdrop-filter）顶上，和滚动同步
+ */
+export const TOUCH = '(hover: none) and (pointer: coarse)'
+
 /** 选择器 → 材质；第三项是只在什么屏宽下才用玻璃 */
 const RULES: [string, Record<string, string>, string?][] = [
   ['.VPSidebar', { glass: 'frosted' }, WIDE],
@@ -50,6 +56,7 @@ let observer: MutationObserver | null = null
 
 export async function startGlass() {
   if (typeof window === 'undefined' || observer) return
+  if (window.matchMedia(TOUCH).matches) return
   const { default: glassium } = await import('glassium')
   // 玻璃后面那些写了背景的祖先（VitePress 的容器），也收进场景
   glassium.configure({ absorbForComponents: true })

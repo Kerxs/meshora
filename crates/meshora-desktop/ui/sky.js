@@ -95,9 +95,9 @@ function start(sky) {
     if (!frame && !document.hidden && !still.matches) frame = requestAnimationFrame(step);
   }
 
-  function move(event) {
-    target.x = event.clientX;
-    target.y = event.clientY;
+  function aim(x, y) {
+    target.x = x;
+    target.y = y;
     // 指针刚进来：从它所在的位置亮起，不是从角落飞过去
     if (at.on < 0.01) {
       at.x = target.x;
@@ -105,6 +105,15 @@ function start(sky) {
     }
     target.on = 1;
     kick();
+  }
+
+  const move = (event) => aim(event.clientX, event.clientY);
+
+  // 手机上手指一滑页面就开始滚动，浏览器随即停发 pointermove（先来一个 pointercancel）：
+  // 触摸事件照常一直来，跟着它走。passive，不挡滚动
+  function touch(event) {
+    const finger = event.touches[0];
+    if (finger) aim(finger.clientX, finger.clientY);
   }
 
   function leave() {
@@ -115,8 +124,11 @@ function start(sky) {
   window.addEventListener("pointermove", move, { passive: true });
   window.addEventListener("pointerdown", move, { passive: true });
   document.documentElement.addEventListener("pointerleave", leave);
+  window.addEventListener("touchstart", touch, { passive: true });
+  window.addEventListener("touchmove", touch, { passive: true });
   // 手机上手指抬起就散开
-  window.addEventListener("pointerup", (event) => event.pointerType === "touch" && leave(), { passive: true });
+  window.addEventListener("touchend", (event) => event.touches.length === 0 && leave(), { passive: true });
+  window.addEventListener("touchcancel", leave, { passive: true });
   window.addEventListener("blur", leave);
   window.addEventListener("resize", resize);
   document.addEventListener("visibilitychange", () => {

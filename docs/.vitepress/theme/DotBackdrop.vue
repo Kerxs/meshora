@@ -89,9 +89,9 @@ function kick() {
   if (!frame && !document.hidden && !still?.matches) frame = requestAnimationFrame(step)
 }
 
-function onMove(event: PointerEvent) {
-  target.x = event.clientX
-  target.y = event.clientY
+function aim(x: number, y: number) {
+  target.x = x
+  target.y = y
   if (at.on < 0.01) {
     at.x = target.x
     at.y = target.y
@@ -100,13 +100,23 @@ function onMove(event: PointerEvent) {
   kick()
 }
 
+function onMove(event: PointerEvent) {
+  aim(event.clientX, event.clientY)
+}
+
+/** 手机上一滑就开始滚动，浏览器随即停发 pointermove：跟着触摸事件走（passive，不挡滚动） */
+function onTouch(event: TouchEvent) {
+  const finger = event.touches[0]
+  if (finger) aim(finger.clientX, finger.clientY)
+}
+
+function onTouchEnd(event: TouchEvent) {
+  if (event.touches.length === 0) onLeave()
+}
+
 function onLeave() {
   target.on = 0
   kick()
-}
-
-function onUp(event: PointerEvent) {
-  if (event.pointerType === 'touch') onLeave()
 }
 
 function onVisibility() {
@@ -123,7 +133,10 @@ onMounted(() => {
   still = window.matchMedia('(prefers-reduced-motion: reduce)')
   window.addEventListener('pointermove', onMove, { passive: true })
   window.addEventListener('pointerdown', onMove, { passive: true })
-  window.addEventListener('pointerup', onUp, { passive: true })
+  window.addEventListener('touchstart', onTouch, { passive: true })
+  window.addEventListener('touchmove', onTouch, { passive: true })
+  window.addEventListener('touchend', onTouchEnd, { passive: true })
+  window.addEventListener('touchcancel', onLeave, { passive: true })
   document.documentElement.addEventListener('pointerleave', onLeave)
   window.addEventListener('blur', onLeave)
   window.addEventListener('resize', resize)
@@ -135,7 +148,10 @@ onUnmounted(() => {
   if (frame) cancelAnimationFrame(frame)
   window.removeEventListener('pointermove', onMove)
   window.removeEventListener('pointerdown', onMove)
-  window.removeEventListener('pointerup', onUp)
+  window.removeEventListener('touchstart', onTouch)
+  window.removeEventListener('touchmove', onTouch)
+  window.removeEventListener('touchend', onTouchEnd)
+  window.removeEventListener('touchcancel', onLeave)
   document.documentElement.removeEventListener('pointerleave', onLeave)
   window.removeEventListener('blur', onLeave)
   window.removeEventListener('resize', resize)
