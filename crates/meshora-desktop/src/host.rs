@@ -262,7 +262,7 @@ impl Drop for UdpMapping {
 
 /// 直连模式：请路由器把 UDP `port` 映射到这台电脑的同一个端口，交回映射和外面看到的端点。
 ///
-/// 阻塞（找路由器最多 [`UPNP_TIMEOUT`]），在 `spawn_blocking` 里调。路由器不支持、不肯开，
+/// 阻塞（找路由器最多 3 秒），在 `spawn_blocking` 里调。路由器不支持、不肯开，
 /// 或者路由器自己的公网地址是私网 / 运营商级 NAT 的（开了外面也连不进来）时是 `None`
 pub fn map_udp(port: u16) -> Option<(UdpMapping, SocketAddr)> {
     let lan = lan_ip()?;
