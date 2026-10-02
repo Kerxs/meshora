@@ -2200,7 +2200,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-android"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "meshora-desktop",
  "meshorad",
@@ -2214,7 +2214,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-control"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "base64 0.22.1",
  "ipnet",
@@ -2231,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-coord"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ipnet",
  "lexopt",
@@ -2246,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-dataplane"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ipnet",
  "meshora-types",
@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-desktop"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "base64 0.22.1",
  "igd-next",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-proto"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "meshora-types",
  "snow",
@@ -2289,7 +2289,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-relay"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "meshora-proto",
  "meshora-types",
@@ -2299,7 +2299,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-setup"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "flate2",
  "mslnk",
@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-tun"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "libc",
  "tokio",
@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-types"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "base64 0.22.1",
  "rand_core 0.6.4",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-wg"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "boringtun",
  "ipnet",
@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "meshorad"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "lexopt",
  "meshora-control",
@@ -4050,7 +4050,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-meshora-vpn"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "serde",
  "serde_json",
