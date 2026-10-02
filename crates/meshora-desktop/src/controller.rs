@@ -37,9 +37,7 @@ const ONLINE_WINDOW: Duration = Duration::from_secs(180);
 const REFRESH: Duration = Duration::from_secs(1);
 /// 停一个节点最多等多久
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
-/// 打开后多久第一次查更新：先让连接起来
-const UPDATE_FIRST_CHECK: Duration = Duration::from_secs(10);
-/// 之后隔多久查一次
+/// 打开后就查一次更新（界面查到新版本会问要不要更新），之后隔这么久再查一次
 const UPDATE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 /// 官方服务器：托管很多网络的协调服务，客户端"建网络"默认用它。`公钥@地址:端口`。
 ///
@@ -693,7 +691,6 @@ impl Controller {
 
     /// 隔一阵查一次更新（设置里关了就不查）
     async fn update_loop(&self) {
-        tokio::time::sleep(UPDATE_FIRST_CHECK).await;
         loop {
             if self.shared.state().settings.check_updates {
                 self.shared.updater.check().await;

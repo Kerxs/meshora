@@ -649,11 +649,12 @@ views.friends = {
 // ---------- 设置 ----------
 
 /** 装新版本：先问一句。Windows 上客户端会退出、装好再打开；安卓上交给浏览器下载 */
-async function applyUpdate(version) {
+async function applyUpdate(version, { found = false } = {}) {
   const ok = await confirmBox(
-    `更新到 ${version}？`,
+    found ? `发现新版本 ${version}` : `更新到 ${version}？`,
     PHONE ? "用浏览器下载新版本的安装包，下载完点开它安装。设置和私钥都留着。" : "下载、核对新版本，装好后 Meshora 会自己重新打开。连接会断开几秒，设置和私钥都留着。",
     PHONE ? "下载" : "更新",
+    { cancelLabel: found ? "以后再说" : "取消", danger: false },
   );
   if (!ok) return;
   if (!PHONE) toast("正在下载新版本…");
@@ -877,7 +878,9 @@ views.settings = {
 // ---------- 确认框 ----------
 
 /** 问一句"确定吗"。返回用户点没点确定 */
-function confirmBox(title, text, okLabel) {
+// 盖在正文上的层（确认框）不用 Glassium：它的玻璃画在页面底下，盖不住上面的字，字会透上来。
+// 框和里面的按钮都用 CSS 画（.frost、.btn.solid）
+function confirmBox(title, text, okLabel, { cancelLabel = "取消", danger = true } = {}) {
   return new Promise((resolve) => {
     const close = (answer) => {
       scrim.remove();
@@ -885,16 +888,16 @@ function confirmBox(title, text, okLabel) {
       resolve(answer);
     };
     const onKey = (event) => event.key === "Escape" && close(false);
-    const ok = h("button", { class: "btn wide danger", glass: "clear", type: "button", onclick: () => close(true) }, okLabel);
+    const ok = h("button", { class: `btn wide solid${danger ? " danger" : " primary"}`, type: "button", onclick: () => close(true) }, okLabel);
     const scrim = h(
       "div",
       { class: "modal-scrim", onclick: (event) => event.target === scrim && close(false) },
       h(
         "section",
-        { class: "dialog narrow", glass: "", "glass-corner-radius": "26", role: "alertdialog", "aria-modal": "true" },
+        { class: "dialog narrow frost", role: "alertdialog", "aria-modal": "true" },
         h("h2", {}, title),
         h("p", {}, text),
-        h("div", { class: "row center-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: () => close(false) }, "取消"), ok),
+        h("div", { class: "row center-row" }, h("button", { class: "btn solid", type: "button", onclick: () => close(false) }, cancelLabel), ok),
       ),
     );
     document.addEventListener("keydown", onKey);
@@ -1469,8 +1472,17 @@ function viewFor(ov) {
   return "start";
 }
 
+/** 打开客户端后查到新版本：问一次要不要更新。点了"以后再说"，这次运行里不再问，左上角的"可更新"还在 */
+let updateAsked = false;
+function offerUpdate(ov) {
+  if (updateAsked || ov.update?.status !== "available" || !ov.onboarded) return;
+  updateAsked = true;
+  applyUpdate(ov.update.version, { found: true });
+}
+
 function render(ov) {
   state.overview = ov;
+  offerUpdate(ov);
   document.getElementById("app").classList.toggle("solo", !ov.onboarded);
   pass.update(ov);
   const name = viewFor(ov);
