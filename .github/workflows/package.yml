@@ -4,10 +4,11 @@ name: Package
 # 带着核对过哈希和签名的 wintun.dll）和安卓客户端的 APK。只发这两个平台。
 # 另外编一份 Linux 服务端，只给官方服务器升级用，不发布。
 # 编译和 lint 在 Rust 那个工作流里已经做了，这里只管出包 —— 改到代码时、打标签时、手动触发时才跑。
-# 打 v* 标签时再建一个草稿 Release，把这些都附上
+#
+# 发版：改好 Cargo.toml 的版本推到 main，手动触发这个工作流、勾上"发版"。所有东西编完、模拟器里连网通过之后，
+# 才建一个**草稿** Release 并附上全部文件；草稿不建标签，外面什么都看不到。人核对过再点发布，
+# 标签和 Release 这时一起出现 —— 不先推标签，免得标签先露面、附件还在编
 on:
-  push:
-    tags: ["v*"]
   pull_request:
     paths:
       - "crates/**"
@@ -15,6 +16,11 @@ on:
       - "scripts/fetch-wintun.ps1"
       - ".github/workflows/package.yml"
   workflow_dispatch:
+    inputs:
+      release:
+        description: "发版：全部通过后建草稿 Release（版本号取自 Cargo.toml）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -34,19 +40,21 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install --no-self-update
 
-      # 安装程序的文件名和"应用和功能"里的版本号都取自 Cargo.toml，标签对不上就会发出一个名不副实的版本
+      # 发版时先查这个版本号没发过：忘了改 Cargo.toml 的版本，就会撞上已有的 Release
       - name: 核对版本
-        if: startsWith(github.ref, 'refs/tags/')
+        if: inputs.release
         shell: pwsh
         env:
-          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $version = ((cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json).packages |
             Where-Object name -eq 'meshora-desktop').version
-          if ("v$version" -ne $env:TAG) {
-            Write-Error "标签是 $env:TAG，Cargo.toml 里的版本是 $version：先改版本号再打标签"
+          gh release view "v$version" --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "v$version 已经有 Release 了：先改 Cargo.toml 的版本号再发"
             exit 1
           }
+          exit 0
 
       # 载荷目录：安装程序要装的全部文件。wintun.dll 核对过哈希和 WireGuard LLC 的签名
       - name: wintun.dll
@@ -145,7 +153,7 @@ jobs:
         env:
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          TAG_BUILD: ${{ startsWith(github.ref, 'refs/tags/') }}
+          TAG_BUILD: ${{ inputs.release == true }}
         run: |
           set -euo pipefail
           version=$(cargo metadata --no-deps --locked --format-version 1 |
@@ -228,10 +236,10 @@ jobs:
           path: smoke/
           if-no-files-found: ignore
 
-  # 打标签时建 Release。建成草稿：安装程序没有代码签名、发布前要有人真装一遍，由人检查过再点发布。
+  # 发版：前面全部通过才到这里，建草稿 Release（不建标签）。人核对过再发布，标签那时才出现。
   # 0.x 和带 "-" 的版本标成预发布
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: inputs.release
     needs: [desktop, server, android, android-emulator]
     runs-on: ubuntu-latest
     permissions:
@@ -243,13 +251,21 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # 版本号取自编好的安装程序的文件名（它来自 Cargo.toml）
+      - name: 版本号
+        run: |
+          setup=$(ls dist/Meshora-*-setup.exe)
+          version=${setup#dist/Meshora-}
+          version=${version%-setup.exe}
+          echo "TAG=v$version" >> "$GITHUB_ENV"
+          echo "发版 v$version"
+
       # 客户端的自动更新读它（crates/meshora-desktop/src/update.rs）。每个平台签一段
       # "meshora-update\n平台\n版本\nSHA-256"：私钥只在仓库的 Secret 里，公钥写在客户端里
       - name: 更新清单
         working-directory: dist
         env:
           KEY: ${{ secrets.MESHORA_UPDATE_KEY }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [[ -z $KEY ]]; then
@@ -284,7 +300,6 @@ jobs:
       - name: 建草稿 Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           cat > notes.md <<'EOF'
           **还在早期**：没有经过安全审查，还没在两台真的电脑之间拿真的游戏联机试过。
@@ -321,6 +336,7 @@ jobs:
           EOF
           prerelease=()
           if [[ "$TAG" == v0.* || "$TAG" == *-* ]]; then prerelease=(--prerelease); fi
+          # --target：发布时在这个提交上建标签（草稿阶段没有标签）
           gh release create "$TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --draft "${prerelease[@]}" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft "${prerelease[@]}" \
             --title "Meshora $TAG" --notes-file notes.md

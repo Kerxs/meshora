@@ -79,8 +79,9 @@ cargo test --workspace
 ### 发布（维护者）
 
 1. 改根目录 `Cargo.toml` 里的 `version`（各个 crate 都跟着它），`cargo check` 更新 `Cargo.lock`，提交推到 main
-2. 打同名标签推上去：`git tag v0.1.0 && git push origin v0.1.0`
-3. [`package.yml`](https://github.com/Kerxs/meshora/blob/main/.github/workflows/package.yml) 核对标签和版本号一致，
-   打 Windows 安装程序和安卓 APK（另外编一份 Linux 服务端只给官方服务器用，不进 Release），算 SHA-256、签更新清单，建一个**草稿** Release，
-   附上这些和 `SHA256SUMS.txt`。`v0.*` 和带 `-` 的版本标成预发布
-4. 下载草稿里的安装包，在干净的 Windows 上装一遍、连一次，再手动点发布
+2. 手动触发 [`package.yml`](https://github.com/Kerxs/meshora/blob/main/.github/workflows/package.yml)，勾上"发版"
+   （`gh workflow run package.yml --ref main -f release=true`）。**不先打标签**
+3. 它先查这个版本号没发过，再打 Windows 安装程序和安卓 APK（另外编一份 Linux 服务端只给官方服务器用，不进 Release），
+   在安卓模拟器里真的连一次网。全部通过才算 SHA-256、签更新清单，建一个**草稿** Release、附上全部文件。
+   草稿不建标签，外面看不到。`v0.*` 和带 `-` 的版本标成预发布
+4. 下载草稿里的文件核对（哈希、更新清单的签名、APK 的证书），再发布：标签和 Release 这时一起出现
