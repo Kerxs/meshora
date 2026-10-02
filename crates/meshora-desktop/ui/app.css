@@ -932,9 +932,14 @@ td.spark-cell .spark {
 }
 
 @keyframes toast {
-  0% { opacity: 0; transform: translate(-50%, 8px); }
-  12%, 80% { opacity: 1; transform: translate(-50%, 0); }
-  100% { opacity: 0; }
+  0% { opacity: 0; transform: translate(-50%, 16px) scale(0.96); }
+  9% { opacity: 1; transform: translate(-50%, -3px) scale(1.01); }
+  14%, 80% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, 0) scale(1); }
+}
+
+.toast.out {
+  animation: fade-out 160ms var(--ease) forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1373,10 +1378,203 @@ td.spark-cell .spark {
   }
 }
 
-/* 切页：新页面里的卡片依次浮上来（--i 由 app.js 按顺序写） */
+/* 切页：旧页往一边淡出（motion.js 的 swapView），新页的卡片从另一边依次滑进来、浮上来。
+ * --dir 是 1（往后翻：从右边来）或 -1（往回翻：从左边来），--i 是第几张 */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translate(calc(var(--dir, 0) * 22px), 6px);
+  }
+}
+
+@keyframes view-out {
+  to {
+    opacity: 0;
+    transform: translateX(calc(var(--dir, 0) * -22px));
+  }
+}
+
 .view.enter > * {
-  animation: rise var(--t-mid) var(--ease) both;
+  animation: rise-in var(--t-mid) var(--ease) both;
   animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+.view.leaving {
+  pointer-events: none;
+  animation: view-out 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* ---- 启动：点阵扩散（sky.js）、中间画 Logo，Logo 飞到左上角，界面浮上来（motion.js 的 intro） ---- */
+
+html.booting #app {
+  opacity: 0;
+}
+
+html.booted #app {
+  animation: fade var(--t-slow) var(--ease) both;
+}
+
+html.booted .pass > * {
+  animation: rise var(--t-slow) var(--ease) both;
+}
+
+html.booted .pass > :nth-child(2) { animation-delay: 60ms; }
+html.booted .pass > :nth-child(3) { animation-delay: 120ms; }
+html.booted .pass > :nth-child(4) { animation-delay: 180ms; }
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.intro-logo {
+  width: 96px;
+  height: 96px;
+  overflow: visible;
+  transition: transform 440ms var(--ease);
+}
+
+.intro.fly .intro-logo {
+  transform: var(--fly);
+}
+
+.intro.fade {
+  animation: fade-out 300ms var(--ease) forwards;
+}
+
+@keyframes fade-out {
+  to { opacity: 0; }
+}
+
+/* 一笔一笔画出来的 Logo（motion.js 的 drawnLogo）：节点依次弹出，连线随后画出 */
+.logo-draw .l {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 420ms var(--ease) forwards;
+  animation-delay: calc(240ms + var(--i) * 70ms);
+}
+
+.logo-draw .n {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop-node 360ms cubic-bezier(0.3, 1.5, 0.5, 1) both;
+  animation-delay: calc(var(--i) * 90ms);
+}
+
+@keyframes draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes pop-node {
+  from { opacity: 0; transform: scale(0.2); }
+}
+
+/* ---- 弹层退场：缩小、淡出（motion.js 的 closeLayer） ---- */
+
+@keyframes pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.modal-scrim.closing {
+  pointer-events: none;
+  animation: fade-out 180ms var(--ease) forwards;
+}
+
+.modal-scrim.closing .dialog {
+  animation: pop-out 180ms var(--ease) forwards;
+}
+
+/* ---- 列表：走掉的人淡出缩小，其余的从原位置滑过去（motion.js 的 flip） ---- */
+
+@keyframes leave-item {
+  to {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
+.leave-item {
+  pointer-events: none;
+  animation: leave-item 200ms var(--ease) forwards;
+}
+
+.flip-from {
+  transform: var(--flip);
+  transition: none;
+}
+
+.flip {
+  transition: transform 320ms var(--ease);
+}
+
+/* ---- 小地方 ---- */
+
+/* 复制按钮："✓ 已复制" */
+.btn.copied {
+  color: var(--good);
+}
+
+/* 状态胶囊：颜色过渡，换状态时轻轻弹一下 */
+.state {
+  transition: background-color var(--t-mid) var(--ease), color var(--t-mid) var(--ease), border-color var(--t-mid) var(--ease);
+}
+
+.state i {
+  transition: background-color var(--t-mid) var(--ease), box-shadow var(--t-mid) var(--ease);
+}
+
+.state.changed {
+  animation: chip-pop 420ms cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+@keyframes chip-pop {
+  0% { transform: scale(0.9); }
+  100% { transform: scale(1); }
+}
+
+/* "可更新"出现时弹一下 */
+.update-chip:not([hidden]) {
+  animation: chip-pop 420ms cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+
+/* 日志展开：浮上来 */
+.logs:not([hidden]) {
+  animation: rise var(--t-mid) var(--ease) both;
+}
+
+/* "建在哪"：选中的背景块滑到选中的那一项 */
+.choices {
+  position: relative;
+}
+
+.choice-glide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--h, 0);
+  transform: translateY(var(--y, 0));
+  border: 1px solid var(--brand);
+  border-radius: var(--r-field);
+  background: rgba(122, 156, 255, 0.16);
+  pointer-events: none;
+  transition: transform var(--t-mid) var(--ease), height var(--t-mid) var(--ease);
+}
+
+.choice {
+  position: relative;
+}
+
+.choice[aria-checked="true"] {
+  border-color: transparent;
+  background: transparent;
 }
 
 /* 列表里新来的一项（朋友卡片） */
@@ -1394,9 +1592,41 @@ td.spark-cell .spark {
   animation: rise var(--t-slow) var(--ease) both;
 }
 
-/* 网状图换了人、换了路：重画的那一份淡入 */
-.graph > * {
+/* 网状图：刚打开这一页时整张淡入；之后只动变了的 —— 新来的人从"我"那里飞出来、连线随后浮现，
+ * 换了路的连线重新浮现，打洞打通的那条亮一下 */
+.graph.first > * {
   animation: fade var(--t-slow) var(--ease) both;
+}
+
+.graph .peer-node.born {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: node-in 520ms cubic-bezier(0.3, 1.3, 0.5, 1) both;
+}
+
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: var(--from);
+  }
+}
+
+.graph .link-in {
+  animation: fade var(--t-slow) var(--ease) both;
+}
+
+.graph .link-in.late {
+  animation-delay: 300ms;
+}
+
+.graph .link-in.punched {
+  animation: punched 900ms var(--ease) both;
+}
+
+@keyframes punched {
+  0% { opacity: 0; stroke-width: 2.2; }
+  30% { opacity: 1; stroke-width: 6; filter: drop-shadow(0 0 6px currentColor); }
+  100% { opacity: 1; stroke-width: 2.2; }
 }
 
 /* 按钮：悬停微亮，按下轻轻一缩 */

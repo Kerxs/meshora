@@ -266,6 +266,9 @@ member mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY= 100.64.0.3
 
 ### Windows 防火墙
 
+安装程序会加一条入站规则 `Meshora`：只放行 `meshora.exe` 收 UDP（打洞、直连要用），所有网络类别都放行，卸载时删掉。
+进来的报文客户端都先认证（WireGuard 握手认公钥，控制报文用双方的公钥加密）。
+
 Windows 多半把 Meshora 的虚拟网卡归为"公用网络"。游戏第一次运行时，防火墙会问允许它在哪类网络上通信 ——
 **只勾了"专用网络"的话，朋友从 Meshora 连进来会被挡住**。两种办法：
 

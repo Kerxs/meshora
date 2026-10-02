@@ -66,10 +66,17 @@ function logo() {
   ];
   return s(
     "svg",
-    { class: "logo", viewBox: "0 0 64 64", "aria-hidden": "true" },
+    { class: "logo logo-draw", viewBox: "0 0 64 64", "aria-hidden": "true" },
     s("g", { stroke: "rgba(255,255,255,.6)", "stroke-width": 3.2, "stroke-linecap": "round" }, lines.map(([x1, y1, x2, y2], i) => nth(s("line", { class: "l", x1, y1, x2, y2, pathLength: 1 }), i))),
     nodes.map(([cx, cy, fill], i) => nth(s("circle", { class: "n", cx, cy, r: 6.5, fill }), i)),
   );
+}
+
+/** 关窗口：整页轻轻缩小、淡出，播完再关（要求减少动画时直接关） */
+function bye() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return invoke("quit");
+  document.getElementById("setup").classList.add("bye");
+  setTimeout(() => invoke("quit"), 220);
 }
 
 function glassSwitch(checked) {
@@ -98,7 +105,7 @@ let current = null;
 function titlebar() {
   const icon = (d) => s("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" }, s("path", { d, stroke: "currentColor", "stroke-width": 1.4, "stroke-linecap": "round", fill: "none" }));
   dots = h("div", { class: "dots", "aria-hidden": "true" });
-  closeBtn = h("button", { class: "tb-btn close", type: "button", title: "关闭", "aria-label": "关闭", onclick: () => !busy && invoke("quit") }, icon("M3 3l6 6M9 3l-6 6"));
+  closeBtn = h("button", { class: "tb-btn close", type: "button", title: "关闭", "aria-label": "关闭", onclick: () => !busy && bye() }, icon("M3 3l6 6M9 3l-6 6"));
   return h(
     "header",
     { class: "titlebar", "data-tauri-drag-region": "" },
@@ -218,7 +225,7 @@ function result(mark, title, sub, ...actions) {
 }
 
 function failed(message, retry) {
-  show(result(cross(), "没能做完", message, secondary("关闭", () => invoke("quit")), primary("再试一次", retry)));
+  show(result(cross(), "没能做完", message, secondary("关闭", bye), primary("再试一次", retry)));
 }
 
 // ---------- 装 ----------
@@ -308,8 +315,8 @@ async function installed(info, launch) {
       failed(String(err), () => installed(info, true));
       return;
     }
-    show(result(tick(), "装好了", "Meshora 正在打开。", primary("完成", () => invoke("quit"))));
-    setTimeout(() => invoke("quit"), 1600);
+    show(result(tick(), "装好了", "Meshora 正在打开。", primary("完成", bye)));
+    setTimeout(bye, 1600);
     return;
   }
   show(
@@ -317,7 +324,7 @@ async function installed(info, launch) {
       tick(),
       "装好了",
       "从开始菜单打开 Meshora。它要管理员权限来建虚拟网卡，打开时 Windows 会问一次。",
-      secondary("完成", () => invoke("quit")),
+      secondary("完成", bye),
       primary("打开 Meshora", () => installed(info, true)),
     ),
   );
@@ -348,7 +355,7 @@ function uninstallPage(info) {
       h(
         "div",
         { class: "actions" },
-        secondary("取消", () => invoke("quit")),
+        secondary("取消", bye),
         danger("卸载", () => work("正在卸载", "uninstall", { purge: purge.checked }, 3, 1, uninstalled)),
       ),
     ),
@@ -357,7 +364,7 @@ function uninstallPage(info) {
 
 function uninstalled() {
   step(3, 2);
-  show(result(tick(), "卸载好了", "Meshora 已经从这台电脑上拿掉了。", primary("关闭", () => invoke("quit"))));
+  show(result(tick(), "卸载好了", "Meshora 已经从这台电脑上拿掉了。", primary("关闭", bye)));
 }
 
 // ---------- 起 ----------

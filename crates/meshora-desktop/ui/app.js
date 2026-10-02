@@ -6,6 +6,7 @@
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
 import "./sky.js";
 import glassium from "./vendor/glassium/index.js";
+import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
 
 // 开关是 Glassium 的组件：它们后面的背景也要收进场景，玻璃才折射得到
 glassium.configure({ absorbForComponents: true });
@@ -67,7 +68,11 @@ function append(el, children) {
 
 let toastTimer = 0;
 function toast(text) {
-  document.querySelector(".toast")?.remove();
+  const old = document.querySelector(".toast:not(.out)");
+  if (old) {
+    old.classList.add("out");
+    setTimeout(() => old.remove(), 160);
+  }
   const el = h("div", { class: "toast", role: "status" }, text);
   document.body.append(el);
   clearTimeout(toastTimer);
@@ -75,6 +80,9 @@ function toast(text) {
 }
 
 async function copy(text, what) {
+  // 点的是按钮：按钮上闪一下"✓ 已复制"（卡片、节点这些不是按钮的，照旧只弹提示）
+  const button = document.activeElement?.closest?.("button");
+  if (button) flashCopied(button);
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -260,7 +268,14 @@ const pass = {
 
   update(ov) {
     const [cls, text] = STATES[ov.phase] || STATES.idle;
-    this.state.className = `state ${cls}`;
+    // 状态变了：胶囊轻轻弹一下（颜色本身靠 CSS 过渡）
+    if (this.stateCls !== undefined && this.stateCls !== cls) {
+      this.state.classList.remove("changed");
+      void this.state.offsetWidth;
+    }
+    const changed = this.stateCls !== undefined && this.stateCls !== cls;
+    this.stateCls = cls;
+    this.state.className = `state ${cls}${changed ? " changed" : ""}`;
     this.state.lastChild.textContent = text;
     this.version.textContent = `Meshora ${ov.version}`;
     const u = ov.update;
@@ -324,9 +339,11 @@ const pass = {
 
 /** 网状图：你在中间，朋友沿椭圆排开；经中继的线绕过中继节点。连线结构变了才重画，延迟数字就地改 */
 function meshGraph() {
-  const svg = s("svg", { class: "graph", role: "img", "aria-label": "网状图：你和网里的每个人怎么连着" });
+  const svg = s("svg", { class: "graph first", role: "img", "aria-label": "网状图：你和网里的每个人怎么连着" });
   let signature = "";
   let labels = new Map();
+  // 上一次画的时候每个人走哪条路：新来的从"我"那里飞出来，换了路的连线重新浮现，打洞打通的那条亮一下
+  let drawn = null;
 
   function draw(ov) {
     // 量 SVG 用 getBoundingClientRect：有的安卓 WebView 对 SVG 元素的 clientWidth 一直给 0，
@@ -359,13 +376,34 @@ function meshGraph() {
         s("text", { class: "node-sub", x: relay[0], y: relay[1] - 20, "text-anchor": "middle" }, "中继"),
       );
     }
+    const before = drawn;
+    drawn = new Map(peers.map((peer) => [peer.id, `${peer.online}|${peer.route}`]));
     peers.forEach((peer, i) => {
       const [x, y] = pos(i);
       const viaRelay = peer.online && peer.route === "relay";
       const stroke = !peer.online ? "rgba(255,255,255,.3)" : viaRelay ? RELAY_HEX : TONE_HEX[tone(peer)];
       const d = viaRelay ? `M${cx} ${cy}L${relay[0]} ${relay[1]}L${x} ${y}` : `M${cx} ${cy}L${x} ${y}`;
       const id = `link-${i}`;
-      nodes.push(s("path", { id, d, fill: "none", stroke, "stroke-width": 2.2, "stroke-linecap": "round", "stroke-dasharray": !peer.online ? "1 6" : viaRelay ? "6 5" : null }));
+      const was = before?.get(peer.id);
+      const now = `${peer.online}|${peer.route}`;
+      // 第一次画（刚打开这一页）整张图一起淡入，不逐个动
+      const born = before && was === undefined;
+      const changed = before && was !== undefined && was !== now;
+      const punched = changed && was.endsWith("|pending") && peer.online && peer.route === "direct";
+      const linkClass = born ? "link-in late" : punched ? "link-in punched" : changed ? "link-in" : null;
+      nodes.push(s("path", { id, class: linkClass, d, fill: "none", stroke, "stroke-width": 2.2, "stroke-linecap": "round", "stroke-dasharray": !peer.online ? "1 6" : viaRelay ? "6 5" : null }));
+      // 直连模式正在打洞：两个光点从两端往中间跑，像两边在往对方凿
+      if (!peer.online && peer.route === "pending" && ov.direct) {
+        for (const points of ["0;0.5", "1;0.5"]) {
+          nodes.push(
+            s(
+              "circle",
+              { r: 3, fill: "rgba(255,193,85,.9)" },
+              s("animateMotion", { dur: "1.4s", repeatCount: "indefinite", keyPoints: points, keyTimes: "0;1", calcMode: "linear" }, s("mpath", { href: `#${id}` })),
+            ),
+          );
+        }
+      }
       if (peer.online) {
         // 线上来回跑的小光点：有流量
         const dur = `${(1.2 + (peer.rttMs || 0) / 30).toFixed(2)}s`;
@@ -388,17 +426,20 @@ function meshGraph() {
         labels.set(peer.id, text);
       }
       const label = s("text", { class: "node-label", x, y: y + 38, "text-anchor": "middle" }, nameOf(peer));
-      nodes.push(
-        s(
-          "g",
-          { class: "peer-node", opacity: peer.online ? 1 : 0.5, onclick: () => copy(peer.ip, "地址") },
-          s("title", {}, `${nameOf(peer)} · ${peer.ip}（点一下复制地址）`),
-          s("circle", { cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: "rgba(255,255,255,.85)", "stroke-width": 2.5 }),
-          s("text", { x, y: y + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, initialOf(peer)),
-          label,
-          s("text", { class: "node-sub", x, y: y + 53, "text-anchor": "middle" }, peer.ip),
-        ),
+      const node = s(
+        "g",
+        { class: born ? "peer-node born" : "peer-node", opacity: peer.online ? 1 : 0.5, onclick: () => copy(peer.ip, "地址") },
+        s("title", {}, `${nameOf(peer)} · ${peer.ip}（点一下复制地址）`),
+        s("circle", { cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: "rgba(255,255,255,.85)", "stroke-width": 2.5 }),
+        s("text", { x, y: y + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, initialOf(peer)),
+        label,
+        s("text", { class: "node-sub", x, y: y + 53, "text-anchor": "middle" }, peer.ip),
       );
+      if (born) {
+        // 从"我"的位置飞出来
+        node.style.setProperty("--from", `translate(${(cx - x).toFixed(1)}px, ${(cy - y).toFixed(1)}px) scale(0.3)`);
+      }
+      nodes.push(node);
     });
     nodes.push(
       s("circle", { cx, cy, r: 64, fill: "url(#me-glow)" }),
@@ -408,6 +449,8 @@ function meshGraph() {
       s("text", { class: "node-sub", x: cx, y: cy + 61, "text-anchor": "middle" }, ov.me.ip),
     );
     svg.replaceChildren(...nodes);
+    // 第一次画完：之后的重画不再整张淡入，只动变了的
+    if (before === null) setTimeout(() => svg.classList.remove("first"), 600);
   }
 
   return {
@@ -625,8 +668,8 @@ views.overview = {
   update(ov) {
     this.me.update(ov);
     const online = ov.peers.filter((p) => p.online);
-    this.down.textContent = `${formatBytes(state.speed.rx)}/s`;
-    this.up.textContent = `${formatBytes(state.speed.tx)}/s`;
+    tweenText(this.down, state.speed.rx, (v) => `${formatBytes(v)}/s`);
+    tweenText(this.up, state.speed.tx, (v) => `${formatBytes(v)}/s`);
     this.paths.textContent = `${online.filter((p) => p.route === "direct").length} / ${online.filter((p) => p.route === "relay").length}`;
     this.empty.hidden = ov.peers.length > 0;
     this.invite.hidden = !ov.roster?.code;
@@ -659,9 +702,28 @@ function syncList(container, rows, peers, make) {
     row.update(peer);
     return row.el;
   });
-  for (const id of [...rows.keys()]) if (!seen.has(id)) rows.delete(id);
+  const gone = [];
+  for (const [id, row] of [...rows]) {
+    if (!seen.has(id)) {
+      rows.delete(id);
+      gone.push(row.el);
+    }
+  }
   const same = ordered.length === container.children.length && ordered.every((el, i) => container.children[i] === el);
-  if (!same) container.replaceChildren(...ordered);
+  if (same) return;
+  if (!gone.length || !container.isConnected) {
+    const settle = container.isConnected ? flip(container) : () => {};
+    container.replaceChildren(...ordered);
+    settle();
+    return;
+  }
+  // 有人走了：先让他淡出、缩小，播完再重排，其余的从原位置滑过去
+  for (const el of gone) el.classList.add("leave-item");
+  setTimeout(() => {
+    const settle = flip(container);
+    container.replaceChildren(...ordered);
+    settle();
+  }, 200);
 }
 
 // ---------- 朋友 ----------
@@ -971,7 +1033,7 @@ function natWarnings(result) {
 function sheet(title, text) {
   const body = h("div", { class: "sheet-body" });
   const close = () => {
-    scrim.remove();
+    closeLayer(scrim);
     document.removeEventListener("keydown", onKey);
   };
   const onKey = (event) => event.key === "Escape" && close();
@@ -1041,7 +1103,7 @@ async function inviteDirect() {
 function confirmBox(title, text, okLabel, { cancelLabel = "取消", danger = true } = {}) {
   return new Promise((resolve) => {
     const close = (answer) => {
-      scrim.remove();
+      closeLayer(scrim);
       document.removeEventListener("keydown", onKey);
       resolve(answer);
     };
@@ -1141,11 +1203,23 @@ function choices(options, selected, onPick) {
       h("span", {}, option.hint),
     ),
   );
+  const glide = h("span", { class: "choice-glide", "aria-hidden": "true" });
+  const place = () => {
+    const on = buttons.find((button) => button.getAttribute("aria-checked") === "true");
+    glide.hidden = !on;
+    if (!on) return;
+    glide.style.setProperty("--y", `${on.offsetTop}px`);
+    glide.style.setProperty("--h", `${on.offsetHeight}px`);
+  };
   const pick = (value) => {
     buttons.forEach((button, i) => button.setAttribute("aria-checked", String(options[i].value === value)));
+    place();
     onPick(value);
   };
-  return h("div", { class: "choices", role: "radiogroup" }, buttons);
+  const group = h("div", { class: "choices", role: "radiogroup" }, glide, buttons);
+  // 第一次量要等它进了文档、排好版
+  setTimeout(place, 0);
+  return group;
 }
 
 views.start = {
@@ -1644,6 +1718,9 @@ function shell() {
 /** 切页的动画：新页面里的卡片依次浮上来（样式在 app.css 的"动画"一节）。跑完把 class 摘掉，后面的更新不再触发 */
 function enter(view) {
   [...view.children].forEach((child, i) => child.style.setProperty("--i", String(Math.min(i, 8))));
+  // 再播一遍（启动动画走完时）：先摘掉、让浏览器认一次，再加上
+  view.classList.remove("enter");
+  void view.offsetWidth;
   view.classList.add("enter");
   setTimeout(() => view.classList.remove("enter"), 900);
   return view;
@@ -1669,6 +1746,9 @@ function offerUpdate(ov) {
   applyUpdate(ov.update.version, { found: true });
 }
 
+/** 页面的先后：往后翻时新页从右边来，往回翻时从左边来 */
+const PAGE_ORDER = ["onboarding", "start", "connecting", "failed", "overview", "friends", "admin", "settings"];
+
 function render(ov) {
   state.overview = ov;
   offerUpdate(ov);
@@ -1677,9 +1757,10 @@ function render(ov) {
   const name = viewFor(ov);
   if (name !== state.view) {
     state.current?.unmount?.();
+    const dir = PAGE_ORDER.indexOf(name) >= PAGE_ORDER.indexOf(state.view) ? 1 : -1;
     state.view = name;
     state.current = Object.create(views[name]);
-    main.replaceChildren(enter(state.current.mount(ov)));
+    swapView(main, state.current.mount(ov), dir, enter);
     main.scrollTop = 0;
   } else {
     state.current.update(ov);
@@ -1713,5 +1794,12 @@ async function act(command, args) {
 }
 
 shell();
-refresh();
+// 启动动画：第一份状态到了，Logo 飞到左上角，界面浮上来；然后当前这一页的卡片再依次浮一遍
+let firstRender;
+const ready = new Promise((resolve) => (firstRender = resolve));
+intro(ready).then(() => {
+  const view = main.firstElementChild;
+  if (view) enter(view);
+});
+refresh().then(firstRender, firstRender);
 setInterval(refresh, POLL_MS);

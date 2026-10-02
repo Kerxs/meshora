@@ -15,6 +15,10 @@ const PULL = 0.22;
 const BASE_ALPHA = 0.14;
 /** 指针跟前的点再亮多少 */
 const LIT_ALPHA = 0.7;
+/** 打开时点阵从中心一圈圈亮起：离中心每多一像素晚这么多毫秒 */
+const RIPPLE_MS_PER_PX = 0.8;
+/** 每个点从暗到亮用多久 */
+const RIPPLE_FADE = 320;
 
 const sky = document.querySelector(".sky");
 if (sky && !sky.firstElementChild) start(sky);
@@ -35,6 +39,8 @@ function start(sky) {
   const target = { x: 0, y: 0, on: 0 };
   const at = { x: 0, y: 0, on: 0 };
   let frame = 0;
+  // 打开时的扩散：从这一刻起算；窗口一开始就看不见（开机藏在托盘里）、或者要求减少动画，就不扩散
+  let born = document.hidden || still.matches ? null : performance.now();
 
   function resize() {
     ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -47,9 +53,38 @@ function start(sky) {
     draw();
   }
 
+  /** 扩散还没走到的点有多亮（0 到 1）；扩散完了是 null */
+  function rippleAt(now) {
+    if (born === null) return null;
+    const age = now - born;
+    const far = Math.hypot(width, height) / 2;
+    if (age > far * RIPPLE_MS_PER_PX + RIPPLE_FADE) {
+      born = null;
+      return null;
+    }
+    const cx = width / 2;
+    const cy = height / 2;
+    return (x, y) => Math.min(1, Math.max(0, (age - Math.hypot(x - cx, y - cy) * RIPPLE_MS_PER_PX) / RIPPLE_FADE));
+  }
+
   function draw() {
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
+    const reveal = rippleAt(performance.now());
+    if (reveal) {
+      // 扩散中：每个点按它离中心多远亮起来，正在亮的那一圈稍大一点
+      for (let y = GAP / 2; y < height; y += GAP) {
+        for (let x = GAP / 2; x < width; x += GAP) {
+          const r = reveal(x, y);
+          if (r <= 0) continue;
+          const crest = r < 1 ? Math.sin(r * Math.PI) : 0;
+          ctx.fillStyle = `rgba(${Math.round(255 - 80 * crest)}, ${Math.round(255 - 50 * crest)}, 255, ${BASE_ALPHA * r + 0.5 * crest})`;
+          const size = 1.5 + 1.6 * crest;
+          ctx.fillRect(x - size / 2, y - size / 2, size, size);
+        }
+      }
+      return;
+    }
     const strength = still.matches ? 0 : at.on;
     const reach = SIGMA * 3;
     // 离指针远的点都一样：一次画完，不逐个算
@@ -80,6 +115,12 @@ function start(sky) {
   }
 
   // 缓动到目标位置；到了就停，不空转
+  // 扩散：一直出帧直到走完。rAF 在看不见时不触发，最后用一个定时器兜底，保证点阵一定亮全
+  function ripple() {
+    draw();
+    if (born !== null && !document.hidden) requestAnimationFrame(ripple);
+  }
+
   function step() {
     frame = 0;
     const ease = 0.16;
@@ -140,4 +181,11 @@ function start(sky) {
     }
   });
   resize();
+  if (born !== null) {
+    requestAnimationFrame(ripple);
+    setTimeout(() => {
+      born = null;
+      draw();
+    }, 2500);
+  }
 }
