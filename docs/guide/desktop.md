@@ -45,7 +45,7 @@ Get-FileHash -Algorithm SHA256 .\Meshora-*-setup.exe
 - 要有 Microsoft Edge WebView2 运行时：Windows 11 自带，Windows 10 多半也有；没有时安装程序会弹窗给出下载地址
 - 安装程序还没有代码签名，SmartScreen 可能提示"未知发布者"
 
-客户端只有 Windows x64 的，没有免安装版。自己架服务器用的 Linux 服务端另外打包，见[自己架服务器](#自己架服务器)。
+客户端只有 Windows x64 和[安卓](/guide/android)的，没有免安装版，也不出 Linux 版。
 
 ## 第一次打开
 
@@ -128,31 +128,21 @@ ID 只代表这台电脑，不是密码，可以放心发。
 
 ## 自己架服务器
 
-一台有公网 IP 的 Linux 云主机就行（很小的配置就够）。它有两种跑法：
+一般用不着：默认的官方服务器谁都能用来建网络。不想依赖它的话，可以本机当主机，或者自己架一台服务器 ——
+**服务端不发布**（Release 里只有 Windows 和安卓客户端），要从源码编译：
+
+```bash
+cargo build --release -p meshora-coord -p meshorad
+```
+
+服务器要有公网 IP，对外开放 TCP 7443、UDP 7443、TCP 7444。它有两种跑法：
 
 - **托管很多网络**（`--hub`）：和官方服务器一样，谁都能用客户端在上面建网络、自己当网主。
   客户端里选"我的服务器"、填服务器地址。想让它顶替"官方服务器"那一项，把地址写进
   `%LOCALAPPDATA%\io.github.kerxs.meshora\settings.json` 的 `"officialServer"`（界面上还没有这个设置）
-- **只托管一个网络**（`--state`）：1.0.0 就有的方式。你在服务器上管成员，网络码只有一个
-
-服务端从 [Releases](https://github.com/Kerxs/meshora/releases) 下载：`meshora-server-<版本>-linux-x86_64.tar.gz`
-（ARM 的服务器用 `aarch64` 那个），里面是 `meshora-coord` 和 `meshorad`，静态链接，哪个发行版都能跑。
-别的系统从源码编译：`cargo build --release -p meshora-coord -p meshorad`。服务器要对外开放 TCP 7443、UDP 7443、TCP 7444。
+- **只托管一个网络**（`--state`）：你在服务器上管成员，网络码只有一个
 
 ### 托管很多网络
-
-仓库里有个脚本，从你的电脑上经 ssh 一步装好（要能 `sudo`）：
-
-```bash
-scripts/deploy-hub.sh root@203.0.113.5 203.0.113.5
-```
-
-它下载最新版的服务端、按 `SHA256SUMS.txt` 核对，装成 systemd 服务 `meshora-hub`（数据在 `/var/lib/meshora`，
-私钥第一次时生成），开着 ufw 的话放行端口，最后打出**服务器地址**（`公钥@203.0.113.5:7443`），填进客户端就行。
-云厂商的安全组要你自己去控制台放行。最早发布的那个 1.0.0（10 月 1 日上午，后来重新发布了）的服务端没有 `--hub`：脚本发现下到的版本不支持会停下。
-第三个参数可以是一个版本号，也可以是本地的服务端 `.tar.gz`（比如 CI 编出来的包），脚本会传上去、核对哈希再装。
-
-想手动跑的话：
 
 ```bash
 meshorad genkey coord.key
@@ -162,9 +152,11 @@ meshora-coord --key coord.key --listen 0.0.0.0:7443 \
     --hub ./networks
 ```
 
-每个网络是 `networks` 目录里的一个状态文件，重启不丢。限额默认和官方服务器一样，可以调：
-`--hub-networks-per-owner`（一个人最多建几个网络）、`--hub-members`（一个网络最多多少人）、
+启动日志里有**服务器地址**（`公钥@地址:端口`），填进客户端。每个网络是 `networks` 目录里的一个状态文件，重启不丢。
+限额默认和官方服务器一样，可以调：`--hub-networks-per-owner`（一个人最多建几个网络）、`--hub-members`（一个网络最多多少人）、
 `--hub-relay-rate`（中继给每个人的速率上限，KB/s）。中继只在同一个网络的成员之间转发。
+
+官方服务器是用 `scripts/deploy-hub.sh` 装的（systemd 服务，数据在 `/var/lib/meshora`），也可以照着它装自己的。
 
 ### 只托管一个网络
 

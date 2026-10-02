@@ -1,8 +1,8 @@
 name: Package
 
-# 出要发布的东西：Windows 桌面客户端的安装程序（自己的液态玻璃安装程序 meshora-setup，
-# 带着核对过哈希和签名的 wintun.dll），
-# 和自己架服务器用的 Linux 服务端（meshora-coord、meshorad，静态链接）。
+# 出要发布的东西：Windows 客户端的安装程序（自己的液态玻璃安装程序 meshora-setup，
+# 带着核对过哈希和签名的 wintun.dll）和安卓客户端的 APK。只发这两个平台。
+# 另外编一份 Linux 服务端，只给官方服务器升级用，不发布。
 # 编译和 lint 在 Rust 那个工作流里已经做了，这里只管出包 —— 改到代码时、打标签时、手动触发时才跑。
 # 打 v* 标签时再建一个草稿 Release，把这些都附上
 on:
@@ -81,20 +81,14 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
-  # 建网络的人要在一台有公网 IP 的服务器上跑协调服务，多半是 Linux 云主机。
-  # 用 musl 静态链接：不挑发行版、不挑 glibc 版本，解压就能跑。顺带带上命令行的节点 meshorad
+  # 官方服务器（Linux 云主机）用的服务端：协调服务 meshora-coord，带上 meshorad（生成服务器私钥用）。
+  # **不发布**：产物名不以 meshora- 开头，release job 收不到它；升级官方服务器时从这次运行的产物里下载，
+  # 交给 scripts/deploy-hub.sh。用 musl 静态链接：不挑发行版、不挑 glibc 版本
   server:
-    strategy:
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            arch: x86_64
-          - runner: ubuntu-24.04-arm
-            arch: aarch64
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TARGET: ${{ matrix.arch }}-unknown-linux-musl
+      TARGET: x86_64-unknown-linux-musl
       # 发出去的程序不带调试符号，小一半多
       CARGO_PROFILE_RELEASE_STRIP: symbols
     steps:
@@ -108,7 +102,7 @@ jobs:
         run: |
           version=$(cargo metadata --no-deps --locked --format-version 1 |
             jq -r '.packages[] | select(.name == "meshora-coord") | .version')
-          name="meshora-server-$version-linux-${{ matrix.arch }}"
+          name="meshora-server-$version-linux-x86_64"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/meshora-coord" "target/$TARGET/release/meshorad" LICENSE "dist/$name/"
           # 真的是静态的（x86_64 上 file 说的是 static-pie linked）、在这台机器上跑得起来
@@ -118,7 +112,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: meshora-linux-${{ matrix.arch }}
+          name: hub-server-linux-x86_64
           path: dist/*.tar.gz
           if-no-files-found: error
 
@@ -316,12 +310,6 @@ jobs:
           客户端每 6 小时查一次 `latest.json`（设置里可以关）。新版本的安装包有 Ed25519 签名，核对过才装：
           Windows 上点一下就装好、自动重新打开；安卓上交给浏览器下载，系统安装器会核对 APK 的签名。
 
-          ## 自己架服务器：Linux 服务端
-
-          `meshora-server-*-linux-x86_64.tar.gz`、`…-aarch64.tar.gz`：协调服务（带中继）`meshora-coord`，
-          和命令行的节点 `meshorad`。静态链接，哪个发行版都能跑。`scripts/deploy-hub.sh` 一步装好，见
-          [桌面客户端 · 自己架服务器](https://kerxs.github.io/meshora/guide/desktop#自己架服务器)。
-
           ## 核对
 
           下载后核对 SHA-256，和 `SHA256SUMS.txt` 里的对得上再用：
@@ -330,9 +318,6 @@ jobs:
           Get-FileHash -Algorithm SHA256 .\Meshora-*-setup.exe
           ```
 
-          ```bash
-          sha256sum -c SHA256SUMS.txt --ignore-missing
-          ```
           EOF
           prerelease=()
           if [[ "$TAG" == v0.* || "$TAG" == *-* ]]; then prerelease=(--prerelease); fi

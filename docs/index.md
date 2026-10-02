@@ -92,7 +92,7 @@ Meshora 1.0.0 就是后者，**而且只做这一件事**，只做 Windows。联
 | --- | --- | --- | --- | --- | --- |
 | 现在能用 | 还不能（开发中） | 能 | 能 | 能 | 能 |
 | 免费能用多少 | 开源，不设限 | 免费，不限人数 | 每个网络最多 5 台 | 10 台、1 个网络 | 最多 6 个用户 |
-| 平台 | 1.0.0 只做 Windows | 仅 Windows | Windows / Mac / Linux | 多平台 | 多平台 |
+| 平台 | Windows、安卓 | 仅 Windows | Windows / Mac / Linux | 多平台 | 多平台 |
 | 源码 | 开源（MIT） | 不开源 | 不开源 | 客户端 MPL-2.0，控制器仅限非商业 | 客户端 BSD-3 |
 | 游戏的局域网广播 | 1.0.0 目标 | 官方主打局域网游戏 | 官方未写明 | 转发（二层虚拟网络） | 不转发 |
 
@@ -121,7 +121,7 @@ Meshora 想提供的是：**开源、可以完全自建、以联机为唯一目�
 
 <HomeSection eyebrow="1.0.0" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
 
-**1.0.0 已发布：Windows 客户端的安装程序、安卓客户端的 APK 和 Linux 服务端可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，Windows 安装程序没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过、没在真手机上试过 —— 欢迎试用，把结果告诉我们。
+**1.0.0 已发布：Windows 客户端的安装程序和安卓客户端的 APK 可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，Windows 安装程序没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过、没在真手机上试过 —— 欢迎试用，把结果告诉我们。
 
 核心引擎用 Rust 写，数据面采用 WireGuard 协议（[boringtun](https://github.com/cloudflare/boringtun) 用户态实现），
 控制面自研。在 Linux 上，两台机器之间已经能经加密隧道 ping 通 ——

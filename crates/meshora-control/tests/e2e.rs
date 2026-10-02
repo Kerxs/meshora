@@ -791,6 +791,10 @@ async fn an_android_phone_joins_and_answers_a_ping() {
         }
     })
     .await;
+    if reply.is_ok() {
+        // 先别解散：安卓那边还要截网络页和设置页（scripts/android-smoke.sh），解散了它就停在"网络解散了"上
+        tokio::time::sleep(Duration::from_secs(45)).await;
+    }
     let _ = node.admin.request(AdminRequest::Delete).await;
     let reply = reply.expect("安卓没回 ping");
     assert_eq!(&reply[12..16], &phone_ip.octets());

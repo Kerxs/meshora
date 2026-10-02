@@ -2,7 +2,7 @@
 
 ## 当前状态：1.0.0 已发布，等真实环境的验证
 
-**1.0.0 已发布：Windows 客户端的安装程序、安卓客户端的 APK 和 Linux 服务端可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，Windows 安装程序没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过、没在真手机上试过 —— 欢迎试用，把结果告诉我们。
+**1.0.0 已发布：Windows 客户端的安装程序和安卓客户端的 APK 可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，Windows 安装程序没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过、没在真手机上试过 —— 欢迎试用，把结果告诉我们。
 
 在 Linux 上，两台机器之间能经加密隧道 ping 通（NAT 是模拟的）；Windows 上，守护进程和虚拟网卡在 CI 的虚拟机里实测过，
 桌面客户端在一台 Windows 11 上实测连通过。
@@ -179,7 +179,7 @@ M1 的验收（两台 **Windows** 机器）也还没做。
 | 平台 | 状态 |
 | --- | --- |
 | Windows（wintun） | 开发中 |
-| Linux（含服务器 / NAS） | 开发中 |
+| Linux | 不做客户端；服务端只给官方服务器用，不发布 |
 | macOS | 设计中 |
 | Android / iOS | 设计中 |
 | OpenWrt | 设计中 |

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# 把托管很多网络的协调服务（客户端里的"官方服务器"，也可以是你自己的）装到一台 Linux 服务器上。
+# 把托管很多网络的协调服务（客户端里的"官方服务器"）装到一台 Linux x86_64 服务器上。
 #
-#   scripts/deploy-hub.sh <用户@服务器> <服务器公网 IP> [版本，默认最新 | 本地的服务端 .tar.gz]
+#   scripts/deploy-hub.sh <用户@服务器> <服务器公网 IP> <服务端 .tar.gz>
+#
+# 服务端不发布（Release 里只有 Windows 和安卓客户端）：.tar.gz 是 CI 编的，在 package.yml 那次运行的
+# 产物 hub-server-linux-x86_64 里，用 gh run download <运行编号> --name hub-server-linux-x86_64 下载。
 #
 # 在服务器上（经 ssh，要能 sudo；要密码的话会在终端里问）：
-#   1. 从 GitHub Releases 下载对应架构的服务端，按 SHA256SUMS.txt 核对；
-#      第三个参数是本地文件时（比如 CI 编出来、还没发版的包），把它传上去，按本地算的 SHA-256 核对
+#   1. 把包传上去，按本地算的 SHA-256 核对
 #   2. 装到 /usr/local/bin，建系统用户 meshora，数据放 /var/lib/meshora（私钥第一次时生成）
 #   3. 装 systemd 服务 meshora-hub.service（--hub /var/lib/meshora，同进程带中继），开机自启
 #   4. 打出服务器地址：填进客户端设置里的"官方服务器"或"我的服务器"
@@ -14,13 +16,13 @@
 # 云厂商的安全组要你自己去控制台放行。
 set -euo pipefail
 
-if [[ $# -lt 2 ]]; then
-  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+if [[ $# -lt 3 || ! -f $3 ]]; then
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 fi
 target=$1
 public=$2
-version=${3:-latest}
+version=$3
 
 # 服务器上要跑的那一段先传上去再跑：sudo 要密码时得有终端（ssh -t），标准输入就不能拿来传脚本
 remote=$(cat <<'REMOTE'
@@ -28,38 +30,20 @@ set -euo pipefail
 public=$1
 version=$2
 expected=${3:-}
-repo=Kerxs/meshora
 
 case "$(uname -m)" in
   x86_64 | amd64) arch=x86_64 ;;
-  aarch64 | arm64) arch=aarch64 ;;
-  *) echo "不支持的架构：$(uname -m)（只有 x86_64 和 aarch64 的包）" >&2; exit 1 ;;
+  *) echo "不支持的架构：$(uname -m)（只编了 x86_64 的服务端）" >&2; exit 1 ;;
 esac
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-if [[ $version == upload:* ]]; then
-  # 本地传上来的包：按本地算的哈希核对，传的过程中没坏、没被换
-  package=${version#upload:}
-  echo "$expected  $package" | sha256sum -c -
-  tar -xzf "$package" -C "$work"
-  rm -f "$package"
-  tag="（传上来的包）"
-else
-  if [[ $version == latest ]]; then
-    tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | grep -m1 '"tag_name"' | cut -d'"' -f4)
-  else
-    tag=v${version#v}
-  fi
-  file="meshora-server-${tag#v}-linux-$arch.tar.gz"
-  base="https://github.com/$repo/releases/download/$tag"
-  echo "==> 下载 $file（$tag）"
-  curl -fsSL -o "$work/$file" "$base/$file"
-  curl -fsSL -o "$work/SHA256SUMS.txt" "$base/SHA256SUMS.txt"
-  # 只核对这一个文件；SHA256SUMS.txt 里没有它也算失败
-  (cd "$work" && grep " $file\$" SHA256SUMS.txt | sha256sum -c -)
-  tar -xzf "$work/$file" -C "$work"
-fi
+# 传上来的包：按本地算的哈希核对，传的过程中没坏、没被换
+package=${version#upload:}
+echo "$expected  $package" | sha256sum -c -
+tar -xzf "$package" -C "$work"
+rm -f "$package"
+tag="（传上来的包）"
 dirs=("$work"/meshora-server-*-linux-"$arch")
 if [[ ! -x ${dirs[0]}/meshora-coord ]]; then
   echo "包里没有 $arch 的 meshora-coord：架构对不上？" >&2
@@ -136,12 +120,9 @@ REMOTE
 )
 
 script=/tmp/meshora-deploy-$$.sh
-expected=
-if [[ -f $version ]]; then
-  expected=$( (sha256sum "$version" 2>/dev/null || shasum -a 256 "$version") | cut -d' ' -f1)
-  echo "==> 上传 $(basename "$version")（SHA-256 $expected）"
-  scp -q "$version" "$target:/tmp/meshora-server-$$.tar.gz"
-  version="upload:/tmp/meshora-server-$$.tar.gz"
-fi
+expected=$( (sha256sum "$version" 2>/dev/null || shasum -a 256 "$version") | cut -d' ' -f1)
+echo "==> 上传 $(basename "$version")（SHA-256 $expected）"
+scp -q "$version" "$target:/tmp/meshora-server-$$.tar.gz"
+version="upload:/tmp/meshora-server-$$.tar.gz"
 ssh "$target" "cat > $script" <<<"$remote"
 ssh -t "$target" "sudo bash $script '$public' '$version' '$expected'; status=\$?; rm -f $script; exit \$status"
