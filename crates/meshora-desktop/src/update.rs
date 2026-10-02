@@ -177,6 +177,8 @@ pub fn check() -> Result<Option<Available>, String> {
     evaluate(&manifest, CURRENT, PLATFORM, PUBLIC_KEY)
 }
 
+/// 只有 Windows 的下载要它（安卓交给浏览器下载，系统核对签名）
+#[cfg(any(windows, test))]
 fn sha256_hex(data: &[u8]) -> String {
     ring::digest::digest(&ring::digest::SHA256, data)
         .as_ref()

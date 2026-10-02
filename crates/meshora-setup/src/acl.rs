@@ -190,8 +190,12 @@ fn icacls(dir: &Path, args: &[&str]) -> Result<(), String> {
     }
 }
 
-/// 收紧安装目录：所有者改成管理员组，去掉继承来的权限，只给管理员、SYSTEM 完全控制，普通用户只读和执行。
-/// 里面的文件跟着继承。改完读回来核对一遍。SID 写成 `*S-1-…`：不受系统语言影响
+/// 收紧后只留这几个：管理员组、SYSTEM 完全控制，Users 只读和执行
+const KEEP: [&str; 3] = ["S-1-5-32-544", "S-1-5-18", "S-1-5-32-545"];
+
+/// 收紧安装目录：所有者改成管理员组，去掉继承来的权限，只给管理员、SYSTEM 完全控制，普通用户只读和执行；
+/// 别的账户单独的条目（比如装的那个管理员账户自己的 —— 它没提权时也能用）一律删掉。里面已有的文件重置成
+/// 跟着目录继承。改完连里面的文件一起读回来核对。SID 写成 `*S-1-…`：不受系统语言影响
 pub fn lock_down(dir: &Path) -> Result<(), String> {
     icacls(dir, &["/setowner", "*S-1-5-32-544", "/C", "/Q"])?;
     icacls(
@@ -206,8 +210,31 @@ pub fn lock_down(dir: &Path) -> Result<(), String> {
             "/Q",
         ],
     )?;
-    if let Some(why) = weakness(&read(dir)?, false) {
-        return Err(format!("收紧 {} 的权限之后还是不对：{why}", dir.display()));
+    let mut stray: Vec<String> = read(dir)?
+        .allowed
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ace| ace.sid)
+        .filter(|sid| !KEEP.contains(&sid.as_str()))
+        .collect();
+    stray.sort();
+    stray.dedup();
+    for sid in stray {
+        icacls(dir, &["/remove:g", &format!("*{sid}"), "/C", "/Q"])?;
+    }
+    let children: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|err| format!("读不了 {}：{err}", dir.display()))?
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    for child in &children {
+        icacls(child, &["/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"])?;
+        icacls(child, &["/reset", "/T", "/C", "/Q"])?;
+    }
+    for path in std::iter::once(dir).chain(children.iter().map(PathBuf::as_path)) {
+        if let Some(why) = weakness(&read(path)?, false) {
+            return Err(format!("收紧 {} 的权限之后还是不对：{why}", path.display()));
+        }
     }
     Ok(())
 }
