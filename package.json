@@ -9,13 +9,13 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
-  "dependencies": {
-    "@paper-design/shaders": "0.0.81"
-  },
   "devDependencies": {
     "vitepress": "^1.6.4"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "glassium": "1.0.0"
   }
 }

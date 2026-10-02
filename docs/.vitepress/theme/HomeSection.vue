@@ -22,7 +22,7 @@ defineProps<{
 </script>
 
 <template>
-  <section class="home-section">
+  <section class="home-section" glass="">
     <p v-if="eyebrow" class="home-section__eyebrow">{{ eyebrow }}</p>
     <h2 class="home-section__title">{{ title }}</h2>
 
@@ -45,11 +45,7 @@ defineProps<{
 .home-section {
   margin: 28px 0;
   padding: clamp(22px, 3.4vw, 38px);
-  border-radius: 16px;
-  border: 1px solid var(--meshora-glass-border);
-  background: var(--meshora-glass-bg);
-  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+  border-radius: 26px;
 }
 
 .home-section__eyebrow {
@@ -100,16 +96,6 @@ defineProps<{
 .home-section__more:hover {
   gap: 10px;
   text-decoration-color: currentColor;
-}
-
-/*
-  不支持 backdrop-filter 时退回更不透明的底色。
-  否则会变成「半透明面板直接压在流动的流体上」，文字完全没法读。
-*/
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .home-section {
-    background: var(--meshora-glass-bg-solid);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

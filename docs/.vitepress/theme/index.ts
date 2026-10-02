@@ -15,6 +15,9 @@ import {
   teardownReveal,
   updateScrollbarWidth
 } from './reveal'
+import { startGlass } from './glass'
+// Glassium 的兜底样式：水合之前、没有 GPU 时，玻璃元素有一层看得清的表面
+import 'glassium/glassium.css'
 import './custom.css'
 
 /**
@@ -55,6 +58,7 @@ export default {
     const route = useRoute()
 
     onMounted(() => {
+      startGlass()
       markHome(route.path === '/')
       enableEntranceAnimations()
       setupReveal()

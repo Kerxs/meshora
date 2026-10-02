@@ -8,83 +8,37 @@
   --vp-font-family-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular,
     "Cascadia Code", Consolas, monospace;
 
-  --vp-c-brand-1: #24508f;
-  --vp-c-brand-2: #2e58a4;
-  --vp-c-brand-3: #4a7bc8;
-  --vp-c-brand-soft: rgba(46, 88, 164, 0.14);
-
   --meshora-ease: cubic-bezier(0.22, 0.8, 0.3, 1);
   --meshora-dur: 620ms;
-
-  /* ---- 毛玻璃令牌：文档页 · 浅色 ---- */
-  --meshora-glass-bg: rgba(255, 255, 255, 0.6);
-  --meshora-glass-bg-soft: rgba(255, 255, 255, 0.44);
-  --meshora-glass-bg-solid: rgba(255, 255, 255, 0.95); /* @supports 回退用 */
-  --meshora-glass-border: rgba(15, 30, 40, 0.1);
-  --meshora-glass-blur: 14px;
-  --meshora-on-glass: var(--vp-c-text-1);
-  --meshora-on-glass-dim: var(--vp-c-text-2);
-
-  /*
-    覆盖层：决定流体透出多少。
-    文档页要厚 —— 长文阅读容不得背景在底下晃。
-  */
-  --meshora-scrim: rgba(255, 255, 255, 0.9);
-}
-
-.dark {
-  --vp-c-brand-1: #8ab4e8;
-  --vp-c-brand-2: #a9c9f0;
-  --vp-c-brand-3: #3c6bb5;
-  --vp-c-brand-soft: rgba(138, 180, 232, 0.16);
-
-  --meshora-glass-bg: rgba(22, 30, 35, 0.56);
-  --meshora-glass-bg-soft: rgba(22, 30, 35, 0.4);
-  --meshora-glass-bg-solid: rgba(18, 25, 29, 0.96);
-  --meshora-glass-border: rgba(255, 255, 255, 0.1);
-
-  --meshora-scrim: rgba(11, 17, 20, 0.9);
 }
 
 /*
-  首页：流体清晰可见，整页恒为深色（明暗主题都是），文字恒为浅色。
-  :has() 让服务端渲染出来就是对的，不会在水合后闪一下；
-  .is-home 是 index.ts 给不支持 :has() 的浏览器留的兜底。
-  两条必须分开写 —— 写成选择器列表的话，不支持 :has() 的浏览器会把整条规则丢掉。
+  全站深色（config.mts 里 appearance: 'force-dark'），配色和 Meshora 客户端同一套：
+  深蓝的底、彩色的流体光，液态玻璃（Glassium）浮在上面。
 */
-:root:has(.VPHome) {
-  /*
-    这两个值是算出来的，不是调出来的。流体最亮处是 #AED5F3，实测：
-      遮罩 0.3 + 白色调玻璃 0.07 → hero 文字 3.01、面板白字 2.75（远不够）
-      遮罩 0.5 + 深色调玻璃 0.25 → hero 文字 5.18、面板白字 7.45（过 AA）
-    关键是玻璃底色要用**深色调**：深色设计里用白色调等于没压住流体的亮区，
-    那时连纯白文字都只有 3.67。
-  */
-  --meshora-scrim: rgba(4, 10, 20, 0.5);
-  --meshora-glass-bg: rgba(6, 14, 26, 0.25);
-  --meshora-glass-bg-soft: rgba(6, 14, 26, 0.18);
-  --meshora-glass-bg-solid: rgba(10, 18, 28, 0.92);
+.dark {
+  --vp-c-bg: #0a1030;
+  --vp-c-bg-alt: rgba(255, 255, 255, 0.04);
+  --vp-c-bg-soft: rgba(255, 255, 255, 0.06);
+  --vp-c-bg-elv: #141b45;
+  --vp-c-text-1: #f2f5ff;
+  --vp-c-text-2: rgba(232, 238, 255, 0.76);
+  --vp-c-text-3: rgba(232, 238, 255, 0.52);
+  --vp-c-divider: rgba(255, 255, 255, 0.14);
+  --vp-c-gutter: rgba(255, 255, 255, 0.1);
+  --vp-c-brand-1: #9cb6ff;
+  --vp-c-brand-2: #b8caff;
+  --vp-c-brand-3: #3d6bff;
+  --vp-c-brand-soft: rgba(122, 156, 255, 0.18);
+
+  /* 不在 Glassium 玻璃上的那些小面板（表格、标签）用的半透明底 */
+  --meshora-glass-bg: rgba(10, 16, 48, 0.32);
+  --meshora-glass-bg-soft: rgba(255, 255, 255, 0.05);
+  --meshora-glass-bg-solid: rgba(14, 20, 56, 0.94);
   --meshora-glass-border: rgba(255, 255, 255, 0.14);
   --meshora-glass-blur: 18px;
   --meshora-on-glass: #ffffff;
-  --meshora-on-glass-dim: rgba(255, 255, 255, 0.72);
-}
-:root.is-home {
-  /*
-    这两个值是算出来的，不是调出来的。流体最亮处是 #AED5F3，实测：
-      遮罩 0.3 + 白色调玻璃 0.07 → hero 文字 3.01、面板白字 2.75（远不够）
-      遮罩 0.5 + 深色调玻璃 0.25 → hero 文字 5.18、面板白字 7.45（过 AA）
-    关键是玻璃底色要用**深色调**：深色设计里用白色调等于没压住流体的亮区，
-    那时连纯白文字都只有 3.67。
-  */
-  --meshora-scrim: rgba(4, 10, 20, 0.5);
-  --meshora-glass-bg: rgba(6, 14, 26, 0.25);
-  --meshora-glass-bg-soft: rgba(6, 14, 26, 0.18);
-  --meshora-glass-bg-solid: rgba(10, 18, 28, 0.92);
-  --meshora-glass-border: rgba(255, 255, 255, 0.14);
-  --meshora-glass-blur: 18px;
-  --meshora-on-glass: #ffffff;
-  --meshora-on-glass-dim: rgba(255, 255, 255, 0.72);
+  --meshora-on-glass-dim: rgba(255, 255, 255, 0.74);
 }
 
 /* ------------------------------------------------------------------
@@ -96,7 +50,7 @@
    ------------------------------------------------------------------ */
 
 html {
-  background-color: var(--vp-c-bg);
+  background-color: #0a1030;
 }
 
 body,
@@ -114,37 +68,78 @@ body,
   --vp-local-nav-bg-color: transparent;
 }
 
-.VPNavBar:not(.top) {
-  background-color: var(--meshora-glass-bg);
-  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(150%);
-  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(150%);
-}
-
-.VPSidebar {
-  background-color: var(--meshora-glass-bg-soft);
-  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-}
-
-.VPLocalNav {
-  background-color: var(--meshora-glass-bg);
-  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
+/*
+  导航栏、侧边栏、局部导航、能力卡片、按钮、代码块、提示框、首页区块是 Glassium 的玻璃（theme/glass.ts 标上的）。
+  玻璃画在它们后面的画布上：它们自己的背景必须透明，不然会把玻璃盖住。
+  没有 GPU 时 Glassium 自己退成 CSS 的毛玻璃（glassium.css），不用这里兜底
+*/
+.VPNavBar .content-body,
+.VPNavBar .divider,
+.VPSidebar,
+.VPHome .VPFeature,
+.vp-doc div[class*="language-"],
+.vp-doc .custom-block,
+.VPDocAsideOutline {
+  background-color: transparent !important;
 }
 
 /*
-  不支持 backdrop-filter 时，所有玻璃面板退回更不透明的底色。
-  否则会变成「半透明面板直接压在流动的流体上」，文字完全没法读。
+  顶部导航、手机上的局部导航浮在滚动的正文上面：Glassium 的玻璃画在页面底下，盖不住它们下面的字，
+  所以这两个用 CSS 毛玻璃，底色够深，压得住正文
 */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .VPNavBar:not(.top),
-  .VPSidebar,
-  .VPLocalNav,
-  .VPHome .VPFeature,
-  .vp-doc div[class*="language-"],
-  .vp-doc .custom-block {
-    background-color: var(--meshora-glass-bg-solid);
+.VPNavBar,
+.VPLocalNav {
+  background-color: rgba(10, 16, 48, 0.72) !important;
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.VPNavBar.top.home {
+  background-color: transparent !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom-color: transparent;
+}
+
+/*
+  文档页：长文下面的光不能太亮，整体压暗一半（首页保持原样）。
+  Glassium 跟着元素的不透明度走，玻璃折射出来的也一起变暗。
+  :has() 让服务端渲染出来就对；.is-home 是 index.ts 给不支持 :has() 的浏览器的兜底
+*/
+:root:not(:has(.VPHome)):not(.is-home) .mesh-sky .flow {
+  opacity: 0.45;
+}
+
+/* 文档正文的玻璃面板 */
+.VPDoc .content-container {
+  padding: 36px 44px 48px;
+  border-radius: 26px;
+}
+
+@media (max-width: 768px) {
+  .VPDoc .content-container {
+    padding: 24px 20px 32px;
+    border-radius: 20px;
   }
+}
+
+/* 侧边栏、大纲：和卡片一样的圆角，离边缘留点空 */
+.VPSidebar {
+  border-radius: 0 22px 22px 0;
+}
+
+.VPDocAsideOutline {
+  border-radius: 18px;
+  padding: 12px 16px !important;
+}
+
+.vp-doc div[class*="language-"] {
+  border-radius: 14px !important;
+}
+
+.vp-doc .custom-block {
+  border-radius: 16px;
 }
 
 /* ------------------------------------------------------------------
@@ -240,25 +235,15 @@ body,
 .VPHome .VPHero .actions .VPButton:hover {
   transform: translateY(-1px);
 }
-.VPHome .VPHero .actions .VPButton.alt {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.26);
-  color: #fff;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+/* 按钮是 Glassium 的玻璃胶囊（brand 带蓝色调）：自己不画底和边 */
+.VPButton.alt,
+.VPButton.brand {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: #fff !important;
 }
-.VPHome .VPHero .actions .VPButton.alt:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.4);
-}
-.VPHome .VPHero .actions .VPButton.brand {
-  background: #fff;
-  border-color: #fff;
-  color: #14213d;
-}
-.VPHome .VPHero .actions .VPButton.brand:hover {
-  background: rgba(255, 255, 255, 0.88);
-  border-color: rgba(255, 255, 255, 0.88);
+.VPHome .VPHero .actions .VPButton:active {
+  transform: scale(0.97);
 }
 
 /* ------------------------------------------------------------------
@@ -421,17 +406,12 @@ body,
 }
 
 .VPHome .VPFeature {
-  border-color: var(--meshora-glass-border);
-  background: var(--meshora-glass-bg);
-  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  transition: border-color 0.18s, transform 0.18s, box-shadow 0.18s, background-color 0.18s;
+  border: 0;
+  border-radius: 22px;
+  transition: transform 0.24s var(--meshora-ease);
 }
 .VPHome .VPFeature:hover {
-  border-color: var(--vp-c-brand-1);
-  background: var(--meshora-glass-bg-soft);
   transform: translateY(-3px);
-  box-shadow: 0 12px 30px -16px rgba(0, 0, 0, 0.55);
 }
 
 .VPHome .VPFeature .box {
@@ -482,9 +462,23 @@ body,
   margin: 26px 0;
 }
 
+/* 窄屏上表格（比如首页 6 列的对比表）在自己的框里左右滑，不撑宽整页 */
+@media (max-width: 767px) {
+  .vp-doc table {
+    display: block !important;
+    width: auto !important;
+    overflow-x: auto;
+  }
+}
+
+@media (min-width: 768px) {
+  .vp-doc table {
+    display: table;
+    width: 100%;
+  }
+}
+
 .vp-doc table {
-  display: table;
-  width: 100%;
   margin: 28px 0;
   background: var(--meshora-glass-bg-soft);
   border-radius: 10px;
@@ -510,17 +504,7 @@ body,
    文档页的玻璃只用在「容器」上：代码块、提示框、表格。
    **正文段落底下一律不加模糊** —— 长文本下面有东西在动，字会发虚。
 */
-.vp-doc div[class*="language-"] {
-  background-color: var(--meshora-glass-bg);
-  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  border: 1px solid var(--meshora-glass-border);
-}
-
-.vp-doc .custom-block {
-  backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--meshora-glass-blur)) saturate(140%);
-}
+/* 代码块、提示框是 Glassium 的玻璃（theme/glass.ts） */
 
 /* 路线图 / 状态标记 */
 .status-tag {

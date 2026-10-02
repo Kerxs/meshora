@@ -1,7 +1,7 @@
 <template>
   <p class="status-chip">
     <span class="pulse" />
-    Pre-alpha · 开发中，暂无可用版本
+    1.0.1 已发布 · Windows 和安卓 · 刚发布，还没在真实环境里验证过
   </p>
 </template>
 

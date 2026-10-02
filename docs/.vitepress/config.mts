@@ -62,13 +62,16 @@ export default defineConfig({
       rel: 'stylesheet',
       href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap'
     }],
-    ['meta', { name: 'theme-color', content: '#0E5C63' }],
+    ['meta', { name: 'theme-color', content: '#0a1030' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'Meshora' }],
     ['meta', { property: 'og:title', content: 'Meshora — 异地好友，同一个局域网' }],
-    ['meta', { property: 'og:description', content: '开源的局域网游戏联机工具。1.0.0 只做 Windows 上的局域网联机，目前在开发中，暂无可用版本。' }],
+    ['meta', { property: 'og:description', content: '开源的局域网游戏联机工具：在客户端里点一下建网络，把网络码发给朋友，隔着城市也能用局域网模式一起玩。Windows 和安卓。' }],
     ['meta', { property: 'og:url', content: SITE }]
   ],
+
+  // 和 Meshora 客户端一样：深色的品牌底，彩色的流体光，液态玻璃浮在上面
+  appearance: 'force-dark',
 
   themeConfig: {
     logo: undefined,
@@ -76,7 +79,7 @@ export default defineConfig({
 
     nav: [
       { text: '指南', link: '/guide/what-is-meshora', activeMatch: '/guide/' },
-      { text: '1.0.0 联机', link: '/guide/lan-play' },
+      { text: '局域网联机', link: '/guide/lan-play' },
       { text: '架构', link: '/guide/architecture' },
       { text: '路线图', link: '/guide/roadmap' },
       { text: '参与', link: '/guide/contributing' }
@@ -88,7 +91,7 @@ export default defineConfig({
           text: '认识 Meshora',
           items: [
             { text: '它解决什么问题', link: '/guide/what-is-meshora' },
-            { text: '局域网联机：1.0.0 做什么', link: '/guide/lan-play' },
+            { text: '局域网联机：做什么', link: '/guide/lan-play' },
             { text: 'Windows 客户端', link: '/guide/desktop' },
             { text: '安卓客户端', link: '/guide/android' },
             { text: '核心概念', link: '/guide/concepts' }

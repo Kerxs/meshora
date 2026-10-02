@@ -2,48 +2,49 @@
 
 **异地好友，同一个局域网。**
 
-一个开源的局域网游戏联机工具：让不在一处的朋友，能用只支持局域网的游戏模式一起玩。
-能打洞就直连，打不通就走中继，全程加密；协调服务和中继可以完全自建。
+开源的局域网游戏联机工具：在客户端里点一下建网络，把网络码发给朋友，朋友贴进来就加入 ——
+只支持局域网联机的游戏，隔着城市也能开房间。能打洞就直连，打不通就走中继，全程加密。
 
-**1.0.0 只做这一件事，客户端有 Windows 和安卓。** 通用组网、网络出口、按应用分流都排在 1.0 之后。
+**[下载最新版](https://github.com/Kerxs/meshora/releases/latest)**（Windows 安装程序、安卓 APK）·
+[官网与文档](https://kerxs.github.io/meshora) ·
+[Windows 客户端](https://kerxs.github.io/meshora/guide/desktop) ·
+[安卓客户端](https://kerxs.github.io/meshora/guide/android)
 
-官网与设计文档：<https://kerxs.github.io/meshora>
+> **刚发布，还没在真实环境里验证过。** 还没在两台真的电脑之间拿真的游戏联机过、没在真手机上试过、
+> 没经过安全审查，Windows 安装程序也没有代码签名（SmartScreen 会提示"未知发布者"）。欢迎试用，把结果告诉我们。
 
----
+## 能做什么
 
-## 先说清楚仓库里现在有什么
+- **点一下就建好网络**：默认放在官方服务器上，朋友在哪都连得进来；也可以本机当主机（Windows，UPnP），或者用自己的服务器
+- **房间列表里直接看见**：游戏找房间用的广播、组播转发给网里的每个人
+- **能直连就直连，打不通走中继**：中继只转发加密过的报文；直连断了两三秒内切到中继，换网络不用重连
+- **网主管理**：看成员、移出、换网络码、发一次性或 24 小时的网络码、改名、解散
+- **电脑和手机在同一个网里**：Windows 和安卓是同一个客户端、同一套液态玻璃界面（[Glassium](https://github.com/Kerxs/glassium)）
+- **自动更新**：新版本有 Ed25519 签名，核对过才装；Windows 上点一下就更新好
 
-**1.0.0 已发布：Windows 客户端的安装程序和安卓客户端的 APK 可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。** 但还没经过安全审查，Windows 安装程序没有代码签名，也还没在两台真的电脑之间拿真的游戏验证过、没在真手机上试过 —— 欢迎试用，把结果告诉我们。
+只做局域网游戏联机。通用组网、网络出口、按应用分流都排在 [1.0 之后](https://kerxs.github.io/meshora/guide/roadmap#_1-0-之后)。
+客户端只有 Windows 和安卓。
 
-这个仓库目前有三样东西：
+## 现在做到哪了
 
-- **`docs/`** —— 官网和设计文档的源码（VitePress）。
-- **`crates/`** —— Rust 代码：节点守护进程 `meshorad`、协调服务 `meshora-coord`（可顺带跑中继），
-  以及它们用到的数据面（基于 boringtun）、控制面、虚拟网卡、线协议。
-  **在 Linux 上，两台机器之间能经加密隧道 ping 通**：同一网段直连、两边各在一个 NAT 后面打洞直连、
-  打不通时经中继，都验证过（NAT 是用 Linux 模拟的）。**Windows 上**，守护进程和 wintun 虚拟网卡在
-  CI 的 Windows 虚拟机里实测过：和同一台机器上的另一个节点经加密隧道收发报文，直连和经中继都通。
-  还有 Windows 的**桌面客户端** `meshora-desktop`（Tauri）和安卓客户端 `meshora-android`：在客户端里建网络、
-  贴网络码加入、当网主管理，见
-  [桌面客户端](https://kerxs.github.io/meshora/guide/desktop)。它和 `meshorad` 用同一套节点代码。
-- **仓库元文件** —— 许可证、贡献指南、安全策略。
+| | 状态 |
+| --- | --- |
+| 建网络、凭网络码加入、网主管理 | 已发布 |
+| 打洞直连、打不通走中继、断了自动切 | 已发布：模拟的 NAT 里测过；安卓模拟器每次打包都经官方服务器真的连一次网 |
+| 游戏的广播、组播转发 | 已发布：一台 Windows 上实测转发过，还没拿真的游戏验证 |
+| Windows 客户端、安装程序、自动更新 | 已发布：一台 Windows 11 上实测连通过 |
+| 安卓客户端 | 已发布：CI 的模拟器里连通过，还没在真手机上试过 |
+| 两台真的电脑之间拿真的游戏联机 | **还没做** |
+| 安全审查、Windows 代码签名 | **还没做** |
 
-还差的：**没在两台真的 Windows 机器之间试过**（M1 的目标）；**没在真实网络里测过打洞**（家用路由器、运营商的 NAT）；
-**没经过任何安全审查**。
 [路线图](https://kerxs.github.io/meshora/guide/roadmap)里每一项的状态都是真实的。
 
-先做官网是因为这个阶段最需要的是把设计讲清楚并收到反馈 —— 方向错了，代码写得再多也是白写。
-
-## 打算怎么造
-
-理解技术选型只需要先接受一个事实：
+## 怎么造的
 
 > WireGuard 本身不做节点发现、不做 NAT 穿透、不做中继、不做选路。
 > 它只负责"两个已知 endpoint 之间的加密隧道"。
 >
-> **Meshora 要自研的控制面，恰好就是这些 WireGuard 不管的部分。**
-
-所以系统分成界限清晰的两层：
+> **Meshora 自研的控制面，恰好就是这些 WireGuard 不管的部分。**
 
 ```text
                   控制面（自研）
@@ -55,7 +56,7 @@
       │  Node A  │              │  Node B  │
       │          │◀── P2P 直连 ─▶│          │
       │ boringtun│              │boringtun │
-      │  wintun  │              │  wintun  │
+      │  虚拟网卡 │              │ 虚拟网卡  │
       └────┬─────┘              └─────┬────┘
            │                          │
            └────▶  Relay（转发密文）◀──┘
@@ -67,31 +68,25 @@
 | 数据面 | WireGuard 协议，boringtun 用户态实现 | **不自己写密码学**，直接继承 WireGuard 的安全分析结论 |
 | 控制面 | 自研 | 这些能力 WireGuard 不提供，只能自己造 |
 | 语言 | Rust | 内存安全、无 GC 停顿、交叉编译成熟，boringtun 本身也是 Rust |
-| 首个平台 | Windows（wintun） | 开发机是它，且最难的分应用分流在 Windows 上 |
+| 客户端 | Tauri 2 + [Glassium](https://github.com/Kerxs/glassium) 液态玻璃界面 | Windows 用 wintun 网卡，安卓用系统的 VpnService；节点代码同一套 |
 
 中继转发的是**已加密的报文**，读不到明文也改不了内容 —— 它不是一个需要被信任的节点。
-但它能看到元数据（谁和谁通信、何时、多大流量），这一点文档里不回避。
+但它能看到元数据（谁和谁通信、何时、多大流量），[威胁模型](https://kerxs.github.io/meshora/guide/threat-model)不回避这一点。
 
-## 1.0.0 做什么
+仓库里：
 
-联机要过四关：
-
-| | 要做到什么 | 现在 |
-| --- | --- | --- |
-| 局域网地址 | 每个节点从 `100.64.0.0/10` 分到一个 overlay 地址，经虚拟网卡（Windows 上是 wintun）收发 | M1 已有（按配置名单静态分配） |
-| 找得到房间 | 局域网游戏靠**广播和组播**找房间，要把它们真正送到朋友那边 —— 不然就是 ping 得通、房间列表里看不见 | 开发中，1.0.0 最关键的一关 |
-| 连得上 | 打洞成功直连；打不通经中继转发密文；断了回落中继、恢复后切回 | M1 已有（Linux 上、NAT 是模拟的） |
-| 延迟稳 | 选路时抖动的权重高于平均延迟；直连断了尽快切走（2~3 秒） | 开发中 |
-
-详见[局域网联机：1.0.0 做什么](https://kerxs.github.io/meshora/guide/lan-play)。
+- **`crates/`** —— Rust：客户端（`meshora-desktop`、`meshora-android`）、安装程序（`meshora-setup`）、
+  节点（`meshorad`）、协调服务和中继（`meshora-coord`、`meshora-relay`）、数据面、控制面、虚拟网卡、线协议
+- **`docs/`** —— 官网和设计文档（VitePress）
+- **仓库元文件** —— 许可证、贡献指南、安全策略
 
 ## 和同类工具的关系
 
-**虚拟局域网联机已经有现成的工具，而且现在就能用 —— Meshora 还不能。**
+**虚拟局域网联机已经有现成的、被很多人用了很久的工具 —— Meshora 刚发布，还没经过真实环境的检验。**
 Radmin VPN 完全免费、不限人数，但只有 Windows、不开源；ZeroTier 能转发广播、跨平台，但控制器仅限非商业使用；
 Tailscale 和 Meshora 架构最像，但它不转发局域网广播和组播，靠广播找房间的游戏经它看不见对方。
 
-Meshora 想做的是**开源、服务端可以完全自建、以联机为唯一目标**的那一个。
+Meshora 想做的是**开源、以联机为唯一目标**的那一个。
 如果上面哪个已经满足你，现在就用它。[完整对比](https://kerxs.github.io/meshora/guide/comparison)写了出处。
 
 ## 本地跑这个站点
@@ -109,10 +104,9 @@ npm run docs:build    # 构建，必须零警告通过
 
 站点源码在 `docs/`，主题定制在 `docs/.vitepress/theme/`。
 
-> 首页 hero 的流体背景由 [Paper Shaders](https://shaders.paper.design) 的 `Warp` 着色器驱动。
-> 它在 SSG 阶段不渲染（Node 里没有 WebGL），是在客户端动态加载的；
-> 系统开启「减少动态效果」时会自动降为静止渲染，且完全停掉渲染循环。
-> WebGL 不可用时回落到一层 CSS 渐变，页面不会开天窗。
+> 整站的液态玻璃用的是 [Glassium](https://github.com/Kerxs/glassium)（和客户端同一套），背景是会流动的彩色光团
+> （`docs/.vitepress/theme/FluidBackdrop.vue`）。玻璃由 `theme/glass.ts` 按选择器标到 VitePress 的组件上；
+> 浮在正文上的顶部导航用 CSS 毛玻璃（Glassium 的玻璃盖不住压在它上面的字）。
 
 ## 本地构建 Rust 部分
 
