@@ -2,7 +2,7 @@ import { h, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import type { Theme } from 'vitepress'
 import { useRoute } from 'vitepress'
 import DefaultTheme from 'vitepress/theme'
-import FluidBackdrop from './FluidBackdrop.vue'
+import DotBackdrop from './DotBackdrop.vue'
 import StatusBanner from './StatusBanner.vue'
 import MeshDiagram from './MeshDiagram.vue'
 import Pipeline from './Pipeline.vue'
@@ -21,7 +21,7 @@ import 'glassium/glassium.css'
 import './custom.css'
 
 /**
- * 首页和文档页的流体强弱不同（见 custom.css 的 --meshora-scrim）。
+ * 首页和文档页的背景强弱不同（见 custom.css 的 --meshora-scrim）。
  * CSS 里优先用 :root:has(.VPHome) 判断，服务端渲染出来就是对的，不会闪。
  * 这里的 JS 只是给不支持 :has() 的浏览器兜底。
  */
@@ -36,7 +36,7 @@ export default {
   Layout() {
     return h(DefaultTheme.Layout, null, {
       // 全站常驻的背景层：整个会话只有这一个 WebGL 上下文
-      'layout-top': () => h(FluidBackdrop),
+      'layout-top': () => h(DotBackdrop),
       'home-hero-info-before': () => h(StatusBanner)
     })
   },

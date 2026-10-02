@@ -1,5 +1,5 @@
 /**
- * 站点的液态玻璃：Glassium（https://github.com/Kerxs/glassium），和 Meshora 客户端是同一套。
+ * 站点的磨砂玻璃：Glassium（https://github.com/Kerxs/glassium），和 Meshora 客户端是同一套。
  *
  * Glassium 接管页面上任何时候出现的 `[glass]`。VitePress 的默认主题是现成的组件，没法在模板里写属性，
  * 所以这里按选择器给它们标上：侧边栏、首页的能力卡片和按钮、首页区块、文档里的代码块和提示框。
@@ -13,16 +13,16 @@
 
 /** 选择器 → 材质 */
 const RULES: [string, Record<string, string>][] = [
-  ['.VPSidebar', { glass: '' }],
-  // 文档正文：一整块偏暗的玻璃，长文下面的光团在动，字要有一块稳的底
-  ['.VPDoc .content-container', { glass: 'tinted', 'glass-tint': 'rgba(6, 10, 32, 0.72)', 'glass-blur': '40' }],
-  ['.VPFeature', { glass: '' }],
+  ['.VPSidebar', { glass: 'frosted' }],
+  // 文档正文：一整块偏暗的磨砂玻璃，字要有一块稳的底
+  ['.VPDoc .content-container', { glass: 'frosted', 'glass-tint': 'rgba(10, 12, 18, 0.72)', 'glass-blur': '40' }],
+  ['.VPFeature', { glass: 'frosted' }],
   ['.VPButton.brand', { glass: 'tinted', 'glass-tint': '#3d6bff' }],
   ['.VPButton.alt', { glass: 'clear' }],
   ['.vp-doc div[class*="language-"]', { glass: 'clear' }],
   ['.vp-doc .custom-block', { glass: 'clear' }],
   ['.VPDocAsideOutline', { glass: 'clear' }],
-  ['.home-section', { glass: '' }]
+  ['.home-section', { glass: 'frosted' }]
 ]
 
 function mark(root: ParentNode) {

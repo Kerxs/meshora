@@ -14,13 +14,13 @@
 
 /*
   全站深色（config.mts 里 appearance: 'force-dark'），配色和 Meshora 客户端同一套：
-  深蓝的底、彩色的流体光，液态玻璃（Glassium）浮在上面。
+  近黑的底、一层细点阵，磨砂玻璃（Glassium）浮在上面。
 */
 .dark {
-  --vp-c-bg: #0a1030;
+  --vp-c-bg: #07080c;
   --vp-c-bg-alt: rgba(255, 255, 255, 0.04);
   --vp-c-bg-soft: rgba(255, 255, 255, 0.06);
-  --vp-c-bg-elv: #141b45;
+  --vp-c-bg-elv: #12141c;
   --vp-c-text-1: #f2f5ff;
   --vp-c-text-2: rgba(232, 238, 255, 0.76);
   --vp-c-text-3: rgba(232, 238, 255, 0.52);
@@ -32,9 +32,9 @@
   --vp-c-brand-soft: rgba(122, 156, 255, 0.18);
 
   /* 不在 Glassium 玻璃上的那些小面板（表格、标签）用的半透明底 */
-  --meshora-glass-bg: rgba(10, 16, 48, 0.32);
+  --meshora-glass-bg: rgba(14, 16, 24, 0.4);
   --meshora-glass-bg-soft: rgba(255, 255, 255, 0.05);
-  --meshora-glass-bg-solid: rgba(14, 20, 56, 0.94);
+  --meshora-glass-bg-solid: rgba(16, 18, 26, 0.94);
   --meshora-glass-border: rgba(255, 255, 255, 0.14);
   --meshora-glass-blur: 18px;
   --meshora-on-glass: #ffffff;
@@ -50,7 +50,7 @@
    ------------------------------------------------------------------ */
 
 html {
-  background-color: #0a1030;
+  background-color: #07080c;
 }
 
 body,
@@ -89,7 +89,7 @@ body,
 */
 .VPNavBar,
 .VPLocalNav {
-  background-color: rgba(10, 16, 48, 0.72) !important;
+  background-color: rgba(12, 14, 20, 0.72) !important;
   backdrop-filter: blur(20px) saturate(160%);
   -webkit-backdrop-filter: blur(20px) saturate(160%);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -103,12 +103,11 @@ body,
 }
 
 /*
-  文档页：长文下面的光不能太亮，整体压暗一半（首页保持原样）。
-  Glassium 跟着元素的不透明度走，玻璃折射出来的也一起变暗。
+  文档页：长文下面的那团蓝光压暗一半（首页保持原样），点阵照旧。
   :has() 让服务端渲染出来就对；.is-home 是 index.ts 给不支持 :has() 的浏览器的兜底
 */
-:root:not(:has(.VPHome)):not(.is-home) .mesh-sky .flow {
-  opacity: 0.45;
+:root:not(:has(.VPHome)):not(.is-home) .mesh-sky .sky-glow {
+  opacity: 0.5;
 }
 
 /* 文档正文的玻璃面板 */
@@ -144,7 +143,7 @@ body,
 
 /* ------------------------------------------------------------------
    首页：整页深色
-   hero 原先那层向下渐隐的遮罩不再需要 —— 现在整页都浮在流体上。
+   hero 原先那层向下渐隐的遮罩不再需要 —— 现在整页都浮在点阵上。
    这里把首页子树的颜色令牌整体换成浅色版。
    ------------------------------------------------------------------ */
 
@@ -212,8 +211,8 @@ body,
 }
 
 /*
-  hero 的文字背后只有「流体 + 遮罩」，没有玻璃面板兜底，所以透明度不能太低。
-  实测（流体最亮处 + 0.5 遮罩，合成底色 rgb(89,112,132)）：
+  hero 的文字背后只有「背景 + 遮罩」，没有玻璃面板兜底，所以透明度不能太低。
+  当初按流体背景最亮处实测（+ 0.5 遮罩，合成底色 rgb(89,112,132)），点阵暗得多，只会更清楚：
       0.72 → 3.56 不过   0.88 → 4.44 不过   0.92 → 4.68 过   1.0 → 5.18
   层级差别改由字号和字重承担，不靠压低透明度。
 */
@@ -318,7 +317,7 @@ body,
 
 /* ------------------------------------------------------------------
    首页顶部导航
-   .VPNavBar.home.top = 「在首页且没滚动」，透明压在流体上。
+   .VPNavBar.home.top = 「在首页且没滚动」，透明压在点阵上。
    ------------------------------------------------------------------ */
 
 /*
@@ -429,7 +428,7 @@ body,
   color: var(--meshora-on-glass-dim);
 }
 
-/* 首页正文区也浮在流体上 */
+/* 首页正文区也浮在点阵上 */
 .VPHome .vp-doc {
   position: relative;
   z-index: 1;

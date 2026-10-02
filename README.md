@@ -104,8 +104,8 @@ npm run docs:build    # 构建，必须零警告通过
 
 站点源码在 `docs/`，主题定制在 `docs/.vitepress/theme/`。
 
-> 整站的液态玻璃用的是 [Glassium](https://github.com/Kerxs/glassium)（和客户端同一套），背景是会流动的彩色光团
-> （`docs/.vitepress/theme/FluidBackdrop.vue`）。玻璃由 `theme/glass.ts` 按选择器标到 VitePress 的组件上；
+> 整站的磨砂玻璃用的是 [Glassium](https://github.com/Kerxs/glassium)（和客户端同一套），背景是一层细点阵，指针附近的点会聚拢变亮
+> （`docs/.vitepress/theme/DotBackdrop.vue`）。玻璃由 `theme/glass.ts` 按选择器标到 VitePress 的组件上；
 > 浮在正文上的顶部导航用 CSS 毛玻璃（Glassium 的玻璃盖不住压在它上面的字）。
 
 ## 本地构建 Rust 部分
