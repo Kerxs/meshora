@@ -671,3 +671,8 @@ html:has(.VPLocalSearchBox) .VPNav {
     transform: none;
   }
 }
+
+/* 手机浏览器点按时默认铺一块蓝色方块，和玻璃很不搭：去掉（链接、按钮自己有悬停和按下的样子） */
+* {
+  -webkit-tap-highlight-color: transparent;
+}

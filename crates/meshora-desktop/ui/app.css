@@ -51,6 +51,8 @@
 
 * {
   box-sizing: border-box;
+  /* 安卓 WebView 点按时默认铺一块蓝色方块：按钮自己有按下的反馈（轻轻一缩），不要它 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 [hidden] {
