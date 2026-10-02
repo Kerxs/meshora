@@ -3,11 +3,14 @@ import type { Theme } from 'vitepress'
 import { useRoute } from 'vitepress'
 import DefaultTheme from 'vitepress/theme'
 import DotBackdrop from './DotBackdrop.vue'
-import StatusBanner from './StatusBanner.vue'
 import MeshDiagram from './MeshDiagram.vue'
 import Pipeline from './Pipeline.vue'
 import HomeSection from './HomeSection.vue'
 import ScenarioGrid from './ScenarioGrid.vue'
+import HomeHero from './HomeHero.vue'
+import HomeSteps from './HomeSteps.vue'
+import FeatureRow from './FeatureRow.vue'
+import DemoFrame from './DemoFrame.vue'
 import {
   enableEntranceAnimations,
   playPageEnter,
@@ -36,8 +39,7 @@ export default {
   Layout() {
     return h(DefaultTheme.Layout, null, {
       // 全站常驻的背景层：整个会话只有这一个 WebGL 上下文
-      'layout-top': () => h(DotBackdrop),
-      'home-hero-info-before': () => h(StatusBanner)
+      'layout-top': () => h(DotBackdrop)
     })
   },
 
@@ -47,6 +49,10 @@ export default {
     app.component('Pipeline', Pipeline)
     app.component('HomeSection', HomeSection)
     app.component('ScenarioGrid', ScenarioGrid)
+    app.component('HomeHero', HomeHero)
+    app.component('HomeSteps', HomeSteps)
+    app.component('FeatureRow', FeatureRow)
+    app.component('DemoFrame', DemoFrame)
   },
 
   /**

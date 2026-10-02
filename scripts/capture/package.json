@@ -1,0 +1,14 @@
+{
+  "name": "meshora-capture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "给官网录客户端的截图和录屏（本机跑，不进 CI）",
+  "type": "module",
+  "scripts": {
+    "capture": "node capture-demo.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0",
+    "sharp": "0.35.5"
+  }
+}

@@ -34,7 +34,8 @@ const RULES: [string, Record<string, string>, string?][] = [
   ['.vp-doc div[class*="language-"]', { glass: 'clear' }],
   ['.vp-doc .custom-block', { glass: 'clear' }],
   ['.VPDocAsideOutline', { glass: 'clear' }],
-  ['.home-section', { glass: 'frosted' }]
+  ['.home-section', { glass: 'frosted' }],
+  ['.steps .step', { glass: 'frosted' }]
 ]
 
 function mark(root: ParentNode) {

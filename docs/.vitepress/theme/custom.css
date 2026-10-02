@@ -135,7 +135,8 @@ body,
   .vp-doc .custom-block,
   .VPButton.alt,
   .VPSidebar,
-  .VPDocAsideOutline {
+  .VPDocAsideOutline,
+  .steps .step {
     background-color: rgba(30, 34, 46, 0.58) !important;
     backdrop-filter: blur(22px) saturate(140%);
     -webkit-backdrop-filter: blur(22px) saturate(140%);

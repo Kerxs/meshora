@@ -2,10 +2,18 @@
 // 用法：在 crates/meshora-desktop 下起一个静态服务器，打开 dev/index.html?s=<场景>
 // 场景：onboarding、join、saved、connecting、connected、owner、host、update、empty、rejected、invite、deleted、tun、unreachable、
 // direct-host、direct-guest、direct-symmetric
+// 剧本（给官网录屏用，状态随时间变）：story-connect（贴网络码连上，朋友一个个加入）、
+// story-punch（直连打洞 3 秒后打通）、story-boot（第一份状态晚到，启动动画走完整）
 "use strict";
 
 (() => {
   const scenario = new URLSearchParams(location.search).get("s") || "join";
+  // ?nointro=1：跳过启动动画（录屏时用）。客户端打开时窗口看不见就不播启动动画、点阵也不扩散：
+  // 页面初始化的那一下假装看不见，界面的模块跑完（DOMContentLoaded 之前）就恢复
+  if (new URLSearchParams(location.search).get("nointro")) {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.addEventListener("DOMContentLoaded", () => delete document.hidden, { once: true });
+  }
   const id = "mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY=";
   const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443/pZQ0bJbVv2u3Xy1a9cD8eF#3q2-7wEYkQ6n0Cf8Hs5VYA";
   const server = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443";
@@ -15,7 +23,8 @@
     { id: "Wq7Hd3Fk9Lz1Xc5Vb8Nm2As4Df6Gh0Jk3Lq5We7Rt9Y=", name: "", ip: "100.64.0.4", route: "pending", rttMs: null, jitterMs: null, online: false, rx: 0, tx: 0 },
   ];
   const base = {
-    version: "0.0.0",
+    // ?v=1.0.3：给官网录屏时显示真实版本号
+    version: new URLSearchParams(location.search).get("v") || "0.0.0",
     id,
     name: "阿杰的台式机",
     network: null,
@@ -113,11 +122,28 @@
       error: { kind: "unreachable", message: "注册失败：连接协调服务超时" },
     },
   };
+  scenarios["story-connect"] = {};
+  scenarios["story-punch"] = scenarios["direct-host"];
+  scenarios["story-boot"] = scenarios.connected;
   let ov = { ...base, ...(scenarios[scenario] || {}) };
   let tick = 0;
+  let firstOverview = true;
+
+  // 直连打洞：那个"正在打洞"的朋友 3 秒后打通
+  if (scenario === "story-punch") {
+    setTimeout(() => {
+      ov = {
+        ...ov,
+        peers: ov.peers.map((p) => (p.route === "pending" ? { ...p, route: "direct", online: true, rttMs: 22, jitterMs: 2, lossPercent: 0, heard: true } : p)),
+      };
+    }, 3000);
+  }
 
   const handlers = {
-    overview() {
+    async overview() {
+      // 启动剧本：第一份状态晚到半秒，Logo 画完整再飞
+      if (scenario === "story-boot" && firstOverview) await new Promise((resolve) => setTimeout(resolve, 500));
+      firstOverview = false;
       tick += 1;
       if (ov.phase === "connected") {
         ov = {
@@ -125,7 +151,7 @@
           // 延迟有点起伏，偶尔一个毛刺：历史曲线上才看得出东西
           peers: ov.peers.map((p, i) => {
             if (!p.online) return p;
-            const base = peers[i].rttMs;
+            const base = peers[i]?.rttMs || p.rttMs || 20;
             const wobble = Math.round(Math.sin(tick / 3 + i) * base * 0.15 + (tick % 23 === 0 ? base * 0.8 : 0));
             return { ...p, rx: p.rx + 60_000 * (i + 1), tx: p.tx + 20_000 * (i + 1), rttMs: Math.max(1, base + wobble) };
           }),
@@ -136,6 +162,18 @@
     connect({ code: next }) {
       if (next !== undefined && !next.includes("@")) throw "网络码应为 公钥@地址:端口，没找到 @";
       ov = { ...ov, network: next ?? ov.network, phase: "connecting", error: null };
+      if (scenario === "story-connect") {
+        // 连上时先只有自己，朋友隔一会儿一个个进来：网状图上看得到他们从"我"那里飞出来
+        setTimeout(() => {
+          ov = { ...ov, phase: "connected", me, coordConnected: true, peers: [] };
+        }, 1200);
+        peers.forEach((_, n) => {
+          setTimeout(() => {
+            ov = { ...ov, peers: peers.slice(0, n + 1).map((p) => ({ ...p })) };
+          }, 2200 + n * 1100);
+        });
+        return;
+      }
       setTimeout(() => {
         ov = { ...ov, phase: "connected", me, coordConnected: true, peers };
       }, 1500);
