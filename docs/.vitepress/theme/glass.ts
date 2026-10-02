@@ -11,9 +11,15 @@
  * 只在浏览器里跑（onMounted 之后）：服务端渲染出来的是普通的 DOM，水合之后才变成玻璃。
  */
 
-/** 选择器 → 材质 */
-const RULES: [string, Record<string, string>][] = [
-  ['.VPSidebar', { glass: 'frosted' }],
+/**
+ * 窄屏上侧边栏是盖在正文上的抽屉：玻璃盖不住正文的字（会透上来），那时改用 custom.css 里的 CSS 毛玻璃。
+ * 和 VitePress 切换抽屉的断点一致
+ */
+const WIDE = '(min-width: 960px)'
+
+/** 选择器 → 材质；第三项是只在什么屏宽下才用玻璃 */
+const RULES: [string, Record<string, string>, string?][] = [
+  ['.VPSidebar', { glass: 'frosted' }, WIDE],
   // 文档正文：一整块偏暗的磨砂玻璃，字要有一块稳的底
   ['.VPDoc .content-container', { glass: 'frosted', 'glass-tint': 'rgba(10, 12, 18, 0.72)', 'glass-blur': '40' }],
   ['.VPFeature', { glass: 'frosted' }],
@@ -26,8 +32,14 @@ const RULES: [string, Record<string, string>][] = [
 ]
 
 function mark(root: ParentNode) {
-  for (const [selector, attrs] of RULES) {
+  for (const [selector, attrs, media] of RULES) {
+    const wanted = !media || window.matchMedia(media).matches
     root.querySelectorAll<HTMLElement>(selector).forEach((el) => {
+      if (!wanted) {
+        // 屏宽变窄了：摘掉玻璃，交给 CSS
+        for (const name of Object.keys(attrs)) el.removeAttribute(name)
+        return
+      }
       if (el.hasAttribute('glass')) return
       for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value)
     })
@@ -53,4 +65,6 @@ export async function startGlass() {
     }, 50)
   })
   observer.observe(document.body, { childList: true, subtree: true })
+  // 跨过断点（旋转屏幕、拖窗口）时重新标一遍
+  window.matchMedia(WIDE).addEventListener('change', () => mark(document))
 }
