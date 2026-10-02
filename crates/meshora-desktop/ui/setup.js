@@ -2,7 +2,7 @@
 // 客户端发起的更新（--update）直接进"安装中"，装完自己打开。步与步之间左右滑，Logo、进度环、对勾都有动画。
 //
 // 和客户端同样的规矩：内容一律 textContent，不写内联样式（位置、进度走 CSSOM）。
-// 背景的光团要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
+// 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
 import "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 
@@ -364,7 +364,7 @@ function uninstalled() {
 
 async function start() {
   stage = h("div", { class: "stage" });
-  document.getElementById("setup").replaceChildren(titlebar(), h("main", {}, h("section", { class: "setup-panel", glass: "", "glass-corner-radius": "26" }, stage)));
+  document.getElementById("setup").replaceChildren(titlebar(), h("main", {}, h("section", { class: "setup-panel", glass: "frosted", "glass-corner-radius": "26" }, stage)));
   await tauri().event.listen("progress", (event) => progress.set(event.payload));
   const info = await invoke("info");
   if (info.mode === "uninstall") uninstallPage(info);

@@ -5,9 +5,6 @@
 
 (() => {
   const scenario = new URLSearchParams(location.search).get("s") || "join";
-  // 备选背景：?bg=aurora|grid|mono|nodes（sky.js 按 <html data-bg> 建）
-  const bg = new URLSearchParams(location.search).get("bg");
-  if (bg) document.documentElement.dataset.bg = bg;
   const id = "mTe0q8vN3kRZp1u5yXcW7bLdF2gH9jK4sA6eQoIiUtY=";
   const code = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443/pZQ0bJbVv2u3Xy1a9cD8eF#3q2-7wEYkQ6n0Cf8Hs5VYA";
   const server = "Bq7Zt4mN0xR2c8vL5kP1wY9sD3fG6hJ8aE2uQ4iO7tU=@play.example.com:7443";

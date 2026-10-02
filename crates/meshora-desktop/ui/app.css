@@ -59,7 +59,7 @@
 
 /* 根背景做场景的底色 */
 html {
-  background: #0a1030;
+  background: #07080c;
   height: 100%;
 }
 
@@ -88,298 +88,30 @@ textarea {
   flex: 1;
 }
 
-/* ---------- 背景：流体 ----------
- * 几团彩色光像液体一样缓慢流动：各自沿一条闭合路径漂移、转动，横竖缩放不一样（被拉长、压扁），重叠处交融。
- * 光团由 sky.js 建：外层 .flow 跟着指针轻轻偏一点（--px、--py 乘各自的 --k），里层 .orb 按关键帧流动。
- * 每团只有一层渐变、只动变换：Glassium 每帧把它们收进场景，玻璃折射的也是动的 */
+/* ---------- 背景：点阵 ----------
+ * 深色底一层细点（"网"），左上一团极淡的品牌蓝。点画在 sky.js 建的画布上，指针附近的点聚拢、变亮。
+ * 玻璃（frosted）把它们虚化成一片柔和的灰蓝 */
 
 .sky {
   position: fixed;
   inset: 0;
   overflow: hidden;
-  --px: 0px;
-  --py: 0px;
-}
-
-.flow {
-  position: absolute;
-  inset: 0;
-  translate: calc(var(--px) * var(--k, 1)) calc(var(--py) * var(--k, 1));
-  transition: translate 1.8s var(--ease);
-}
-
-.orb {
-  position: absolute;
-  border-radius: 50%;
-  animation: var(--path) var(--dur) ease-in-out infinite alternate;
-  animation-delay: var(--delay, 0s);
-}
-
-.sky.paused .orb {
-  animation-play-state: paused;
-}
-
-.orb-a {
-  --path: flow-a;
-  --dur: 26s;
-  width: 70vmax;
-  height: 70vmax;
-  left: -22vmax;
-  top: -26vmax;
-  background: radial-gradient(circle, #2f5bff 0%, rgba(47, 91, 255, 0) 68%);
-}
-
-.orb-b {
-  --path: flow-b;
-  --dur: 33s;
-  width: 62vmax;
-  height: 62vmax;
-  right: -16vmax;
-  top: 4vmax;
-  background: radial-gradient(circle, #8a4dff 0%, rgba(138, 77, 255, 0) 66%);
-}
-
-.orb-c {
-  --path: flow-c;
-  --dur: 41s;
-  width: 58vmax;
-  height: 58vmax;
-  left: 22vmax;
-  bottom: -30vmax;
-  background: radial-gradient(circle, #13c7a0 0%, rgba(19, 199, 160, 0) 64%);
-}
-
-.orb-d {
-  --path: flow-d;
-  --dur: 29s;
-  width: 34vmax;
-  height: 34vmax;
-  right: 20vmax;
-  bottom: -10vmax;
-  background: radial-gradient(circle, #ff6f61 0%, rgba(255, 111, 97, 0) 66%);
-}
-
-.orb-e {
-  --path: flow-e;
-  --dur: 37s;
-  --delay: -9s;
-  width: 30vmax;
-  height: 30vmax;
-  left: 34vmax;
-  top: 6vmax;
-  background: radial-gradient(circle, #3fb8ff 0%, rgba(63, 184, 255, 0) 66%);
-}
-
-.orb-f {
-  --path: flow-f;
-  --dur: 47s;
-  --delay: -21s;
-  width: 26vmax;
-  height: 26vmax;
-  left: -4vmax;
-  bottom: 4vmax;
-  background: radial-gradient(circle, #d65bff 0%, rgba(214, 91, 255, 0) 66%);
-}
-
-/* 每团一条路径：漂移、转动、横竖缩放不同步 —— 圆被拉成椭圆再转过去，看上去像液体在流 */
-@keyframes flow-a {
-  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
-  35% { transform: translate(9vmax, 6vmax) rotate(40deg) scale(1.18, 0.86); }
-  70% { transform: translate(3vmax, 12vmax) rotate(95deg) scale(0.9, 1.12); }
-  100% { transform: translate(-4vmax, 4vmax) rotate(140deg) scale(1.08, 0.95); }
-}
-
-@keyframes flow-b {
-  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
-  40% { transform: translate(-10vmax, 8vmax) rotate(-50deg) scale(0.85, 1.2); }
-  75% { transform: translate(-4vmax, 16vmax) rotate(-110deg) scale(1.15, 0.9); }
-  100% { transform: translate(-12vmax, 6vmax) rotate(-160deg) scale(1, 1.05); }
-}
-
-@keyframes flow-c {
-  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
-  30% { transform: translate(12vmax, -6vmax) rotate(60deg) scale(1.2, 0.85); }
-  65% { transform: translate(-6vmax, -12vmax) rotate(120deg) scale(0.88, 1.15); }
-  100% { transform: translate(-14vmax, -4vmax) rotate(180deg) scale(1.1, 0.92); }
-}
-
-@keyframes flow-d {
-  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
-  45% { transform: translate(-14vmax, -10vmax) rotate(70deg) scale(1.35, 0.8); }
-  100% { transform: translate(-6vmax, -20vmax) rotate(150deg) scale(0.9, 1.25); }
-}
-
-@keyframes flow-e {
-  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
-  50% { transform: translate(14vmax, 10vmax) rotate(-80deg) scale(1.3, 0.8); }
-  100% { transform: translate(-8vmax, 18vmax) rotate(-170deg) scale(0.85, 1.2); }
-}
-
-@keyframes flow-f {
-  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
-  50% { transform: translate(18vmax, -8vmax) rotate(90deg) scale(1.25, 0.85); }
-  100% { transform: translate(30vmax, 4vmax) rotate(200deg) scale(0.9, 1.2); }
-}
-
-/* 手机上光团少两团、流得更慢：省电 */
-.phone .orb-e,
-.phone .orb-f {
-  display: none;
-}
-
-.phone .orb {
-  animation-duration: calc(var(--dur) * 1.6);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .orb {
-    animation: none !important;
-  }
-
-  .flow {
-    transition: none !important;
-  }
-}
-
-/* ---------- 备选背景（挑选中，选定一版后其余删掉） ----------
- * 方向：少颜色、低饱和、大面积留暗、动得很慢。都只动 transform 和 opacity，看不见时停（.paused） */
-
-html[data-bg] .sky > * {
-  position: absolute;
   pointer-events: none;
 }
 
-.sky.paused > * {
-  animation-play-state: paused !important;
-}
-
-/* A 极光：近黑底，上方一两道很淡的冷色光带缓慢横移 */
-html[data-bg="aurora"] {
-  background: #05070d;
-}
-
-.aurora-band {
-  left: -30vw;
-  width: 160vw;
-  border-radius: 50%;
-  animation: aurora-drift 48s ease-in-out infinite alternate;
-}
-
-.band-1 {
-  top: -30vh;
-  height: 80vh;
-  background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(72, 140, 255, 0.62), rgba(72, 140, 255, 0) 70%);
-}
-
-.band-2 {
-  bottom: -36vh;
-  height: 72vh;
-  background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(46, 214, 196, 0.42), rgba(46, 214, 196, 0) 70%);
-  animation-duration: 62s;
-  animation-direction: alternate-reverse;
-}
-
-@keyframes aurora-drift {
-  0% { transform: translateX(-12vw) scaleY(0.85); opacity: 0.75; }
-  100% { transform: translateX(14vw) scaleY(1.1); opacity: 1; }
-}
-
-/* B 点阵：深色底一层细点（"网"），左上一团极淡的品牌蓝，指针附近微亮 */
-html[data-bg="grid"] {
-  background: #07080c;
-}
-
-.grid-dots {
-  inset: 0;
-  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.16) 1px, transparent 1.6px);
-  background-size: 24px 24px;
-}
-
-.grid-glow {
+.sky-glow {
+  position: absolute;
   left: -25vmax;
   top: -30vmax;
   width: 80vmax;
   height: 80vmax;
-  background: radial-gradient(circle, rgba(61, 107, 255, 0.36), rgba(61, 107, 255, 0) 66%);
-  animation: glow-breathe 24s ease-in-out infinite alternate;
+  background: radial-gradient(circle, rgba(61, 107, 255, 0.3), rgba(61, 107, 255, 0) 66%);
 }
 
-.grid-spot {
+.dots {
+  position: absolute;
   left: 0;
   top: 0;
-  width: 420px;
-  height: 420px;
-  background: radial-gradient(circle, rgba(130, 160, 255, 0.12), rgba(130, 160, 255, 0) 70%);
-  transform: translate(calc(var(--sx, 70vw) - 210px), calc(var(--sy, 60vh) - 210px));
-  transition: transform 900ms var(--ease);
-}
-
-@keyframes glow-breathe {
-  0% { transform: scale(1); opacity: 0.8; }
-  100% { transform: scale(1.12); opacity: 1; }
-}
-
-/* C 单色：只用品牌蓝一种色相的大面积柔和渐变，加一层细颗粒，几乎不动 */
-html[data-bg="mono"] {
-  background: linear-gradient(150deg, #0a1028 0%, #06080f 55%, #081430 100%);
-}
-
-.mono-wash {
-  inset: -20%;
-  background:
-    radial-gradient(ellipse 55% 50% at 20% 15%, rgba(70, 115, 255, 0.55), rgba(70, 115, 255, 0) 70%),
-    radial-gradient(ellipse 50% 55% at 85% 90%, rgba(50, 90, 235, 0.42), rgba(50, 90, 235, 0) 70%);
-  animation: mono-drift 70s ease-in-out infinite alternate;
-}
-
-.mono-grain {
-  inset: 0;
-  opacity: 0.1;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-}
-
-@keyframes mono-drift {
-  0% { transform: translate(0, 0) rotate(0deg); }
-  100% { transform: translate(4%, 3%) rotate(6deg); }
-}
-
-/* D 节点网：稀疏的节点和细连线，透明度很低，整张图很慢地漂 */
-html[data-bg="nodes"] {
-  background: #060912;
-}
-
-.nodes-glow {
-  inset: 0;
-  background: radial-gradient(ellipse 60% 55% at 50% 40%, rgba(61, 107, 255, 0.24), rgba(61, 107, 255, 0) 75%);
-}
-
-.net {
-  left: -5%;
-  top: -5%;
-  width: 110%;
-  height: 110%;
-  animation: net-drift 80s ease-in-out infinite alternate;
-}
-
-.net line {
-  stroke: rgba(150, 175, 255, 0.2);
-  stroke-width: 1.2;
-}
-
-.net circle {
-  fill: rgba(170, 195, 255, 0.6);
-}
-
-@keyframes net-drift {
-  0% { transform: translate(0, 0) scale(1); }
-  100% { transform: translate(-3%, 2%) scale(1.04); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html[data-bg] .sky > * {
-    animation: none !important;
-    transition: none !important;
-  }
 }
 
 /* ---------- 框架 ---------- */
@@ -387,8 +119,8 @@ html[data-bg="nodes"] {
 #app {
   position: relative;
   display: grid;
-  grid-template-columns: 280px 1fr;
-  gap: var(--sp-4);
+  grid-template-columns: 200px 1fr;
+  gap: var(--sp-5);
   height: 100vh;
   padding: var(--sp-4);
 }
@@ -545,43 +277,47 @@ glass-switch {
   height: 30px;
 }
 
-/* ---------- 左：通行证 ---------- */
+/* ---------- 左：导航栏 ----------
+ * 不是卡片：直接压在点阵上，只有选中项下面垫一块玻璃。内容才是主角 */
 
 .pass {
-  border-radius: var(--r-panel);
-  padding: var(--sp-5);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  gap: var(--sp-4);
   min-height: 0;
+  padding: var(--sp-3) var(--sp-2) var(--sp-2);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 10px;
+  padding: 0 var(--sp-2);
   font-size: var(--fs-title);
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
 }
 
 .brand svg {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
 }
 
 .state {
-  margin-left: auto;
+  align-self: flex-start;
   display: inline-flex;
   white-space: nowrap;
   align-items: center;
   gap: 6px;
   height: 24px;
+  margin-left: var(--sp-2);
   padding: 0 10px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: var(--fs-cap);
   font-weight: 600;
+  color: var(--dim);
 }
 
 .state i {
@@ -599,69 +335,28 @@ glass-switch {
   50% { opacity: 0.3; }
 }
 
-.me .k {
-  font-size: var(--fs-cap);
-  color: var(--dim);
-}
-
-.me .ip {
-  font-family: var(--mono);
-  font-size: var(--fs-hero);
-  font-weight: 600;
-  line-height: 1.2;
-  user-select: text;
-}
-
-.me .who {
-  margin-top: var(--sp-1);
-  font-size: var(--fs-sec);
-  color: var(--dim);
-}
-
-.me .who b {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.me .btn {
-  margin-top: var(--sp-3);
-}
-
-.netbox {
-  padding: var(--sp-3) var(--sp-4);
-  border-radius: var(--r-field);
-  border: 1px solid var(--line);
-  font-size: var(--fs-cap);
-  color: var(--dim);
-}
-
-.netbox .host {
-  font-family: var(--mono);
-  font-size: var(--fs-sec);
-  color: var(--text);
-  word-break: break-all;
-}
-
 .nav {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
+  gap: 2px;
+  margin-top: var(--sp-2);
 }
 
 .nav button {
   position: relative;
   display: flex;
   align-items: center;
-  height: var(--h-ctl);
-  padding: 0 var(--sp-4);
+  height: 38px;
+  padding: 0 var(--sp-3);
   border: 0;
-  border-radius: calc(var(--h-ctl) / 2);
+  border-radius: 12px;
   background: transparent;
   color: var(--dim);
   font-weight: 600;
   text-align: left;
   cursor: pointer;
+  transition: color var(--t-fast, 160ms) var(--ease);
 }
 
 .nav button:hover,
@@ -672,6 +367,7 @@ glass-switch {
 .nav .n {
   margin-left: auto;
   font-size: var(--fs-cap);
+  font-family: var(--mono);
   color: var(--faint);
 }
 
@@ -681,27 +377,68 @@ glass-switch {
   left: 0;
   right: 0;
   top: 0;
-  height: var(--h-ctl);
-  border-radius: calc(var(--h-ctl) / 2);
+  height: 38px;
+  border-radius: 12px;
 }
 
 .pass-foot {
   margin-top: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
-}
-
-.ptoggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: var(--fs-sec);
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2);
 }
 
 .ver {
   font-size: var(--fs-cap);
   color: var(--faint);
+}
+
+/* 网络页顶上：你的地址 */
+.me-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+}
+
+.me-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.me-card .k {
+  font-size: var(--fs-cap);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+.me-card .ip {
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  user-select: text;
+}
+
+.me-card .who {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-sec);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
+.me-card .who b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.me-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex: none;
 }
 
 /* ---------- 右：内容 ---------- */
@@ -1340,7 +1077,7 @@ td.spark-cell .spark {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-4);
-  width: min(980px, 100%);
+  width: 100%;
   align-items: start;
 }
 
@@ -1552,14 +1289,6 @@ td.spark-cell .spark {
   opacity: 0.7;
 }
 
-.brand .update-chip {
-  margin-left: auto;
-}
-
-.brand .update-chip:not([hidden]) + .state {
-  margin-left: var(--sp-2);
-}
-
 /* ---------- 动画 ----------
  * 一套时长：快（按下、悬停）、中（切页、弹窗）、慢（出现、完成），曲线都是 --ease。只动 transform 和 opacity，
  * 不碰布局；玻璃（Glassium）每帧跟着变换和不透明度走。系统要求减少动画时，下面的规则会把时长压到 1ms */
@@ -1649,7 +1378,7 @@ td.spark-cell .spark {
 }
 
 /* ---------- 手机（安卓客户端，html.phone） ----------
- * 一栏：通行证缩成顶上一张卡（状态、你的地址、断开），内容在下面滚，导航是底部一条胶囊。
+ * 一栏：导航栏缩成顶上一行（Logo、状态、可更新），内容在下面滚，页面切换是底部一条胶囊。
  * 尺寸还是上面那一套，只是换了摆法 */
 
 .phone body {
@@ -1671,31 +1400,43 @@ td.spark-cell .spark {
 }
 
 .phone .pass {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  padding: var(--sp-4);
-  gap: var(--sp-3);
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-1) 0;
 }
 
-/* 品牌一整行；下面左边是你的地址，右边是断开 */
 .phone .brand {
-  grid-column: 1 / -1;
+  padding: 0;
+  margin-right: auto;
 }
 
-.phone .me .btn {
-  height: var(--h-ctl-sm);
-  margin-top: var(--sp-2);
-  padding: 0 var(--sp-3);
-  border-radius: calc(var(--h-ctl-sm) / 2);
-  font-size: var(--fs-sec);
+.phone .state {
+  margin-left: 0;
 }
 
-.phone .pass-foot .btn {
-  height: var(--h-ctl-sm);
-  padding: 0 var(--sp-4);
-  border-radius: calc(var(--h-ctl-sm) / 2);
-  font-size: var(--fs-sec);
+.phone .pass-foot {
+  margin-top: 0;
+  padding: 0;
+}
+
+.phone .pass-foot:not(:has(.update-chip:not([hidden]))) {
+  display: none;
+}
+
+/* 地址卡片上下排：地址一整行，按钮在下面平分 */
+.phone .me-card {
+  flex-direction: column;
+  align-items: stretch;
+  padding: var(--sp-5);
+}
+
+.phone .me-card .ip {
+  font-size: var(--fs-num);
+}
+
+.phone .me-actions .btn {
+  flex: 1;
 }
 
 /* 网状图的标题和统计数字上下排 */
@@ -1709,21 +1450,8 @@ td.spark-cell .spark {
   justify-content: space-between;
 }
 
-.phone .me .ip {
-  font-size: var(--fs-num);
-}
-
-/* 网络码、版本号进设置页看；断开按钮留在卡上 */
-.phone .netbox,
+/* 版本号进设置页看 */
 .phone .ver {
-  display: none;
-}
-
-.phone .pass-foot {
-  margin-top: 0;
-}
-
-.phone .pass-foot:has(.btn[hidden]) {
   display: none;
 }
 

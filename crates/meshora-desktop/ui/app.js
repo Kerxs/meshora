@@ -3,7 +3,7 @@
 // 两条规矩：
 // - 数据一律用 textContent 放进页面（朋友的名字是别人随便填的），不拼 HTML
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
-// 背景的光团要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
+// 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
 import "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 
@@ -227,35 +227,24 @@ const STATES = {
   failed: ["bad", "未连上"],
 };
 
+// 左边是一条不带卡片的导航栏，直接压在点阵上：Logo、连接状态、页面、版本。
+// 你的地址、网络这些放在网络页顶上那张卡片里（views.overview）
 const pass = {
   build() {
     this.state = h("span", { class: "state" }, h("i"), h("span"));
-    this.ip = h("div", { class: "ip" });
-    this.who = h("b");
-    this.host = h("div", { class: "host" });
-    this.coord = h("div");
-    this.online = h("div", { class: "me" }, h("div", { class: "k" }, "你的局域网地址"), this.ip, h("div", { class: "who" }, "你是 ", this.who), h("button", { class: "btn", glass: "clear", type: "button", onclick: () => copy(state.overview.me.ip, "地址") }, "复制地址"));
-    this.offlineName = h("b");
-    this.offline = h("div", { class: "me" }, h("div", { class: "k" }, "还没加入网络"), h("div", { class: "who" }, "你是 ", this.offlineName, "。贴一个网络码，就和朋友在同一个局域网里了。"));
-    this.net = h("div", { class: "netbox" }, h("div", {}, "网络"), this.host, this.coord);
-
     this.glide = h("span", { class: "nav-glide", glass: "clear", "glass-glide": "", "aria-hidden": "true" });
     this.nav = h("nav", { class: "nav", "aria-label": "页面" }, this.glide);
     this.navKey = "";
-
-    this.leave = h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("disconnect") }, "断开");
     this.updateChip = h("button", { class: "update-chip", type: "button", hidden: true, onclick: () => applyUpdate(state.overview.update.version) });
+    this.version = h("div", { class: "ver" });
     this.el = h(
       "aside",
-      { class: "pass", glass: "tinted", "glass-tint": "#1b2a66", "glass-corner-radius": "26" },
-      h("div", { class: "brand" }, LOGO(), "Meshora", this.updateChip, this.state),
-      this.online,
-      this.offline,
-      this.net,
+      { class: "pass" },
+      h("div", { class: "brand" }, LOGO(), h("span", { class: "brand-name" }, "Meshora")),
+      this.state,
       this.nav,
-      h("div", { class: "pass-foot" }, this.leave, h("div", { class: "ver" })),
+      h("div", { class: "pass-foot" }, this.updateChip, this.version),
     );
-    this.version = this.el.querySelector(".ver");
     return this.el;
   },
 
@@ -263,23 +252,11 @@ const pass = {
     const [cls, text] = STATES[ov.phase] || STATES.idle;
     this.state.className = `state ${cls}`;
     this.state.lastChild.textContent = text;
-    const connected = ov.phase === "connected";
-    this.online.hidden = !connected;
-    this.offline.hidden = connected;
-    this.offlineName.textContent = ov.name || DEVICE;
-    if (connected) {
-      this.ip.textContent = ov.me.ip;
-      this.who.textContent = ov.name || "没起名字";
-    }
-    this.net.hidden = !ov.network || ov.phase === "idle";
-    this.host.textContent = hostOf(ov.network);
-    this.coord.textContent = connected ? `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}` : ov.phase === "connecting" ? "正在连接" : "没连上";
-    this.leave.hidden = !(connected || ov.phase === "connecting");
     this.version.textContent = `Meshora ${ov.version}`;
     const u = ov.update;
     this.updateChip.hidden = !(u.status === "available" || u.status === "downloading");
     this.updateChip.disabled = u.status === "downloading";
-    this.updateChip.textContent = u.status === "downloading" ? "下载中…" : "可更新";
+    this.updateChip.textContent = u.status === "downloading" ? "下载中…" : `可更新到 ${u.version || ""}`;
     this.updateChip.title = u.version ? `新版本 ${u.version}：点一下更新` : "";
     this.updateNav(ov);
   },
@@ -454,7 +431,7 @@ function friendCard(peer) {
   const sparkSlot = h("div");
   const el = h(
     "div",
-    { class: "fcard", glass: "clear", "glass-corner-radius": "22", "glass-jelly": "", role: "button", tabindex: "0", title: "点一下复制地址" },
+    { class: "fcard", glass: "frosted", "glass-corner-radius": "22", "glass-jelly": "", role: "button", tabindex: "0", title: "点一下复制地址" },
     h("div", { class: "ftop" }, avatar, h("div", { class: "who" }, name, ip), barsSlot),
     h("div", { class: "fmid" }, ms, routeSlot),
     sparkSlot,
@@ -500,8 +477,43 @@ const HOST_REACH_HINT = {
   unknown: "路由器不支持（或者没开）UPnP，没法自动开端口：只有和你在同一个局域网的人进得来。在路由器上打开 UPnP，或者换服务器建网络。",
 };
 
+/** 网络页顶上的卡片：你的局域网地址（最要紧的一行）、你是谁、在哪个网络、断开 */
+function meCard() {
+  const ip = h("div", { class: "ip mono" });
+  const who = h("b");
+  const host = h("span", { class: "mono" });
+  const coord = h("span");
+  const el = h(
+    "section",
+    { class: "card me-card", glass: "frosted", "glass-corner-radius": "22" },
+    h(
+      "div",
+      { class: "me-main" },
+      h("div", { class: "k" }, "你的局域网地址"),
+      ip,
+      h("div", { class: "who" }, "你是 ", who, " · 网络 ", host, " · ", coord),
+    ),
+    h(
+      "div",
+      { class: "me-actions" },
+      h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(state.overview.me.ip, "地址") }, "复制地址"),
+      h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("disconnect") }, "断开"),
+    ),
+  );
+  return {
+    el,
+    update(ov) {
+      ip.textContent = ov.me.ip;
+      who.textContent = ov.name || "没起名字";
+      host.textContent = hostOf(ov.network);
+      coord.textContent = `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}`;
+    },
+  };
+}
+
 views.overview = {
   mount(ov) {
+    this.me = meCard();
     this.down = h("b");
     this.up = h("b");
     this.paths = h("b");
@@ -524,9 +536,10 @@ views.overview = {
     const el = h(
       "div",
       { class: "view" },
+      this.me.el,
       h(
         "section",
-        { class: "map", glass: "", "glass-corner-radius": "26" },
+        { class: "map", glass: "frosted", "glass-corner-radius": "26" },
         h(
           "div",
           { class: "map-head" },
@@ -546,6 +559,7 @@ views.overview = {
     removeEventListener("resize", this.onResize);
   },
   update(ov) {
+    this.me.update(ov);
     const online = ov.peers.filter((p) => p.online);
     this.down.textContent = `${formatBytes(state.speed.rx)}/s`;
     this.up.textContent = `${formatBytes(state.speed.tx)}/s`;
@@ -632,7 +646,7 @@ views.friends = {
     const el = h(
       "div",
       { class: "view" },
-      h("section", { class: "card", glass: "", "glass-corner-radius": "22" }, h("div", { class: "card-head" }, h("b", {}, "朋友"), this.count), this.table, this.empty),
+      h("section", { class: "card", glass: "frosted", "glass-corner-radius": "22" }, h("div", { class: "card-head" }, h("b", {}, "朋友"), this.count), this.table, this.empty),
     );
     this.update(ov);
     return el;
@@ -694,7 +708,7 @@ function pageHead(title, sub) {
 
 /** 一张卡片：一组设置。title 可以是文字，也可以是节点（比如带人数） */
 function panel(title, ...rows) {
-  return h("section", { class: "card panel", glass: "", "glass-corner-radius": "22" }, title ? h("h2", { class: "panel-title" }, title) : null, ...rows);
+  return h("section", { class: "card panel", glass: "frosted", "glass-corner-radius": "22" }, title ? h("h2", { class: "panel-title" }, title) : null, ...rows);
 }
 
 /** Glassium 的开关。用户切换时调后端，失败就拨回去 */
@@ -912,7 +926,7 @@ views.onboarding = {
   mount(ov) {
     this.step = 0;
     this.body = h("div", { class: "welcome" });
-    const el = h("div", { class: "view center" }, h("section", { class: "dialog welcome-card", glass: "", "glass-corner-radius": "28" }, this.body));
+    const el = h("div", { class: "view center" }, h("section", { class: "dialog welcome-card", glass: "frosted", "glass-corner-radius": "28" }, this.body));
     this.draw(ov);
     return el;
   },
@@ -1042,7 +1056,7 @@ views.start = {
     });
     this.create = h(
       "section",
-      { class: "dialog", glass: "", "glass-corner-radius": "26" },
+      { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
       h("h2", {}, "建一个网络"),
       h("p", {}, "你当网主，把网络码发给朋友。"),
       h("label", { class: "label" }, "网络名"),
@@ -1095,7 +1109,7 @@ views.start = {
     );
     this.join = h(
       "section",
-      { class: "dialog", glass: "", "glass-corner-radius": "26" },
+      { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
       h("h2", {}, "加入朋友的网络"),
       h("p", {}, "把朋友发给你的网络码贴进来。"),
       area,
@@ -1103,7 +1117,12 @@ views.start = {
       h("div", { class: "row" }, h("span", { class: "hint" }, "网络码里没有邀请码？", h("button", { class: "link", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制你的 ID"), " 发给建网络的人"), button),
       this.saved,
     );
-    const el = h("div", { class: "view center" }, h("div", { class: "start" }, this.create, this.join));
+    const el = h(
+      "div",
+      { class: "view" },
+      pageHead("开始联机", "建一个网络把朋友拉进来，或者贴上朋友发来的网络码加入。"),
+      h("div", { class: "start" }, this.create, this.join),
+    );
     this.update(ov);
     // 引导里选了哪个，就先把光标放在哪
     const tab = state.startTab;
@@ -1283,7 +1302,7 @@ views.connecting = {
       { class: "view center" },
       h(
         "section",
-        { class: "dialog narrow", glass: "", "glass-corner-radius": "26" },
+        { class: "dialog narrow", glass: "frosted", "glass-corner-radius": "26" },
         h("div", { class: "pulse", role: "progressbar", "aria-label": "正在连接" }, h("i"), h("i"), h("b")),
         h("h2", {}, "正在连接"),
         this.host,
@@ -1404,7 +1423,7 @@ views.failed = {
       { class: "view center" },
       h(
         "section",
-        { class: "dialog", glass: "", "glass-corner-radius": "26" },
+        { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
         this.title,
         this.hint,
         this.detail,
