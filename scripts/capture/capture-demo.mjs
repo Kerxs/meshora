@@ -86,6 +86,13 @@ async function shot(page, name, width) {
   console.log(`  截图 ${name}`);
 }
 
+/** 只截界面里的一块（首页"三步联机"用：整窗缩小了看不清，截局部、放大看） */
+async function part(locator, name, width = 900) {
+  const png = await locator.screenshot();
+  await sharp(png).resize({ width, withoutEnlargement: true }).webp({ quality: 85 }).toFile(join(out, `${name}.webp`));
+  console.log(`  局部 ${name}`);
+}
+
 /** 录一段：`act` 在页面上做事，录完存成 name.webm */
 async function record(kind, query, name, act) {
   const ctx = await context(kind, { video: true });
@@ -93,7 +100,16 @@ async function record(kind, query, name, act) {
   await act(page);
   const video = page.video();
   await ctx.close();
-  await rename(await video.path(), join(out, `${name}.webm`));
+  // Windows 上目标文件正被别的程序读着（比如浏览器开着官网在播它）时改名会被拒：等一等再试
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(await video.path(), join(out, `${name}.webm`));
+      break;
+    } catch (err) {
+      if (err.code !== "EPERM" || attempt >= 20) throw err;
+      await sleep(500);
+    }
+  }
   console.log(`  录屏 ${name}`);
 }
 
@@ -107,6 +123,7 @@ console.log("截图");
   let page = await open(ctx, "s=connected&nointro=1");
   await sleep(2500);
   await shot(page, "network-desktop", 1600);
+  await part(page.locator(".map"), "step-joined");
   await click(page, "设置");
   await sleep(settle);
   await shot(page, "settings-desktop", 1600);
@@ -115,6 +132,7 @@ console.log("截图");
   page = await open(ctx, "s=join&nointro=1");
   await sleep(2000);
   await shot(page, "start-desktop", 1600);
+  await part(page.locator(".start > section").first(), "step-create");
   await page.close();
 
   page = await open(ctx, "s=direct-host&nointro=1");
@@ -130,6 +148,7 @@ console.log("截图");
   await click(page, "管理");
   await sleep(settle + 600);
   await shot(page, "admin-desktop", 1600);
+  await part(page.locator("section.panel").filter({ hasText: "邀请朋友" }).first(), "step-invite");
   await page.close();
   await ctx.close();
 

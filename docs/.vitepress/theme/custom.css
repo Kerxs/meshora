@@ -152,6 +152,90 @@ body,
   }
 }
 
+/*
+  开场动画（theme/intro.ts）：页面内容先藏着，中间画 Logo，Logo 飞到导航栏，内容浮上来。
+  site-booting 由 config.mts 里的内联脚本在第一帧之前加上
+*/
+html.site-booting .VPNav,
+html.site-booting .VPLocalNav,
+html.site-booting .VPContent,
+html.site-booting .VPFooter,
+html.site-booting .VPSidebar {
+  opacity: 0;
+}
+
+html.site-booted .VPNav,
+html.site-booted .VPLocalNav,
+html.site-booted .VPContent,
+html.site-booted .VPFooter,
+html.site-booted .VPSidebar {
+  animation: site-in 640ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+html.site-booted .VPContent {
+  animation-delay: 120ms;
+}
+
+@keyframes site-in {
+  from { opacity: 0; transform: translateY(12px); }
+}
+
+.site-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.site-intro .intro-logo {
+  width: 104px;
+  height: 104px;
+  overflow: visible;
+  transition: transform 760ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.site-intro.fly .intro-logo {
+  transform: var(--fly);
+}
+
+.site-intro.fade {
+  animation: site-fade-out 480ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes site-fade-out {
+  to { opacity: 0; }
+}
+
+.site-intro .l {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: site-draw 640ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: calc(300ms + var(--i) * 80ms);
+}
+
+.site-intro .n {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: site-pop 560ms cubic-bezier(0.34, 1.3, 0.64, 1) both;
+  animation-delay: calc(var(--i) * 130ms);
+}
+
+@keyframes site-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes site-pop {
+  from { opacity: 0; transform: scale(0.2); }
+}
+
+/* 导航栏左边的 Logo */
+.VPNavBarTitle .logo {
+  height: 26px;
+  width: 26px;
+}
+
 /* 侧边栏、大纲：和卡片一样的圆角，离边缘留点空 */
 .VPSidebar {
   border-radius: 0 22px 22px 0;

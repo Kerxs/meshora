@@ -62,7 +62,16 @@ export default defineConfig({
       rel: 'stylesheet',
       href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap'
     }],
-    ['meta', { name: 'theme-color', content: '#0a1030' }],
+    ['meta', { name: 'theme-color', content: '#07080c' }],
+    // 开场动画（theme/intro.ts）：第一帧之前决定放不放，放的话先把页面内容藏起来，免得先闪一下。
+    // 4 秒兜底：主题的 JS 没跑起来，内容也会出来
+    ['script', {}, `try {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!sessionStorage.getItem('meshora-intro') && !reduce && document.visibilityState !== 'hidden') {
+    document.documentElement.classList.add('site-booting');
+    setTimeout(function () { document.documentElement.classList.remove('site-booting'); }, 4000);
+  }
+} catch (e) {}`],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'Meshora' }],
     ['meta', { property: 'og:title', content: 'Meshora — 异地好友，同一个局域网' }],
@@ -70,11 +79,11 @@ export default defineConfig({
     ['meta', { property: 'og:url', content: SITE }]
   ],
 
-  // 和 Meshora 客户端一样：深色的品牌底，彩色的流体光，液态玻璃浮在上面
+  // 和 Meshora 客户端一样：近黑的底，一层点阵，磨砂玻璃浮在上面
   appearance: 'force-dark',
 
   themeConfig: {
-    logo: undefined,
+    logo: '/logo.svg',
     siteTitle: 'Meshora',
 
     nav: [

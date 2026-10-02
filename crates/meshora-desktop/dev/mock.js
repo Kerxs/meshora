@@ -32,7 +32,8 @@
     autoConnect: true,
     privateNetwork: false,
     onboarded: true,
-    officialServer: null,
+    // 和客户端里写死的官方服务器一样：开始页上"官方服务器"可选、默认选中
+    officialServer: "3hxhTS9dwMrNCqPzJzqOheZMk8qYepYn9QMmxKhPkgU=@39.108.210.40:7443",
     servers: [server],
     roster: null,
     hosting: null,

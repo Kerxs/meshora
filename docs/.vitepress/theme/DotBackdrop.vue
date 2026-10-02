@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
+import { introPending } from './intro'
 
 /**
  * 全站背景：和 Meshora 客户端（crates/meshora-desktop/ui/sky.js）同一套点阵。
@@ -19,6 +20,9 @@ const SIGMA = 90
 const PULL = 0.22
 const BASE_ALPHA = 0.14
 const LIT_ALPHA = 0.7
+/** 开场时点阵从中心一圈圈亮起：离中心每多一像素晚这么多毫秒；每个点从暗到亮用多久 */
+const RIPPLE_MS_PER_PX = 1
+const RIPPLE_FADE = 520
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 
@@ -30,6 +34,8 @@ let frame = 0
 let still: MediaQueryList | null = null
 const target = { x: 0, y: 0, on: 0 }
 const at = { x: 0, y: 0, on: 0 }
+/** 开场扩散从这一刻起算；不放开场动画是 null */
+let born: number | null = null
 
 function resize() {
   const el = canvas.value
@@ -44,10 +50,34 @@ function resize() {
   draw()
 }
 
+function drawRipple(age: number) {
+  if (!ctx) return
+  const cx = width / 2
+  const cy = height / 2
+  for (let y = GAP / 2; y < height; y += GAP) {
+    for (let x = GAP / 2; x < width; x += GAP) {
+      const r = Math.min(1, Math.max(0, (age - Math.hypot(x - cx, y - cy) * RIPPLE_MS_PER_PX) / RIPPLE_FADE))
+      if (r <= 0) continue
+      const crest = r < 1 ? Math.sin(r * Math.PI) : 0
+      ctx.fillStyle = `rgba(${Math.round(255 - 80 * crest)}, ${Math.round(255 - 50 * crest)}, 255, ${BASE_ALPHA * r + 0.5 * crest})`
+      const size = 1.5 + 1.6 * crest
+      ctx.fillRect(x - size / 2, y - size / 2, size, size)
+    }
+  }
+}
+
 function draw() {
   if (!ctx) return
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
   ctx.clearRect(0, 0, width, height)
+  if (born !== null) {
+    const age = performance.now() - born
+    if (age < Math.hypot(width, height) / 2 * RIPPLE_MS_PER_PX + RIPPLE_FADE) {
+      drawRipple(age)
+      return
+    }
+    born = null
+  }
   const strength = still?.matches ? 0 : at.on
   const reach = SIGMA * 3
   ctx.fillStyle = `rgba(255, 255, 255, ${BASE_ALPHA})`
@@ -141,6 +171,19 @@ onMounted(() => {
   window.addEventListener('blur', onLeave)
   window.addEventListener('resize', resize)
   document.addEventListener('visibilitychange', onVisibility)
+  if (introPending() && !still?.matches) {
+    born = performance.now()
+    const ripple = () => {
+      draw()
+      if (born !== null && !document.hidden) requestAnimationFrame(ripple)
+    }
+    requestAnimationFrame(ripple)
+    // rAF 在看不见时不来：兜底，保证点阵一定亮全
+    setTimeout(() => {
+      born = null
+      draw()
+    }, 2600)
+  }
   resize()
 })
 
