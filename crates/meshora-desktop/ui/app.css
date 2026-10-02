@@ -241,6 +241,147 @@ textarea {
   }
 }
 
+/* ---------- 备选背景（挑选中，选定一版后其余删掉） ----------
+ * 方向：少颜色、低饱和、大面积留暗、动得很慢。都只动 transform 和 opacity，看不见时停（.paused） */
+
+html[data-bg] .sky > * {
+  position: absolute;
+  pointer-events: none;
+}
+
+.sky.paused > * {
+  animation-play-state: paused !important;
+}
+
+/* A 极光：近黑底，上方一两道很淡的冷色光带缓慢横移 */
+html[data-bg="aurora"] {
+  background: #05070d;
+}
+
+.aurora-band {
+  left: -30vw;
+  width: 160vw;
+  border-radius: 50%;
+  animation: aurora-drift 48s ease-in-out infinite alternate;
+}
+
+.band-1 {
+  top: -30vh;
+  height: 80vh;
+  background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(72, 140, 255, 0.62), rgba(72, 140, 255, 0) 70%);
+}
+
+.band-2 {
+  bottom: -36vh;
+  height: 72vh;
+  background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(46, 214, 196, 0.42), rgba(46, 214, 196, 0) 70%);
+  animation-duration: 62s;
+  animation-direction: alternate-reverse;
+}
+
+@keyframes aurora-drift {
+  0% { transform: translateX(-12vw) scaleY(0.85); opacity: 0.75; }
+  100% { transform: translateX(14vw) scaleY(1.1); opacity: 1; }
+}
+
+/* B 点阵：深色底一层细点（"网"），左上一团极淡的品牌蓝，指针附近微亮 */
+html[data-bg="grid"] {
+  background: #07080c;
+}
+
+.grid-dots {
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.16) 1px, transparent 1.6px);
+  background-size: 24px 24px;
+}
+
+.grid-glow {
+  left: -25vmax;
+  top: -30vmax;
+  width: 80vmax;
+  height: 80vmax;
+  background: radial-gradient(circle, rgba(61, 107, 255, 0.36), rgba(61, 107, 255, 0) 66%);
+  animation: glow-breathe 24s ease-in-out infinite alternate;
+}
+
+.grid-spot {
+  left: 0;
+  top: 0;
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(130, 160, 255, 0.12), rgba(130, 160, 255, 0) 70%);
+  transform: translate(calc(var(--sx, 70vw) - 210px), calc(var(--sy, 60vh) - 210px));
+  transition: transform 900ms var(--ease);
+}
+
+@keyframes glow-breathe {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(1.12); opacity: 1; }
+}
+
+/* C 单色：只用品牌蓝一种色相的大面积柔和渐变，加一层细颗粒，几乎不动 */
+html[data-bg="mono"] {
+  background: linear-gradient(150deg, #0a1028 0%, #06080f 55%, #081430 100%);
+}
+
+.mono-wash {
+  inset: -20%;
+  background:
+    radial-gradient(ellipse 55% 50% at 20% 15%, rgba(70, 115, 255, 0.55), rgba(70, 115, 255, 0) 70%),
+    radial-gradient(ellipse 50% 55% at 85% 90%, rgba(50, 90, 235, 0.42), rgba(50, 90, 235, 0) 70%);
+  animation: mono-drift 70s ease-in-out infinite alternate;
+}
+
+.mono-grain {
+  inset: 0;
+  opacity: 0.1;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+@keyframes mono-drift {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  100% { transform: translate(4%, 3%) rotate(6deg); }
+}
+
+/* D 节点网：稀疏的节点和细连线，透明度很低，整张图很慢地漂 */
+html[data-bg="nodes"] {
+  background: #060912;
+}
+
+.nodes-glow {
+  inset: 0;
+  background: radial-gradient(ellipse 60% 55% at 50% 40%, rgba(61, 107, 255, 0.24), rgba(61, 107, 255, 0) 75%);
+}
+
+.net {
+  left: -5%;
+  top: -5%;
+  width: 110%;
+  height: 110%;
+  animation: net-drift 80s ease-in-out infinite alternate;
+}
+
+.net line {
+  stroke: rgba(150, 175, 255, 0.2);
+  stroke-width: 1.2;
+}
+
+.net circle {
+  fill: rgba(170, 195, 255, 0.6);
+}
+
+@keyframes net-drift {
+  0% { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(-3%, 2%) scale(1.04); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-bg] .sky > * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* ---------- 框架 ---------- */
 
 #app {
