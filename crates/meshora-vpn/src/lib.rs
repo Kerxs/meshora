@@ -1,6 +1,6 @@
 //! 安卓的 VpnService：安卓上 App 没有 root，建不了网卡，要请系统建。
 //!
-//! 1. [`Vpn::prepare`]：要 VPN 权限。第一次会弹系统对话框"Meshora 想要设置 VPN 连接"，等用户点
+//! 1. `Vpn::prepare`：要 VPN 权限。第一次会弹系统对话框"Meshora 想要设置 VPN 连接"，等用户点
 //! 2. `Vpn::establish`（只在安卓上有）：按协调服务分的地址建网卡，拿回文件描述符，交给 `meshora_tun::Tun::from_fd`
 //!
 //! 网卡只接管 overlay 网段（加上广播、组播），上网的流量不经过它；Meshora 自己的流量也排除在外。

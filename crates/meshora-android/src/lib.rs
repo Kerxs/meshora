@@ -1,7 +1,7 @@
 //! Meshora 的安卓客户端。
 //!
 //! 和桌面端几乎是同一个东西：界面是同一份 `meshora-desktop/ui`（按平台藏掉手机上用不上的），
-//! 节点的启停、状态汇总是同一个 [`Controller`]。不同的只有虚拟网卡：App 没有 root，
+//! 节点的启停、状态汇总是同一个 `Controller`。不同的只有虚拟网卡：App 没有 root，
 //! 网卡请系统的 VpnService 建（`tauri-plugin-meshora-vpn`），拿回描述符交给数据面。
 //!
 //! 只在安卓和 Windows 上编：Windows 上编得过，是为了在开发机上就能检查（用不了，网卡建不起来）。
