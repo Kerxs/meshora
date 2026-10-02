@@ -94,10 +94,13 @@ pub struct NatInfo {
     pub symmetric: bool,
     /// 这一轮 STUN 问完了（都回了，或者等够了）。生成连接码前等它。
     pub checked: bool,
+    /// 路由器用 UPnP 映射出来的公网端点（见 [`DirectHandle::set_mapped`]）。
+    pub mapped: Option<SocketAddr>,
 }
 
 enum Command {
     Set(Vec<DirectPeer>),
+    Mapped(Option<SocketAddr>),
 }
 
 /// 跑起来之后改 peer 列表、看 NAT 情况用的把手。
@@ -113,6 +116,13 @@ impl DirectHandle {
     /// 换一份完整的 peer 列表（声明式：没列出的就断开）。
     pub fn set_peers(&self, peers: Vec<DirectPeer>) {
         let _ = self.commands.send(Command::Set(peers));
+    }
+
+    /// 路由器用 UPnP 给本机映射出来的公网端点：作为额外的候选写进连接码。
+    ///
+    /// 路由器肯开的话，对方往这个端点发的报文路由器会直接转进来，不靠打洞 —— 本机这一侧是对称型 NAT 时尤其要紧。
+    pub fn set_mapped(&self, mapped: Option<SocketAddr>) {
+        let _ = self.commands.send(Command::Mapped(mapped));
     }
 
     /// 本机这一侧的 NAT 情况。
@@ -225,6 +235,7 @@ impl DirectSession {
     ) -> Result<(), ControlError> {
         let mut node = Node::new(&self.node_config, &self.welcome, dataplane);
         node.stun_servers = self.stun.clone();
+        node.eager = true;
         if self.role == Role::Guest {
             node.gateway = Some(IpNet::V4(NETWORK));
         }
@@ -245,6 +256,9 @@ impl DirectSession {
                     Command::Set(peers) => {
                         self.peers = peers;
                         node.on_net_map(peer_infos(&self.peers), Instant::now());
+                    }
+                    Command::Mapped(mapped) => {
+                        node.hosting.extra_endpoints = mapped.into_iter().collect();
                     }
                 },
             }

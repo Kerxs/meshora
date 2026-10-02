@@ -5,6 +5,10 @@
 pub mod location;
 pub mod payload;
 
+/// Windows 防火墙里放行 Meshora 收 UDP。
+#[cfg(windows)]
+pub mod firewall;
+
 /// 读、收紧文件夹的权限（Windows）。
 #[cfg(windows)]
 #[allow(unsafe_code)]

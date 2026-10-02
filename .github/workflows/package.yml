@@ -142,6 +142,12 @@ jobs:
           # 打包工具的版本钉在 package-lock.json 里：它会被拿来执行，供应链的账要算清。
           # Gradle 编 Rust 时还会回调 npm run tauri，所以得是装在这里的，不能用 npx 临时拉
           npm ci --no-audit --no-fund
+          # 安卓的版本号（versionName、versionCode）从 tauri.conf.json 的 version 来，不写就是模板的 "1.0" 和 1：
+          # 手机上装的时候看到的永远是 1.0。版本号以 Cargo 为准，打包前写进去（不入库，免得两处要同时改）
+          version=$(cargo metadata --no-deps --locked --format-version 1 |
+            jq -r '.packages[] | select(.name == "meshora-android") | .version')
+          jq --arg v "$version" '.version = $v' tauri.conf.json > tauri.conf.json.new
+          mv tauri.conf.json.new tauri.conf.json
           npm run tauri -- android init --ci
           npm run tauri -- icon ../meshora-desktop/icons/icon.png
           npm run tauri -- android build --ci --apk --target aarch64 --target x86_64
@@ -178,6 +184,10 @@ jobs:
           KS_PASS="$KS_PASS" "$tools/apksigner" sign --ks "$RUNNER_TEMP/meshora.p12" --ks-type PKCS12 \
             --ks-pass env:KS_PASS --out "dist/Meshora-$version-android.apk" "$RUNNER_TEMP/aligned.apk"
           "$tools/apksigner" verify --print-certs "dist/Meshora-$version-android.apk"
+          # 系统安装时显示的版本号得和发布的一致
+          badging=$("$tools/aapt2" dump badging "dist/Meshora-$version-android.apk" | head -1)
+          echo "$badging"
+          grep -q "versionName='$version'" <<<"$badging" || { echo "APK 的 versionName 不是 $version" >&2; exit 1; }
           rm -f "$RUNNER_TEMP/meshora.p12" "$RUNNER_TEMP/k.pem"
           ls -la dist
 

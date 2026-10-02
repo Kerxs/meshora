@@ -69,6 +69,8 @@ const DISCO_RATE: u32 = 200;
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// 一轮 STUN 最多等多久：有的服务器问不通（被墙、被封 UDP），不能一直等它
 const STUN_WAIT: Duration = Duration::from_secs(3);
+/// 直连模式：一个 peer 加进来后，加密探测（见 [`paths::PeerPaths::punch_eagerly`]）持续多久
+const EAGER_PUNCH: Duration = Duration::from_secs(30);
 
 /// 连协调服务时，第一条消息怎么说。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,6 +257,11 @@ pub struct PeerView {
     pub jitter: Option<Duration>,
     /// 走直连时，这条直连探测的丢包率（百分比，平滑过）。走中继时为 `None`。
     pub loss_percent: Option<u8>,
+    /// 直接（不经中继）收到过它的报文：Ping、Pong 或者 WireGuard 握手。打洞没通时用来判断卡在哪一边：
+    /// 收到过，说明对方的报文进得来、是我们的回不去；没收到过，是对方的报文到不了这里
+    pub heard: bool,
+    /// 正在探测的候选地址（诊断用）。
+    pub candidates: Vec<SocketAddr>,
 }
 
 /// 和协调服务的一条连接：读由单独的任务负责（Noise 的读不能在 select 里被中途取消），
@@ -596,6 +603,8 @@ struct PeerState {
     /// 已经告诉数据面的路径
     current: Option<Path>,
     last_call_me_maybe: Option<Instant>,
+    /// 直接收到过它的报文（见 [`PeerView::heard`]）
+    heard: bool,
 }
 
 /// 令牌桶：每秒补满
@@ -671,6 +680,8 @@ struct Node {
     stun_round: Option<Instant>,
     /// 直连模式的朋友：房主这个 peer 的网段是整个 overlay（经它到别的朋友）
     gateway: Option<IpNet>,
+    /// 直连模式：新加的 peer 打洞期间加密探测
+    eager: bool,
 }
 
 impl Node {
@@ -702,6 +713,7 @@ impl Node {
             stun_seen: HashMap::new(),
             stun_round: None,
             gateway: None,
+            eager: false,
         };
         node.on_reconnected(welcome);
         node
@@ -774,12 +786,21 @@ impl Node {
 
         self.peers.retain(|key, _| set.get(key).is_some());
         for peer in &peers {
-            let state = self.peers.entry(peer.key).or_insert_with(|| PeerState {
-                overlay_ip: peer.overlay_ip,
-                name: String::new(),
-                paths: PeerPaths::default(),
-                current: None,
-                last_call_me_maybe: None,
+            let eager = self.eager;
+            let state = self.peers.entry(peer.key).or_insert_with(|| {
+                info!(peer = %peer.key, ip = %peer.overlay_ip, endpoints = ?peer.endpoints, "新的 peer，开始探测");
+                let mut paths = PeerPaths::default();
+                if eager {
+                    paths.punch_eagerly(now + EAGER_PUNCH);
+                }
+                PeerState {
+                    overlay_ip: peer.overlay_ip,
+                    name: String::new(),
+                    paths,
+                    current: None,
+                    last_call_me_maybe: None,
+                    heard: false,
+                }
             });
             state.overlay_ip = peer.overlay_ip;
             state.name.clone_from(&peer.name);
@@ -800,6 +821,9 @@ impl Node {
             } => self.on_relayed_disco(peer, via, &datagram, now),
             Event::HandshakeCompleted { peer, via } => {
                 debug!(%peer, ?via, "WireGuard 握手完成");
+                if let Path::Direct(from) = via {
+                    self.heard_from(peer, from);
+                }
             }
             Event::StunDatagram { from, datagram } => self.on_stun(from, &datagram, now),
         }
@@ -866,6 +890,7 @@ impl Node {
             public: self.reflexive,
             symmetric: seen.len() > 1,
             checked: answered_all || waited || self.stun_servers.is_empty(),
+            mapped: self.hosting.extra_endpoints.first().copied(),
         }
     }
 
@@ -886,6 +911,7 @@ impl Node {
                 return;
             }
         };
+        self.heard_from(sender, from);
         match message {
             DiscoMessage::Ping { tx } => {
                 let Some(state) = self.peers.get_mut(&sender) else {
@@ -905,6 +931,16 @@ impl Node {
                 }
             }
             DiscoMessage::Pong { tx, observed } => self.on_pong(sender, tx, observed, now),
+        }
+    }
+
+    /// 直接收到了 `peer` 的一个（认证过的）报文。第一次收到时记一笔日志：打洞卡住时看它
+    fn heard_from(&mut self, peer: NodeKey, from: SocketAddr) {
+        if let Some(state) = self.peers.get_mut(&peer)
+            && !state.heard
+        {
+            state.heard = true;
+            info!(%peer, %from, "第一次直接收到对方的报文");
         }
     }
 
@@ -1072,6 +1108,8 @@ impl Node {
                     None => None,
                 }
                 .map(|loss| (loss * 100.0).round().clamp(0.0, 100.0) as u8),
+                heard: state.heard,
+                candidates: state.paths.candidate_addrs(),
             })
             .collect();
         peers.sort_by_key(|peer| peer.overlay_ip);

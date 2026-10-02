@@ -7,13 +7,14 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
+use meshora_control::Status;
 use meshora_control::direct::{
     self, DirectConfig, DirectHandle, DirectPeer, DirectSession, HOST_IP, Offer, Reply, Role,
 };
 use meshora_types::NodeSecret;
 use meshora_wg::{TunChannels, UserspaceDataPlane};
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 const CONVERGE: Duration = Duration::from_secs(20);
 
@@ -52,6 +53,7 @@ struct Node {
     secret: NodeSecret,
     ip: Ipv4Addr,
     handle: DirectHandle,
+    status: watch::Receiver<Status>,
     tun_in: mpsc::Sender<Vec<u8>>,
     tun_out: mpsc::Receiver<Vec<u8>>,
     _dataplane: Arc<UserspaceDataPlane>,
@@ -76,6 +78,7 @@ async fn start(
         peers,
     });
     let handle = session.handle();
+    let status = session.status();
     let (tun_in, from_tun) = mpsc::channel(64);
     let (to_tun, tun_out) = mpsc::channel(64);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
@@ -98,6 +101,7 @@ async fn start(
         secret,
         ip,
         handle,
+        status,
         tun_in,
         tun_out,
         _dataplane: dataplane,
@@ -228,4 +232,87 @@ async fn friends_reach_each_other_through_the_host() {
     let got = deliver(&b, c.ip, &mut c, b"via host").await;
     assert_eq!(&got[12..16], &b.ip.octets(), "源地址还是 B");
     assert_eq!(got[20..], *b"via host");
+}
+
+/// 码里的端点全是错的：一个谁也没在听的本机端口
+fn nowhere() -> SocketAddr {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket.local_addr().unwrap()
+}
+
+#[tokio::test]
+async fn a_wrong_address_in_one_code_is_learned_from_the_other_side() {
+    // 端口受限型 NAT 上常见：码里的端口不对，但对方的 Ping 从真实的端口来，学到它就通了
+    let stun = fake_stun().await;
+    let host_secret = NodeSecret::generate();
+    let guest_secret = NodeSecret::generate();
+    let mut host = start(host_secret.clone(), HOST_IP, Role::Host, vec![], stun).await;
+    let host_nat = host.handle.wait_checked(Duration::from_secs(5)).await;
+    let guest_ip = Ipv4Addr::new(100, 96, 0, 2);
+    // 朋友拿到的房主码里，房主的端点是错的
+    let guest = start(
+        guest_secret.clone(),
+        guest_ip,
+        Role::Guest,
+        vec![DirectPeer {
+            key: host_secret.public_key(),
+            ip: HOST_IP,
+            name: String::new(),
+            endpoints: vec![nowhere()],
+        }],
+        stun,
+    )
+    .await;
+    assert!(!host_nat.endpoints.is_empty());
+    let guest_nat = guest.handle.wait_checked(Duration::from_secs(5)).await;
+    host.handle.set_peers(vec![DirectPeer {
+        key: guest_secret.public_key(),
+        ip: guest_ip,
+        name: String::new(),
+        endpoints: guest_nat.endpoints,
+    }]);
+    assert_eq!(
+        deliver(&guest, HOST_IP, &mut host, b"learned").await[20..],
+        *b"learned"
+    );
+}
+
+#[tokio::test]
+async fn diagnostics_say_nothing_arrived_when_both_codes_are_wrong() {
+    let stun = fake_stun().await;
+    let host_secret = NodeSecret::generate();
+    let guest_secret = NodeSecret::generate();
+    let mut host = start(host_secret.clone(), HOST_IP, Role::Host, vec![], stun).await;
+    let guest_ip = Ipv4Addr::new(100, 96, 0, 2);
+    let _guest = start(
+        guest_secret.clone(),
+        guest_ip,
+        Role::Guest,
+        vec![DirectPeer {
+            key: host_secret.public_key(),
+            ip: HOST_IP,
+            name: String::new(),
+            endpoints: vec![nowhere()],
+        }],
+        stun,
+    )
+    .await;
+    let wrong = nowhere();
+    host.handle.set_peers(vec![DirectPeer {
+        key: guest_secret.public_key(),
+        ip: guest_ip,
+        name: String::new(),
+        endpoints: vec![wrong],
+    }]);
+    // 等几轮探测
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let status = host.status.borrow_and_update().clone();
+    let peer = &status.peers[0];
+    assert!(!peer.heard, "对方的报文一次都没到");
+    assert_eq!(peer.path, None, "没有直连可走");
+    assert!(
+        peer.candidates.contains(&wrong),
+        "诊断里列出试过的地址：{:?}",
+        peer.candidates
+    );
 }

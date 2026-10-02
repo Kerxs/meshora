@@ -162,7 +162,7 @@ pub fn check_target(target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn system32() -> PathBuf {
+pub(crate) fn system32() -> PathBuf {
     let mut buf = [0u16; 260];
     // SAFETY: 缓冲区是我们自己的，长度如实告诉函数
     let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;

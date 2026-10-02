@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use crate::host::{self, Host, HostInfo};
+use crate::host::{self, Host, HostInfo, UdpMapping};
 use crate::logs::LogBuffer;
 use crate::store::{DirectNet, DirectPeerSaved, MAX_NAME_CHARS, Settings, Store};
 use crate::update::{self, UpdateView, Updater};
@@ -148,6 +148,10 @@ pub struct PeerRow {
     pub rx: u64,
     /// 发出的字节数。
     pub tx: u64,
+    /// 直接收到过对方的报文（打洞没通时判断卡在哪一边，见 `meshora_control::PeerView::heard`）。
+    pub heard: bool,
+    /// 正在探测的候选地址（诊断用）。
+    pub candidates: Vec<String>,
 }
 
 /// 网主看到的一个成员。
@@ -299,6 +303,10 @@ pub struct DirectView {
     pub symmetric: bool,
     /// 这一轮 STUN 问完了。
     pub checked: bool,
+    /// 路由器用 UPnP 开的端口，外面看到的端点；没开成是 `None`。
+    pub mapped: Option<String>,
+    /// UPnP 试过了（成没成都算）。
+    pub upnp_tried: bool,
 }
 
 /// 生成好的一段连接码（房主码或回执码），和生成时本机的 NAT 情况。
@@ -309,6 +317,8 @@ pub struct DirectCode {
     pub code: String,
     /// 问没问到公网端点：没问到时码里只有局域网地址，只有同一个局域网的人连得上。
     pub public: bool,
+    /// 路由器用 UPnP 开了端口（码里多了一个不用打洞就进得来的地址）。
+    pub mapped: bool,
     /// 像是对称型 NAT，多半打不通。
     pub symmetric: bool,
 }
@@ -352,6 +362,10 @@ struct State {
     direct: Option<DirectHandle>,
     /// 房主发出去、还没收到回执的房主码里分出去的地址
     pending: Vec<std::net::Ipv4Addr>,
+    /// 直连模式：路由器上开的端口（丢掉就撤）
+    upnp: Option<UdpMapping>,
+    /// 直连模式：UPnP 试过了（成没成都算）。生成连接码前等它
+    upnp_tried: bool,
 }
 
 struct Shared {
@@ -419,6 +433,8 @@ impl Controller {
                     host: None,
                     direct: None,
                     pending: Vec::new(),
+                    upnp: None,
+                    upnp_tried: false,
                 }),
                 ops: tokio::sync::Mutex::new(()),
             }),
@@ -466,6 +482,8 @@ impl Controller {
                     public_endpoint: nat.public.map(|addr| addr.to_string()),
                     symmetric: nat.symmetric,
                     checked: nat.checked,
+                    mapped: nat.mapped.map(|addr| addr.to_string()),
+                    upnp_tried: state.upnp_tried,
                 }
             }),
         }
@@ -733,7 +751,7 @@ impl Controller {
         };
         let net = net.filter(|net| !net.host).ok_or("只有朋友才生成回执码")?;
         let host = net.peers.first().ok_or("没有房主")?;
-        let nat = handle.wait_checked(STUN_PATIENCE).await;
+        let nat = self.wait_nat(&handle).await;
         let reply = Reply {
             guest: self.shared.secret.public_key(),
             host: host
@@ -747,7 +765,8 @@ impl Controller {
         };
         Ok(DirectCode {
             code: reply.encode(),
-            public: nat.public.is_some(),
+            public: nat.public.is_some() || nat.mapped.is_some(),
+            mapped: nat.mapped.is_some(),
             symmetric: nat.symmetric,
         })
     }
@@ -776,7 +795,7 @@ impl Controller {
             state.pending.push(ip);
             (ip, state.settings.name.clone())
         };
-        let nat = handle.wait_checked(STUN_PATIENCE).await;
+        let nat = self.wait_nat(&handle).await;
         let offer = Offer {
             host: self.shared.secret.public_key(),
             host_ip: handle.ip(),
@@ -788,7 +807,8 @@ impl Controller {
         };
         Ok(DirectCode {
             code: offer.encode(),
-            public: nat.public.is_some(),
+            public: nat.public.is_some() || nat.mapped.is_some(),
+            mapped: nat.mapped.is_some(),
             symmetric: nat.symmetric,
         })
     }
@@ -867,6 +887,19 @@ impl Controller {
         state.snapshot = Snapshot::default();
         let task = tokio::spawn(run_direct(Arc::clone(&self.shared), net, metric, stop_rx));
         state.runner = Some(Runner { stop, task });
+    }
+
+    /// 生成连接码前：等 STUN 问完、UPnP 试完（各自最多等一会儿），交回此刻的 NAT 情况
+    async fn wait_nat(&self, handle: &DirectHandle) -> direct::NatInfo {
+        let nat = handle.wait_checked(STUN_PATIENCE).await;
+        let started = Instant::now();
+        while !self.shared.state().upnp_tried && started.elapsed() < STUN_PATIENCE {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        // UPnP 的结果经命令通道进控制面，下一个节拍才算进端点：再看一眼最新的
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let latest = handle.nat().borrow().clone();
+        if latest.checked { latest } else { nat }
     }
 
     /// 等直连节点起来，拿到它的把手
@@ -1025,6 +1058,8 @@ impl Controller {
             state.renamer = None;
             state.admin = None;
             state.direct = None;
+            state.upnp = None;
+            state.upnp_tried = false;
             state.runner.take()
         };
         if let Some(Runner { stop, mut task }) = runner {
@@ -1234,6 +1269,28 @@ async fn run_direct(
         if state.settings.private_network {
             state.profile = Some(set_profile(node.tun_name().to_owned(), true));
         }
+    }
+    // 在后台请路由器开端口（UPnP）：开成了，对方不用打洞也进得来
+    if let (Some(port), Some(handle)) = (node.local_port(), node.direct().cloned()) {
+        let shared = Arc::clone(&shared);
+        tokio::spawn(async move {
+            let mapped = tokio::task::spawn_blocking(move || host::map_udp(port))
+                .await
+                .ok()
+                .flatten();
+            let mut state = shared.state();
+            // 等的这几秒里节点可能已经换了：不是同一个就把映射丢掉（撤销）
+            let same = state
+                .direct
+                .as_ref()
+                .is_some_and(|now| now.ip() == handle.ip());
+            if !same {
+                return;
+            }
+            handle.set_mapped(mapped.as_ref().map(|(_, outside)| *outside));
+            state.upnp = mapped.map(|(mapping, _)| mapping);
+            state.upnp_tried = true;
+        });
     }
     watch(&shared, node, stop).await;
 }
@@ -1462,6 +1519,8 @@ fn rows(status: &Status, peers: &[PeerStatus], now: Instant) -> Vec<PeerRow> {
                     .is_some_and(|at| now.saturating_duration_since(at) < ONLINE_WINDOW),
                 rx: data.map_or(0, |peer| peer.rx_bytes),
                 tx: data.map_or(0, |peer| peer.tx_bytes),
+                heard: view.heard,
+                candidates: view.candidates.iter().map(ToString::to_string).collect(),
             }
         })
         .collect()
@@ -1507,6 +1566,8 @@ mod tests {
                     rtt: Some(Duration::from_micros(12_700)),
                     jitter: Some(Duration::from_micros(2_300)),
                     loss_percent: Some(3),
+                    heard: true,
+                    candidates: vec![SocketAddr::from(([192, 0, 2, 1], 41641))],
                 },
                 PeerView {
                     key: key(2),
@@ -1516,6 +1577,8 @@ mod tests {
                     rtt: None,
                     jitter: None,
                     loss_percent: None,
+                    heard: false,
+                    candidates: Vec::new(),
                 },
                 PeerView {
                     key: key(3),
@@ -1525,6 +1588,8 @@ mod tests {
                     rtt: None,
                     jitter: None,
                     loss_percent: None,
+                    heard: false,
+                    candidates: Vec::new(),
                 },
             ],
         };
@@ -1559,6 +1624,8 @@ mod tests {
                 online: true,
                 rx: 10,
                 tx: 20,
+                heard: true,
+                candidates: vec!["192.0.2.1:41641".into()],
             }
         );
         assert_eq!(rows_now[1].route, "relay");

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use winreg::RegKey;
 use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS};
 
-use meshora_setup::{acl, payload};
+use meshora_setup::{acl, firewall, payload};
 
 /// 不弹控制台窗口
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -222,6 +222,10 @@ pub fn install(options: &Options, progress: &dyn Fn(&str, u8)) -> Result<(), Str
         None => {}
     }
 
+    progress("放行防火墙", 89);
+    // 加不上不拦着装：官方服务器模式照样能用（打不通走中继），只是直连模式多半打不通
+    let _ = firewall::allow(firewall::RULE, &exe);
+
     progress("登记到“应用和功能”", 92);
     let size_kb = (total / 1024) as u32;
     let (key, _) = RegKey::predef(HKEY_LOCAL_MACHINE)
@@ -278,6 +282,7 @@ pub fn uninstall(purge: bool, progress: &dyn Fn(&str, u8)) -> Result<(), String>
     }
 
     progress("从“应用和功能”里拿掉", 75);
+    firewall::remove(firewall::RULE);
     let _ = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey_with_flags(
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",

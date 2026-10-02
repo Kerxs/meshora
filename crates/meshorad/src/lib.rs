@@ -320,6 +320,11 @@ impl Node {
         self.name.clone()
     }
 
+    /// WireGuard 和控制报文共用的那个 UDP 端口（绑定时让系统挑的话，是它挑的那个）。
+    pub fn local_port(&self) -> Option<u16> {
+        self.dataplane.local_addr().ok().map(|addr| addr.port())
+    }
+
     /// 直连模式的把手（改 peer、看 NAT 情况）。连服务器的节点没有。
     pub fn direct(&self) -> Option<&DirectHandle> {
         self.direct.as_ref()

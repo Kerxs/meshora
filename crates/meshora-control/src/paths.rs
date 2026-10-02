@@ -68,6 +68,12 @@ pub const SETTLED_SAMPLES: u32 = 5;
 /// 不等一等的话，直连会被一个毛刺弹到中继上 —— e2e 里撞出来过。
 /// 真正又丢包又抖的直连半分钟后照样换走；直连整个断了不归这里管，两三秒就回落中继
 pub const RELAY_PATIENCE: Duration = Duration::from_secs(30);
+/// 打洞期间（见 [`PeerPaths::punch_eagerly`]）没通的候选多久探测一次。
+///
+/// 发出去的 Ping 要等 [`PONG_WAIT`] 才判丢、才发下一个，所以再密也就是这个节奏。
+/// 比平时的 [`PING_INTERVAL`] 密三倍：有的路由器给"只出不进"的映射留的时间很短，
+/// 3 秒一次的话两边的洞可能错开
+pub const EAGER_INTERVAL: Duration = PONG_WAIT;
 
 #[derive(Clone, Debug, Default)]
 struct Candidate {
@@ -212,6 +218,8 @@ pub struct PeerPaths {
     relays: HashMap<Path, Candidate>,
     /// 正在用的直连还通、中继却明显更好，从什么时候开始的（见 [`RELAY_PATIENCE`]）
     relay_favored_since: Option<Instant>,
+    /// 打洞期间到什么时候（见 [`punch_eagerly`](Self::punch_eagerly)）
+    eager_until: Option<Instant>,
 }
 
 impl PeerPaths {
@@ -246,6 +254,18 @@ impl PeerPaths {
         }
     }
 
+    /// 到 `until` 为止，没通的候选每 [`EAGER_INTERVAL`] 探测一次，而不是平时的 [`PING_INTERVAL`]。
+    ///
+    /// 直连模式里一个 peer 刚加进来时用：没有中继兜底，两边的洞得尽快对上。
+    pub fn punch_eagerly(&mut self, until: Instant) {
+        self.eager_until = Some(until);
+    }
+
+    /// 现在的候选地址（给诊断看）。
+    pub fn candidate_addrs(&self) -> Vec<SocketAddr> {
+        self.candidates.keys().copied().collect()
+    }
+
     /// 本机换了网络：此前的探测结果一律作废，所有候选马上重新探测。
     ///
     /// 直连是从旧网络上打通的，多半已经不通了。与其等它们一个个超时，不如立刻当作不通，
@@ -272,12 +292,17 @@ impl PeerPaths {
         self.candidates.retain(|_, candidate| {
             candidate.advertised || candidate.fresh(now) || candidate.remembered(now)
         });
+        let idle = if self.eager_until.is_some_and(|until| now < until) {
+            EAGER_INTERVAL
+        } else {
+            PING_INTERVAL
+        };
         let mut due = Vec::new();
         for (addr, candidate) in &mut self.candidates {
             let interval = if Some(*addr) == active {
                 ACTIVE_PING_INTERVAL
             } else {
-                PING_INTERVAL
+                idle
             };
             if candidate.poll_due(now, interval) {
                 due.push(*addr);
@@ -474,6 +499,37 @@ mod tests {
         assert_eq!(paths.due_pings(now, None), [addr(1)]);
         paths.on_pong(addr(1), 20 * MS, now + 20 * MS);
         paths
+    }
+
+    #[test]
+    fn punching_probes_every_second_then_backs_off() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        paths.punch_eagerly(now + 3 * SEC);
+        assert_eq!(paths.due_pings(now, None), [addr(1)]);
+        // 打洞期间：没回应，一秒后再探
+        assert!(paths.due_pings(now + SEC - MS, None).is_empty());
+        assert_eq!(paths.due_pings(now + SEC, None), [addr(1)]);
+        assert_eq!(paths.due_pings(now + 2 * SEC, None), [addr(1)]);
+        // 过了打洞期：回到平时的节奏
+        assert!(paths.due_pings(now + 4 * SEC, None).is_empty());
+        assert_eq!(
+            paths.due_pings(now + 2 * SEC + PING_INTERVAL, None),
+            [addr(1)]
+        );
+        assert_eq!(paths.candidate_addrs(), [addr(1)]);
+    }
+
+    #[test]
+    fn a_ping_from_a_new_address_is_probed_back_at_once() {
+        // 端口受限型 NAT：对方从一个码里没有的端口发来 Ping，这个端口就是打通的那条，马上回探
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        assert_eq!(paths.due_pings(now, None), [addr(1)]);
+        assert!(paths.learn(addr(9), now + MS), "第一次见到");
+        assert_eq!(paths.due_pings(now + MS, None), [addr(9)]);
     }
 
     #[test]

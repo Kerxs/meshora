@@ -244,6 +244,68 @@ fn map_ports(lan: Ipv4Addr) -> Option<(igd_next::Gateway, Ipv4Addr)> {
     Some((gateway, public))
 }
 
+/// 直连模式在路由器上开的一个 UDP 端口。丢掉它就撤掉映射。
+pub struct UdpMapping {
+    gateway: Arc<igd_next::Gateway>,
+    port: u16,
+}
+
+impl Drop for UdpMapping {
+    fn drop(&mut self) {
+        let (gateway, port) = (Arc::clone(&self.gateway), self.port);
+        // 删端口映射是阻塞的网络请求，放到单独的线程里
+        std::thread::spawn(move || {
+            let _ = gateway.remove_port(igd_next::PortMappingProtocol::UDP, port);
+        });
+    }
+}
+
+/// 直连模式：请路由器把 UDP `port` 映射到这台电脑的同一个端口，交回映射和外面看到的端点。
+///
+/// 阻塞（找路由器最多 [`UPNP_TIMEOUT`]），在 `spawn_blocking` 里调。路由器不支持、不肯开，
+/// 或者路由器自己的公网地址是私网 / 运营商级 NAT 的（开了外面也连不进来）时是 `None`
+pub fn map_udp(port: u16) -> Option<(UdpMapping, SocketAddr)> {
+    let lan = lan_ip()?;
+    let gateway = igd_next::search_gateway(igd_next::SearchOptions {
+        timeout: Some(UPNP_TIMEOUT),
+        single_search_timeout: Some(UPNP_TIMEOUT),
+        ..Default::default()
+    })
+    .map_err(|err| info!(%err, "直连：没找到支持 UPnP 的路由器"))
+    .ok()?;
+    let public = match gateway.get_external_ip() {
+        Ok(IpAddr::V4(ip)) if !shared_or_private(ip) => ip,
+        Ok(ip) => {
+            info!(%ip, "直连：路由器自己在别的 NAT 后面（运营商级 NAT），映射了也连不进来");
+            return None;
+        }
+        Err(err) => {
+            info!(%err, "直连：路由器没说公网地址");
+            return None;
+        }
+    };
+    let local = SocketAddr::V4(SocketAddrV4::new(lan, port));
+    if let Err(err) = gateway.add_port(
+        igd_next::PortMappingProtocol::UDP,
+        port,
+        local,
+        LEASE,
+        "Meshora",
+    ) {
+        info!(%err, port, "直连：路由器不让开这个端口");
+        return None;
+    }
+    let outside = SocketAddr::V4(SocketAddrV4::new(public, port));
+    info!(%outside, "直连：路由器用 UPnP 开了端口");
+    Some((
+        UdpMapping {
+            gateway: Arc::new(gateway),
+            port,
+        },
+        outside,
+    ))
+}
+
 /// 是不是外面连不进来的地址：私网、运营商级 NAT（100.64.0.0/10）、链路本地
 fn shared_or_private(ip: Ipv4Addr) -> bool {
     let cgnat = ip.octets()[0] == 100 && (ip.octets()[1] & 0xc0) == 64;
