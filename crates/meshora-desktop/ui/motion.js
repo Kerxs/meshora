@@ -48,7 +48,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * 启动动画：点阵从中心扩散（sky.js 自己做），中间画 Logo；第一份状态到了以后，Logo 缩小飞到左上角的品牌位置，
- * 整个界面浮上来。`ready` 是第一份状态到了的 Promise；最多等 1.5 秒，不让启动变慢。
+ * 整个界面浮上来。`ready` 是第一份状态到了的 Promise；最多等 1.8 秒，不让启动变慢。
  * 返回动画走完的 Promise（走完之后界面才收到 enter 动画）
  */
 export async function intro(ready) {
@@ -61,7 +61,7 @@ export async function intro(ready) {
   layer.append(mark);
   document.body.append(layer);
   // Logo 画完至少要这么久；状态最多等到 1.5 秒
-  await Promise.all([wait(820), Promise.race([ready, wait(1500)])]);
+  await Promise.all([wait(1350), Promise.race([ready, wait(1800)])]);
   const target = document.querySelector(".brand svg");
   const to = target?.getBoundingClientRect();
   const from = mark.getBoundingClientRect();
@@ -76,9 +76,9 @@ export async function intro(ready) {
   }
   root.classList.remove("booting");
   root.classList.add("booted");
-  await wait(460);
+  await wait(780);
   layer.remove();
-  setTimeout(() => root.classList.remove("booted"), 900);
+  setTimeout(() => root.classList.remove("booted"), 1400);
 }
 
 /**
@@ -100,7 +100,7 @@ export function swapView(container, next, dir, enter) {
     if (token !== swapping) return;
     container.replaceChildren(enter(next));
     container.scrollTop = 0;
-  }, 150);
+  }, 220);
 }
 
 /** 关一个弹层（确认框、连接码弹窗）：缩小、淡出，播完再移除 */
@@ -110,7 +110,7 @@ export function closeLayer(scrim) {
     return;
   }
   scrim.classList.add("closing");
-  setTimeout(() => scrim.remove(), 200);
+  setTimeout(() => scrim.remove(), 260);
 }
 
 /**
@@ -135,14 +135,14 @@ export function flip(container) {
       setTimeout(() => {
         el.classList.remove("flip-from");
         el.classList.add("flip");
-        setTimeout(() => el.classList.remove("flip"), 400);
+        setTimeout(() => el.classList.remove("flip"), 600);
       }, 20);
     }
   };
 }
 
 /**
- * 数字从旧值滚到新值（网速、延迟），约 0.4 秒。`format` 把数字变成文字。
+ * 数字从旧值滚到新值（网速、延迟），约 0.6 秒。`format` 把数字变成文字。
  * 看不见时、要求减少动画时直接写最终值
  */
 export function tweenText(el, value, format) {
@@ -155,8 +155,8 @@ export function tweenText(el, value, format) {
   }
   const start = performance.now();
   const step = (now) => {
-    const t = Math.min(1, (now - start) / 400);
-    const eased = 1 - (1 - t) ** 3;
+    const t = Math.min(1, (now - start) / 600);
+    const eased = 1 - (1 - t) ** 4;
     el.textContent = format(from + (value - from) * eased);
     if (t < 1) el._tweenFrame = requestAnimationFrame(step);
   };
@@ -164,10 +164,10 @@ export function tweenText(el, value, format) {
   // rAF 万一不来（窗口刚被藏起来），也要落到最终值
   setTimeout(() => {
     if (el._tweenValue === value) el.textContent = format(value);
-  }, 450);
+  }, 650);
 }
 
-/** 按钮上闪一下"✓ 已复制"，1.2 秒后变回原来的字 */
+/** 按钮上闪一下"✓ 已复制"，1.4 秒后变回原来的字 */
 export function flashCopied(button) {
   if (!button || button._flashing) return;
   const original = [...button.childNodes];
@@ -178,5 +178,5 @@ export function flashCopied(button) {
     button.replaceChildren(...original);
     button.classList.remove("copied");
     button._flashing = false;
-  }, 1200);
+  }, 1400);
 }

@@ -16,9 +16,9 @@ const BASE_ALPHA = 0.14;
 /** 指针跟前的点再亮多少 */
 const LIT_ALPHA = 0.7;
 /** 打开时点阵从中心一圈圈亮起：离中心每多一像素晚这么多毫秒 */
-const RIPPLE_MS_PER_PX = 0.8;
+const RIPPLE_MS_PER_PX = 1;
 /** 每个点从暗到亮用多久 */
-const RIPPLE_FADE = 320;
+const RIPPLE_FADE = 520;
 
 const sky = document.querySelector(".sky");
 if (sky && !sky.firstElementChild) start(sky);
@@ -123,7 +123,7 @@ function start(sky) {
 
   function step() {
     frame = 0;
-    const ease = 0.16;
+    const ease = 0.12;
     at.x += (target.x - at.x) * ease;
     at.y += (target.y - at.y) * ease;
     at.on += (target.on - at.on) * 0.1;

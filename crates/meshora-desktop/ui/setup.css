@@ -82,21 +82,21 @@
 }
 
 .page.to-left {
-  animation: to-left var(--t-mid) var(--ease) both;
+  animation: to-left var(--t-mid) var(--ease-in) both;
   pointer-events: none;
 }
 
 .page.to-right {
-  animation: to-right var(--t-mid) var(--ease) both;
+  animation: to-right var(--t-mid) var(--ease-in) both;
   pointer-events: none;
 }
 
 @keyframes from-right {
-  from { opacity: 0; transform: translateX(48px); }
+  from { opacity: 0; transform: translateX(40px); }
 }
 
 @keyframes from-left {
-  from { opacity: 0; transform: translateX(-48px); }
+  from { opacity: 0; transform: translateX(-40px); }
 }
 
 @keyframes to-left {
@@ -156,10 +156,10 @@
   animation: rise var(--t-slow) var(--ease) both;
 }
 
-.welcome > h1 { animation-delay: 300ms; }
-.welcome > .ver { animation-delay: 360ms; }
-.welcome > .sub { animation-delay: 420ms; }
-.welcome > .actions { animation-delay: 500ms; }
+.welcome > h1 { animation-delay: 520ms; }
+.welcome > .ver { animation-delay: 610ms; }
+.welcome > .sub { animation-delay: 700ms; }
+.welcome > .actions { animation-delay: 800ms; }
 
 /* ---------- 选项 ---------- */
 
@@ -215,10 +215,10 @@
   animation: rise var(--t-mid) var(--ease) both;
 }
 
-.options > :nth-child(2) { animation-delay: 60ms; }
-.options > :nth-child(3) { animation-delay: 120ms; }
-.options > :nth-child(4) { animation-delay: 180ms; }
-.options > :nth-child(5) { animation-delay: 240ms; }
+.options > :nth-child(2) { animation-delay: 90ms; }
+.options > :nth-child(3) { animation-delay: 180ms; }
+.options > :nth-child(4) { animation-delay: 270ms; }
+.options > :nth-child(5) { animation-delay: 360ms; }
 
 /* 卸载页：打开"删除私钥"时警告浮出来 */
 .page .warn {
@@ -314,11 +314,11 @@
 }
 
 .mark circle {
-  animation: draw 480ms var(--ease) forwards;
+  animation: draw 640ms var(--ease) forwards;
 }
 
 .mark path {
-  animation: draw 320ms var(--ease) 380ms forwards;
+  animation: draw 420ms var(--ease) 520ms forwards;
 }
 
 .mark.ok {
@@ -342,5 +342,5 @@
 
 /* 关窗口前：整页轻轻缩小、淡出（setup.js 的 bye） */
 .bye .setup-panel {
-  animation: pop-out 220ms var(--ease) forwards;
+  animation: pop-out 300ms var(--ease-in) forwards;
 }

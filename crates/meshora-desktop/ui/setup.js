@@ -76,7 +76,7 @@ function logo() {
 function bye() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return invoke("quit");
   document.getElementById("setup").classList.add("bye");
-  setTimeout(() => invoke("quit"), 220);
+  setTimeout(() => invoke("quit"), 300);
 }
 
 function glassSwitch(checked) {
@@ -134,7 +134,7 @@ function show(page, forward = true) {
     old.classList.add(forward ? "to-left" : "to-right");
     old.setAttribute("aria-hidden", "true");
     old.inert = true;
-    setTimeout(() => old.remove(), 320);
+    setTimeout(() => old.remove(), 460);
   }
   // 主按钮拿焦点（回车就能接着走），但不画焦点框：不是用户按 Tab 过来的
   setTimeout(() => page.querySelector("button.btn[glass='tinted']")?.focus({ focusVisible: false }), 60);

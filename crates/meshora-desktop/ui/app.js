@@ -71,12 +71,12 @@ function toast(text) {
   const old = document.querySelector(".toast:not(.out)");
   if (old) {
     old.classList.add("out");
-    setTimeout(() => old.remove(), 160);
+    setTimeout(() => old.remove(), 240);
   }
   const el = h("div", { class: "toast", role: "status" }, text);
   document.body.append(el);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.remove(), 1900);
+  toastTimer = setTimeout(() => el.remove(), 2700);
 }
 
 async function copy(text, what) {
@@ -723,7 +723,7 @@ function syncList(container, rows, peers, make) {
     const settle = flip(container);
     container.replaceChildren(...ordered);
     settle();
-  }, 200);
+  }, 300);
 }
 
 // ---------- 朋友 ----------
@@ -1722,7 +1722,7 @@ function enter(view) {
   view.classList.remove("enter");
   void view.offsetWidth;
   view.classList.add("enter");
-  setTimeout(() => view.classList.remove("enter"), 900);
+  setTimeout(() => view.classList.remove("enter"), 1400);
   return view;
 }
 
