@@ -48,8 +48,9 @@ echo "Meshora 在跑（pid $pid）"
 # ---------- 加入网络 ----------
 
 # 按文字找界面上的东西，点它的中心。WebView 的内容在无障碍树里，uiautomator 拿得到
+# 第二个参数是 fixed 时，它固定在屏幕上（底部导航），不用滑
 tap() {
-  local wanted=$1 point
+  local wanted=$1 fixed=${2:-} point
   for _ in $(seq 1 20); do
     # 被系统挪到后台（或者被结束）了就再打开：界面会接着上次的进度
     if ! adb shell dumpsys activity activities | grep -q "topResumedActivity.*$package"; then
@@ -87,7 +88,8 @@ PY
         sleep 1
         continue
       fi
-      if [[ -n $height ]] && (( y > height * 85 / 100 )); then
+      # 在屏幕下面、或者贴着底部导航（会被它挡住）：往上滑一点再找
+      if [[ -z $fixed && -n $height ]] && (( y > height - 90 )); then
         echo "「$wanted」在屏幕下面（y=$y），往上滑"
         adb shell input swipe $((height / 4)) $((height * 7 / 10)) $((height / 4)) $((height * 3 / 10)) 300
         sleep 1
@@ -136,7 +138,7 @@ if ! adb logcat -d -s Meshora | grep -q "网卡已建好"; then
 fi
 # 手机上的排版：网络页、设置页各截一张（CI 的产物里看）
 adb exec-out screencap -p > "$out/network.png"
-tap "设置" || true
+tap "设置" fixed || true
 sleep 2
 adb exec-out screencap -p > "$out/settings.png"
 size=$(adb shell wm size | tr -d $'\r' | grep -oE '[0-9]+x[0-9]+$' | tail -1)

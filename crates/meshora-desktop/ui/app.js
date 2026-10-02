@@ -342,8 +342,11 @@ function meshGraph() {
   let labels = new Map();
 
   function draw(ov) {
-    const W = svg.clientWidth || 600;
-    const H = svg.clientHeight || 400;
+    // 量 SVG 用 getBoundingClientRect：有的安卓 WebView 对 SVG 元素的 clientWidth 一直给 0，
+    // 退回默认尺寸就把节点全画到可见范围外面去了
+    const box = svg.getBoundingClientRect();
+    const W = Math.round(box.width) || 600;
+    const H = Math.round(box.height) || 400;
     // 手机上标题和统计数字叠成两行，占得更高：图往下让出这一截
     const head = PHONE ? 64 : 0;
     const cx = W / 2;
@@ -423,7 +426,8 @@ function meshGraph() {
   return {
     el: svg,
     update(ov) {
-      const size = `${svg.clientWidth}x${svg.clientHeight}`;
+      const box = svg.getBoundingClientRect();
+      const size = `${Math.round(box.width)}x${Math.round(box.height)}`;
       const next = [size, ov.name, ...ov.peers.map((p) => `${p.id}|${p.name}|${p.online}|${p.route}|${tone(p)}`)].join(";");
       if (next !== signature) {
         signature = next;
