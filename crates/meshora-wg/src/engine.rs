@@ -182,6 +182,8 @@ pub struct Engine {
     flood_budget: Budget,
     /// overlay 网段的定向广播地址，见 [`Engine::set_lan`]
     lan_broadcast: Option<Ipv4Addr>,
+    /// 替 peer 之间转发，见 [`Engine::set_forwarding`]
+    forwarding: bool,
     config: PeerSet,
     peers: HashMap<NodeKey, Peer>,
     by_index: HashMap<u32, NodeKey>,
@@ -198,6 +200,7 @@ impl Engine {
             control_budget: Budget::new(CONTROL_DATAGRAM_RATE),
             flood_budget: Budget::new(FLOOD_RATE),
             lan_broadcast: None,
+            forwarding: false,
             local: NodeKey::from_bytes(public.to_bytes()),
             secret,
             public,
@@ -297,6 +300,20 @@ impl Engine {
         self.lan_broadcast = lan::directed_broadcast(addr, prefix_len);
     }
 
+    /// 替 peer 之间转发报文：直连模式里房主是中心，朋友们只和房主交换过连接码、互相不认识。
+    ///
+    /// 打开后，从一个 peer 解密出来的报文：
+    ///
+    /// - 目的地址属于另一个 peer：不写进虚拟网卡，重新加密发给那个 peer
+    /// - 局域网广播 / 组播：照常写进虚拟网卡（房主自己也要看见房间），再复制给**除了来源以外**
+    ///   的每个 peer。和本机发出的广播共用每秒的复制上限
+    /// - 其余照常写进虚拟网卡
+    ///
+    /// 源地址仍然先按来源 peer 的网段检查过（cryptokey routing），冒充不了别的朋友。
+    pub fn set_forwarding(&mut self, on: bool) {
+        self.forwarding = on;
+    }
+
     /// 从虚拟网卡读到一个 IP 报文：加密，交出要发往网络的报文。
     ///
     /// - 单播：找到网段覆盖目的地址的那个 peer。没有这样的 peer、或它还没有路径时，报文被丢弃
@@ -305,17 +322,21 @@ impl Engine {
     ///   操作系统自己的服务发现（mDNS、LLMNR、SSDP、NetBIOS）不复制。每秒最多复制 200 个，超出的丢弃
     pub fn outbound(&mut self, packet: &[u8], now: Instant) -> Vec<Transmit> {
         if lan::is_lan_broadcast(packet, self.lan_broadcast) {
-            return self.flood(packet, now);
+            return self.flood(packet, None, now);
         }
         self.unicast(packet, now).into_iter().collect()
     }
 
-    fn flood(&mut self, packet: &[u8], now: Instant) -> Vec<Transmit> {
+    /// 给每个有路径的 peer 各发一份；`except` 是转发时的来源，不发回给它
+    fn flood(&mut self, packet: &[u8], except: Option<NodeKey>, now: Instant) -> Vec<Transmit> {
         if !self.flood_budget.take(now) {
             return Vec::new();
         }
         let mut out = Vec::new();
         for (key, peer) in &mut self.peers {
+            if Some(*key) == except {
+                continue;
+            }
             // 还没有路径的 peer 跳过：交给 Tunn 的话报文会在它的队列里一直等下去
             let Some(path) = peer.path else {
                 continue;
@@ -369,6 +390,18 @@ impl Engine {
                 };
                 actions.push(Action::Event(event));
             }
+            DatagramKind::Stun => {
+                if !self.control_budget.take(now) {
+                    return actions;
+                }
+                // STUN 服务器只会直接回应，经中继来的不认
+                if let Link::Direct(from) = link {
+                    actions.push(Action::Event(Event::StunDatagram {
+                        from,
+                        datagram: datagram.to_vec(),
+                    }));
+                }
+            }
             DatagramKind::Unknown => {}
         }
         actions
@@ -420,6 +453,8 @@ impl Engine {
 
         let mut input = datagram;
         let mut first = true;
+        // 打开了转发时，解密出来的报文先留着，出了循环再决定写网卡还是转给别人
+        let mut decrypted = None;
         loop {
             match peer.tunn.decapsulate(src_ip, input, &mut self.buf) {
                 TunnResult::WriteToNetwork(out) => {
@@ -455,11 +490,11 @@ impl Engine {
                     }
                 }
                 TunnResult::WriteToTunnelV4(packet, src) => {
-                    Self::deliver(config, packet, src.into(), actions);
+                    decrypted = Self::deliver(config, packet, src.into(), self.forwarding, actions);
                     break;
                 }
                 TunnResult::WriteToTunnelV6(packet, src) => {
-                    Self::deliver(config, packet, src.into(), actions);
+                    decrypted = Self::deliver(config, packet, src.into(), self.forwarding, actions);
                     break;
                 }
                 TunnResult::Done | TunnResult::Err(_) => break,
@@ -468,12 +503,47 @@ impl Engine {
             input = &[];
             first = false;
         }
+        if let Some(packet) = decrypted {
+            self.forward(key, packet, now, actions);
+        }
     }
 
-    /// 解密出来的 IP 报文，源地址必须落在这个 peer 的网段里（cryptokey routing 的另一半）
-    fn deliver(config: &PeerConfig, packet: &[u8], src: IpAddr, actions: &mut Vec<Action>) {
-        if config.allowed_ips.iter().any(|net| net.contains(&src)) {
-            actions.push(Action::WriteTun(packet.to_vec()));
+    /// 解密出来的 IP 报文，源地址必须落在这个 peer 的网段里（cryptokey routing 的另一半）。
+    ///
+    /// 不转发时直接写进网卡；转发时交回报文，由 [`forward`](Self::forward) 决定去哪
+    fn deliver(
+        config: &PeerConfig,
+        packet: &[u8],
+        src: IpAddr,
+        forwarding: bool,
+        actions: &mut Vec<Action>,
+    ) -> Option<Vec<u8>> {
+        if !config.allowed_ips.iter().any(|net| net.contains(&src)) {
+            return None;
+        }
+        if forwarding {
+            return Some(packet.to_vec());
+        }
+        actions.push(Action::WriteTun(packet.to_vec()));
+        None
+    }
+
+    /// 转发模式下，从 `from` 解密出来的报文该去哪，见 [`set_forwarding`](Self::set_forwarding)
+    fn forward(&mut self, from: NodeKey, packet: Vec<u8>, now: Instant, actions: &mut Vec<Action>) {
+        if lan::is_lan_broadcast(&packet, self.lan_broadcast) {
+            let copies = self.flood(&packet, Some(from), now);
+            actions.extend(copies.into_iter().map(Action::Transmit));
+            actions.push(Action::WriteTun(packet));
+            return;
+        }
+        let to = Tunn::dst_address(&packet).and_then(|dst| self.config.route(dst).copied());
+        match to {
+            Some(to) if to != from => {
+                if let Some(t) = self.unicast(&packet, now) {
+                    actions.push(Action::Transmit(t));
+                }
+            }
+            _ => actions.push(Action::WriteTun(packet)),
         }
     }
 
@@ -1170,5 +1240,146 @@ mod tests {
         // 过了一秒预算补满
         let later = now + Duration::from_secs(1);
         assert_eq!(a.engine.outbound(&packet, later).len(), 2);
+    }
+
+    /// 直连模式的星形：A 是房主（打开转发），B、C 只认识 A，把 A 当成整个网段的出口
+    fn hub_star() -> (Node, Node, Node) {
+        let (mut a, mut b, mut c) = (node(1), node(2), node(3));
+        let now = Instant::now();
+        a.engine.set_forwarding(true);
+        a.engine
+            .apply(&PeerSet::new([config_for(&b), config_for(&c)]).unwrap())
+            .unwrap();
+        let gateway = PeerConfig {
+            key: a.key,
+            allowed_ips: vec!["100.64.0.0/24".parse().unwrap()],
+            keepalive: None,
+        };
+        for guest in [&mut b, &mut c] {
+            guest
+                .engine
+                .apply(&PeerSet::new([gateway.clone()]).unwrap())
+                .unwrap();
+        }
+        handshake(&mut a, &mut b, now);
+        handshake(&mut a, &mut c, now);
+        for guest in [&mut b, &mut c] {
+            guest
+                .engine
+                .set_path(&a.key, Path::Direct(a.addr), now)
+                .unwrap();
+        }
+        (a, b, c)
+    }
+
+    #[test]
+    fn the_host_forwards_between_guests() {
+        let (mut a, mut b, mut c) = hub_star();
+        let now = Instant::now();
+        let packet = udp4(b.ip, c.ip, 6112, b"join");
+        let out = b.engine.outbound(&packet, now);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].link, Link::Direct(a.addr), "B 只认识 A，发给 A");
+
+        let at_a = a
+            .engine
+            .inbound(&out[0].datagram, Link::Direct(b.addr), now);
+        assert!(written(&at_a).is_empty(), "不是给房主的，不写进房主的网卡");
+        let forwarded = transmits(&at_a);
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(forwarded[0].link, Link::Direct(c.addr));
+
+        let at_c = c
+            .engine
+            .inbound(&forwarded[0].datagram, Link::Direct(a.addr), now);
+        assert_eq!(written(&at_c), [packet]);
+    }
+
+    #[test]
+    fn the_host_still_receives_its_own_packets() {
+        let (mut a, mut b, _c) = hub_star();
+        let now = Instant::now();
+        let packet = udp4(b.ip, a.ip, 6112, b"hello");
+        let out = b.engine.outbound(&packet, now);
+        let at_a = a
+            .engine
+            .inbound(&out[0].datagram, Link::Direct(b.addr), now);
+        assert_eq!(written(&at_a), [packet]);
+        assert!(transmits(&at_a).is_empty());
+    }
+
+    #[test]
+    fn the_host_repeats_broadcasts_to_everyone_else() {
+        let (mut a, mut b, mut c) = hub_star();
+        let now = Instant::now();
+        let packet = udp4(b.ip, IpAddr::from([255, 255, 255, 255]), 4445, b"room");
+        let out = b.engine.outbound(&packet, now);
+        assert_eq!(out.len(), 1);
+
+        let at_a = a
+            .engine
+            .inbound(&out[0].datagram, Link::Direct(b.addr), now);
+        assert_eq!(
+            written(&at_a),
+            std::slice::from_ref(&packet),
+            "房主自己也看得见房间"
+        );
+        let copies = transmits(&at_a);
+        assert_eq!(copies.len(), 1, "不发回给 B");
+        assert_eq!(copies[0].link, Link::Direct(c.addr));
+        let at_c = c
+            .engine
+            .inbound(&copies[0].datagram, Link::Direct(a.addr), now);
+        assert_eq!(written(&at_c), [packet]);
+    }
+
+    #[test]
+    fn forwarding_still_checks_the_source() {
+        let (mut a, mut b, _c) = hub_star();
+        let now = Instant::now();
+        // B 冒充 C 的地址：源地址不在 B 的网段里，房主丢掉，不转发也不写网卡
+        let spoofed = udp4(IpAddr::from([100, 64, 0, 3]), a.ip, 6112, b"spoof");
+        let out = b.engine.outbound(&spoofed, now);
+        let at_a = a
+            .engine
+            .inbound(&out[0].datagram, Link::Direct(b.addr), now);
+        assert!(written(&at_a).is_empty());
+        assert!(transmits(&at_a).is_empty());
+    }
+
+    #[test]
+    fn without_forwarding_nothing_is_relayed() {
+        let (mut a, mut b, _c) = connected_star();
+        let now = Instant::now();
+        b.engine
+            .set_path(&a.key, Path::Direct(a.addr), now)
+            .unwrap();
+        // B 只认识 A 的 /32，发往 C 的报文 B 自己就路由不出去
+        let packet = udp4(b.ip, IpAddr::from([100, 64, 0, 3]), 6112, b"join");
+        assert!(b.engine.outbound(&packet, now).is_empty());
+        // A 不转发：A 收到的报文都写进自己的网卡
+        let to_a = udp4(b.ip, a.ip, 6112, b"hello");
+        let out = b.engine.outbound(&to_a, now);
+        let at_a = a
+            .engine
+            .inbound(&out[0].datagram, Link::Direct(b.addr), now);
+        assert_eq!(written(&at_a), [to_a]);
+    }
+
+    #[test]
+    fn stun_responses_become_events() {
+        let mut a = node(1);
+        let now = Instant::now();
+        let mut stun = vec![0x01, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42];
+        stun.extend_from_slice(&[9; 12]);
+        let from = SocketAddr::from(([198, 51, 100, 7], 3478));
+        let actions = a.engine.inbound(&stun, Link::Direct(from), now);
+        assert_eq!(
+            events(&actions),
+            [Event::StunDatagram {
+                from,
+                datagram: stun
+            }]
+        );
     }
 }

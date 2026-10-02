@@ -44,7 +44,10 @@ use std::time::Instant;
 use meshora_types::{NodeKey, Path};
 
 pub use config::{ConfigError, PeerConfig, PeerSet};
-pub use datagram::{CONTROL_MAGIC, DatagramKind, WgMessage, classify};
+pub use datagram::{
+    CONTROL_MAGIC, DatagramKind, STUN_HEADER_LEN, STUN_MAGIC_COOKIE, WgMessage, classify,
+    is_stun_binding_request,
+};
 
 /// 控制面驱动数据面的接口。
 ///
@@ -104,6 +107,13 @@ pub trait DataPlane: Send + Sync {
         datagram: &[u8],
     ) -> Result<(), DataPlaneError>;
 
+    /// 从共享的 UDP socket 发一个 STUN Binding 请求，问公共 STUN 服务器"你看到我从哪来"。
+    ///
+    /// 和 [`send_control`](Self::send_control) 一样必须是同一个 socket：问出来的公网地址要是
+    /// WireGuard 用的那个端口的映射。只放行 Binding 请求（见 [`is_stun_binding_request`]），
+    /// 别的返回 [`DataPlaneError::NotControlDatagram`]。回应经 [`Event::StunDatagram`] 交回来。
+    fn send_stun(&self, to: SocketAddr, datagram: &[u8]) -> Result<(), DataPlaneError>;
+
     /// 所有 peer 的当前状态，顺序不做保证。
     fn status(&self) -> Vec<PeerStatus>;
 }
@@ -162,6 +172,16 @@ pub enum Event {
         /// 整个报文，包括开头的魔数。
         datagram: Vec<u8>,
     },
+    /// 共享 socket 上收到一个 STUN Binding 回应（见 [`DatagramKind::Stun`]）。
+    ///
+    /// 和 [`Event::ControlDatagram`] 一样**没有认证**：控制面只认自己发过的事务 ID，
+    /// 而且只信它发过请求的那几个服务器地址。
+    StunDatagram {
+        /// 报文的来源地址。
+        from: SocketAddr,
+        /// 整个报文。
+        datagram: Vec<u8>,
+    },
 }
 
 /// 数据面把 [`Event`] 交回控制面的出口。由控制面实现，在构造数据面时交给它。
@@ -204,7 +224,9 @@ impl fmt::Display for DataPlaneError {
         match self {
             Self::SelfPeer => f.write_str("peer 集合里有本机自己的公钥"),
             Self::UnknownPeer(key) => write!(f, "peer {key} 不在当前集合里"),
-            Self::NotControlDatagram => f.write_str("控制报文必须以 CONTROL_MAGIC 开头"),
+            Self::NotControlDatagram => {
+                f.write_str("控制报文必须以 CONTROL_MAGIC 开头（STUN 只能发 Binding 请求）")
+            }
             Self::Io(err) => write!(f, "数据面 I/O 出错：{err}"),
         }
     }

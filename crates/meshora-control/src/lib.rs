@@ -14,7 +14,9 @@
 //!
 //! 控制连接断了会自己重连。断开期间数据面保持原样 —— 控制面抖一下，不该把已经通了的连接拆掉。
 
+pub mod direct;
 pub mod paths;
+pub mod stun;
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -65,6 +67,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const DISCO_RATE: u32 = 200;
 /// 网主的管理请求最多等多久回音
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// 一轮 STUN 最多等多久：有的服务器问不通（被墙、被封 UDP），不能一直等它
+const STUN_WAIT: Duration = Duration::from_secs(3);
 
 /// 连协调服务时，第一条消息怎么说。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -643,6 +647,16 @@ struct Node {
     reported: Option<Vec<SocketAddr>>,
     next_probe: Instant,
     next_control_ping: Instant,
+    /// 直连模式：问哪些公共 STUN 服务器（hub 模式是空的，用协调服务的探测）
+    stun_servers: Vec<SocketAddr>,
+    /// 发出去还没回的 STUN 请求：事务 ID → (服务器, 发出的时刻)
+    stun_pending: HashMap<stun::TxId, (SocketAddr, Instant)>,
+    /// 这一轮每个服务器看到的本机端点
+    stun_seen: HashMap<SocketAddr, SocketAddr>,
+    /// 这一轮 STUN 是什么时候发的
+    stun_round: Option<Instant>,
+    /// 直连模式的朋友：房主这个 peer 的网段是整个 overlay（经它到别的朋友）
+    gateway: Option<IpNet>,
 }
 
 impl Node {
@@ -669,6 +683,11 @@ impl Node {
             reported: None,
             next_probe: now,
             next_control_ping: now + CONTROL_PING_INTERVAL,
+            stun_servers: Vec::new(),
+            stun_pending: HashMap::new(),
+            stun_seen: HashMap::new(),
+            stun_round: None,
+            gateway: None,
         };
         node.on_reconnected(welcome);
         node
@@ -721,9 +740,10 @@ impl Node {
     }
 
     fn on_net_map(&mut self, peers: Vec<PeerInfo>, now: Instant) -> Vec<ClientMessage> {
+        let gateway = self.gateway;
         let configs = peers.iter().map(|peer| PeerConfig {
             key: peer.key,
-            allowed_ips: vec![IpNet::from(IpAddr::V4(peer.overlay_ip))],
+            allowed_ips: vec![gateway.unwrap_or(IpNet::from(IpAddr::V4(peer.overlay_ip)))],
             keepalive: self.keepalive,
         });
         let set = match PeerSet::new(configs) {
@@ -767,8 +787,72 @@ impl Node {
             Event::HandshakeCompleted { peer, via } => {
                 debug!(%peer, ?via, "WireGuard 握手完成");
             }
+            Event::StunDatagram { from, datagram } => self.on_stun(from, &datagram, now),
         }
         vec![]
+    }
+
+    /// STUN 回应：只认自己发过的事务、只认发往的那个服务器
+    fn on_stun(&mut self, from: SocketAddr, datagram: &[u8], now: Instant) {
+        if !self.disco_budget.take(now) {
+            return;
+        }
+        let Some((tx, mapped)) = stun::parse_response(datagram) else {
+            return;
+        };
+        let Some(&(server, _)) = self.stun_pending.get(&tx) else {
+            return;
+        };
+        if server != from {
+            return;
+        }
+        self.stun_pending.remove(&tx);
+        self.stun_seen.insert(server, mapped);
+        // 公网端点取第一个服务器（按配置的顺序）问到的
+        let first = self
+            .stun_servers
+            .iter()
+            .find_map(|server| self.stun_seen.get(server).copied());
+        if first != self.reflexive {
+            info!(observed = ?first, "STUN 问到本机的公网端点");
+            self.reflexive = first;
+        }
+    }
+
+    /// 发一轮 STUN 请求
+    fn stun_round(&mut self, now: Instant) {
+        self.stun_seen.clear();
+        self.stun_round = Some(now);
+        for server in self.stun_servers.clone() {
+            let mut tx = stun::TxId::default();
+            OsRng.fill_bytes(&mut tx);
+            if let Err(err) = self.dataplane.send_stun(server, &stun::request(&tx)) {
+                debug!(%server, %err, "发 STUN 请求失败");
+                continue;
+            }
+            self.stun_pending.insert(tx, (server, now));
+        }
+    }
+
+    /// 直连模式给界面、连接码用的 NAT 情况
+    fn nat_info(&self, now: Instant) -> direct::NatInfo {
+        let mut seen: Vec<SocketAddr> = self.stun_seen.values().copied().collect();
+        seen.sort();
+        seen.dedup();
+        let answered_all = !self.stun_servers.is_empty()
+            && self
+                .stun_servers
+                .iter()
+                .all(|server| self.stun_seen.contains_key(server));
+        let waited = self
+            .stun_round
+            .is_some_and(|round| now.duration_since(round) >= STUN_WAIT);
+        direct::NatInfo {
+            endpoints: self.endpoints(),
+            public: self.reflexive,
+            symmetric: seen.len() > 1,
+            checked: answered_all || waited || self.stun_servers.is_empty(),
+        }
     }
 
     fn on_disco(&mut self, from: SocketAddr, datagram: &[u8], now: Instant) {
@@ -876,6 +960,13 @@ impl Node {
         let mut outgoing = Vec::new();
         self.pending
             .retain(|_, pending| now.duration_since(pending.sent) < PING_TIMEOUT);
+        self.stun_pending
+            .retain(|_, (_, sent)| now.duration_since(*sent) < PING_TIMEOUT);
+
+        if !self.stun_servers.is_empty() && now >= self.next_probe {
+            self.stun_round(now);
+            self.next_probe = now + PROBE_INTERVAL;
+        }
 
         if let Some(probe) = self.probe
             && now >= self.next_probe
@@ -924,6 +1015,7 @@ impl Node {
             info!(%old, %new, "本机换了网络，重连协调服务、重新探测");
             self.network_changed = true;
             self.reflexive = None;
+            self.stun_seen.clear();
             self.next_probe = now;
             // 直连是在旧网络上打通的：一律当作不通，先走中继，重新探测。
             // 不这样的话要等它们一个个超时，这几秒里游戏的报文都发进了黑洞

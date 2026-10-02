@@ -11,7 +11,7 @@ pub use meshora_types::CONTROL_MAGIC;
 //
 // - 前 4 字节按小端 u32 读出来不能落在 1..=4 —— 那是 WireGuard 的四种消息类型
 // - 首字节不能在 0x00–0x03 —— 那是 STUN 的首字节范围（RFC 7983）。
-//   按设计端点探测用的是自己的报文，但给以后改用标准 STUN 留一条路
+//   直连模式（不用服务器）靠公共 STUN 服务器探测公网地址，它的回应也从这个 socket 进来
 //
 // 魔数只用来分流，不是安全机制：谁都能发一个以它开头的报文。
 
@@ -40,6 +40,9 @@ pub enum DatagramKind {
     /// 以 [`CONTROL_MAGIC`] 开头的 Meshora 控制报文，原样交给控制面
     /// （见 [`Event::ControlDatagram`](crate::Event::ControlDatagram)）。
     Control,
+    /// STUN 的 Binding 回应（成功或出错），原样交给控制面
+    /// （见 [`Event::StunDatagram`](crate::Event::StunDatagram)）。
+    Stun,
     /// 都不是，丢弃。
     Unknown,
 }
@@ -72,6 +75,9 @@ pub fn classify(datagram: &[u8]) -> DatagramKind {
     if header == CONTROL_MAGIC {
         return DatagramKind::Control;
     }
+    if is_stun(datagram, &[BINDING_SUCCESS, BINDING_ERROR]) {
+        return DatagramKind::Stun;
+    }
     let message = match (u32::from_le_bytes(header), datagram.len()) {
         (1, HANDSHAKE_INITIATION_LEN) => WgMessage::HandshakeInitiation,
         (2, HANDSHAKE_RESPONSE_LEN) => WgMessage::HandshakeResponse,
@@ -80,6 +86,33 @@ pub fn classify(datagram: &[u8]) -> DatagramKind {
         _ => return DatagramKind::Unknown,
     };
     DatagramKind::WireGuard(message)
+}
+
+/// STUN 的 magic cookie（RFC 5389）。
+pub const STUN_MAGIC_COOKIE: [u8; 4] = [0x21, 0x12, 0xA4, 0x42];
+/// STUN 消息头的长度。
+pub const STUN_HEADER_LEN: usize = 20;
+const BINDING_REQUEST: [u8; 2] = [0x00, 0x01];
+const BINDING_SUCCESS: [u8; 2] = [0x01, 0x01];
+const BINDING_ERROR: [u8; 2] = [0x01, 0x11];
+
+/// 是不是一个 STUN Binding 请求。[`DataPlane::send_stun`](crate::DataPlane::send_stun) 只放行它。
+pub fn is_stun_binding_request(datagram: &[u8]) -> bool {
+    is_stun(datagram, &[BINDING_REQUEST])
+}
+
+/// 是不是消息类型在 `types` 里的 STUN 消息：magic cookie 对得上，长度字段等于实际的属性长度、是 4 的倍数。
+///
+/// 和 WireGuard 不会混：STUN 回应的头两字节是 `01 01` / `01 11`，WireGuard 的类型字段第二个字节一定是零
+fn is_stun(datagram: &[u8], types: &[[u8; 2]]) -> bool {
+    let Some(header) = datagram.first_chunk::<STUN_HEADER_LEN>() else {
+        return false;
+    };
+    let length = usize::from(u16::from_be_bytes([header[2], header[3]]));
+    types.contains(&[header[0], header[1]])
+        && header[4..8] == STUN_MAGIC_COOKIE
+        && length % 4 == 0
+        && length == datagram.len() - STUN_HEADER_LEN
 }
 
 #[cfg(test)]
@@ -166,6 +199,34 @@ mod tests {
         // STUN Binding 请求的 20 字节头：类型 0x0001、长度 0、magic cookie、事务 ID
         let mut stun = vec![0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42];
         stun.extend_from_slice(&[0; 12]);
+        // 请求不是给本机的（本机只发请求），丢掉；但 send_stun 认得它
         assert_eq!(classify(&stun), DatagramKind::Unknown);
+        assert!(is_stun_binding_request(&stun));
+    }
+
+    #[test]
+    fn stun_responses_go_to_the_control_plane() {
+        // Binding 成功回应，带一个 12 字节的属性
+        let mut stun = vec![0x01, 0x01, 0x00, 0x0C, 0x21, 0x12, 0xA4, 0x42];
+        stun.extend_from_slice(&[7; 12]);
+        stun.extend_from_slice(&[0; 12]);
+        assert_eq!(classify(&stun), DatagramKind::Stun);
+        assert!(!is_stun_binding_request(&stun));
+
+        // 长度字段对不上：不是
+        stun.push(0);
+        assert_eq!(classify(&stun), DatagramKind::Unknown);
+        stun.pop();
+        // cookie 不对：不是
+        stun[4] = 0;
+        assert_eq!(classify(&stun), DatagramKind::Unknown);
+    }
+
+    #[test]
+    fn a_handshake_response_is_never_stun() {
+        // 92 字节、第 4~8 字节恰好等于 cookie 的握手响应：类型字段是 02 00，仍然是 WireGuard
+        let mut datagram = wg(2, HANDSHAKE_RESPONSE_LEN);
+        datagram[4..8].copy_from_slice(&STUN_MAGIC_COOKIE);
+        assert_eq!(classify(&datagram), wg_kind(WgMessage::HandshakeResponse));
     }
 }

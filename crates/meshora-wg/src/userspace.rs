@@ -24,6 +24,7 @@ use tracing::{debug, warn};
 use crate::engine::{Action, Engine, Link, Transmit};
 use meshora_dataplane::{
     DataPlane, DataPlaneError, DatagramKind, EventSink, PeerSet, PeerStatus, classify,
+    is_stun_binding_request,
 };
 
 /// 定时器的间隔。boringtun 的计时精度是秒级，250 毫秒足够。
@@ -187,6 +188,11 @@ impl UserspaceDataPlane {
     pub fn set_lan(&self, addr: Ipv4Addr, prefix_len: u8) {
         self.shared.engine().set_lan(addr, prefix_len);
     }
+
+    /// 替 peer 之间转发，见 [`Engine::set_forwarding`]。直连模式的房主打开它。
+    pub fn set_forwarding(&self, on: bool) {
+        self.shared.engine().set_forwarding(on);
+    }
 }
 
 impl Drop for UserspaceDataPlane {
@@ -241,6 +247,14 @@ impl DataPlane for UserspaceDataPlane {
                 Ok(())
             }
         }
+    }
+
+    fn send_stun(&self, to: SocketAddr, datagram: &[u8]) -> Result<(), DataPlaneError> {
+        if !is_stun_binding_request(datagram) {
+            return Err(DataPlaneError::NotControlDatagram);
+        }
+        self.shared.sync_socket.send_to(datagram, to)?;
+        Ok(())
     }
 
     fn status(&self) -> Vec<PeerStatus> {

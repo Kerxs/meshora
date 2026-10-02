@@ -2216,6 +2216,7 @@ dependencies = [
 name = "meshora-control"
 version = "1.0.1"
 dependencies = [
+ "base64 0.22.1",
  "ipnet",
  "meshora-coord",
  "meshora-dataplane",
