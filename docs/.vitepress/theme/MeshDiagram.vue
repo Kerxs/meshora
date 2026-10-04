@@ -9,6 +9,7 @@
 
 <template>
   <figure class="mesh-diagram">
+    <div class="scroller">
     <svg viewBox="0 0 760 400" role="img" aria-labelledby="mesh-diagram-title">
       <title id="mesh-diagram-title">
         控制面负责发现、认证与穿透协调；数据面由 WireGuard 承载，优先直连，失败时经中继转发已加密报文。
@@ -64,6 +65,7 @@
         <text x="380" y="292" class="t-edge">打洞失败时回退</text>
       </g>
     </svg>
+    </div>
     <figcaption>
       中继只转发已经加密的 WireGuard 报文，看不到明文 —— 它不是信任节点。
     </figcaption>
@@ -79,6 +81,33 @@
   width: 100%;
   max-width: 100%;
   height: auto;
+}
+/*
+  窄屏上整张图缩到屏宽，字只剩五六像素。给它一个能看清的最小宽度，放不下就在自己的框里左右滑
+*/
+@media (max-width: 640px) {
+  .scroller {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -18px;
+    padding: 0 18px;
+    scrollbar-width: none;
+  }
+  .scroller::-webkit-scrollbar {
+    display: none;
+  }
+  .mesh-diagram svg {
+    width: 600px;
+    max-width: none;
+  }
+  figcaption::before {
+    content: '← 左右滑动看全图 →';
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--vp-c-text-3);
+  }
 }
 figcaption {
   margin-top: 10px;

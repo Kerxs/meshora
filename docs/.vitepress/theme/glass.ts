@@ -17,6 +17,9 @@
  */
 const WIDE = '(min-width: 960px)'
 
+/** 三步联机在这个宽度以下变成横向滑动的卡片：玻璃跟不上容器内的横滑，交给 HomeSteps.vue 的 CSS 毛玻璃 */
+const STEPS_GRID = '(min-width: 901px)'
+
 /**
  * 触屏设备上一律不用 Glassium：它的玻璃画在页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、
  * 比主线程快一两帧，玻璃就落在文字后面。这些设备上由 custom.css 的 CSS 毛玻璃（backdrop-filter）顶上，和滚动同步
@@ -28,14 +31,13 @@ const RULES: [string, Record<string, string>, string?][] = [
   ['.VPSidebar', { glass: 'frosted' }, WIDE],
   // 文档正文：一整块偏暗的磨砂玻璃，字要有一块稳的底
   ['.VPDoc .content-container', { glass: 'frosted', 'glass-tint': 'rgba(10, 12, 18, 0.72)', 'glass-blur': '40' }],
-  ['.VPFeature', { glass: 'frosted' }],
   ['.VPButton.brand', { glass: 'tinted', 'glass-tint': '#3d6bff' }],
   ['.VPButton.alt', { glass: 'clear' }],
   ['.vp-doc div[class*="language-"]', { glass: 'clear' }],
   ['.vp-doc .custom-block', { glass: 'clear' }],
   ['.VPDocAsideOutline', { glass: 'clear' }],
   ['.home-section', { glass: 'frosted' }],
-  ['.steps .step', { glass: 'frosted' }]
+  ['.steps .step', { glass: 'frosted' }, STEPS_GRID]
 ]
 
 function mark(root: ParentNode) {
@@ -74,5 +76,7 @@ export async function startGlass() {
   })
   observer.observe(document.body, { childList: true, subtree: true })
   // 跨过断点（旋转屏幕、拖窗口）时重新标一遍
-  window.matchMedia(WIDE).addEventListener('change', () => mark(document))
+  for (const media of new Set(RULES.map(([, , m]) => m).filter(Boolean) as string[])) {
+    window.matchMedia(media).addEventListener('change', () => mark(document))
+  }
 }

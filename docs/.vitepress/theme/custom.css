@@ -3,13 +3,138 @@
    ------------------------------------------------------------------ */
 
 :root {
-  --vp-font-family-base: "IBM Plex Sans", -apple-system, BlinkMacSystemFont,
-    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --vp-font-family-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular,
-    "Cascadia Code", Consolas, monospace;
+  /* 系统字体：不等外网字体，中英文都用系统里排得最好的那一套 */
+  --vp-font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "HarmonyOS Sans SC",
+    Roboto, sans-serif;
+  --vp-font-family-mono: ui-monospace, SFMono-Regular, "Cascadia Code", "JetBrains Mono", Consolas,
+    "Liberation Mono", monospace;
 
   --meshora-ease: cubic-bezier(0.22, 0.8, 0.3, 1);
+  /* 入场、弹出用：前段快、尾巴长 */
+  --meshora-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --meshora-dur: 620ms;
+
+  /* 首页排版的一套尺度：各组件共用，别各写各的 */
+  --m-fs-eyebrow: 12.5px;
+  --m-fs-h2: clamp(26px, 3.2vw, 36px);
+  --m-fs-body: 16px;
+  --m-lh-body: 1.8;
+  --m-c-eyebrow: #9cb6ff;
+  --m-c-body: rgba(255, 255, 255, 0.76);
+  --m-section-y: clamp(40px, 6.5vw, 88px);
+  --m-radius-card: 22px;
+  --m-accent: #3d6bff;
+  --m-accent-hi: #5580ff;
+  --m-teal: #7fe7dc;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --m-fs-body: 15.5px;
+    --m-section-y: 36px;
+    --m-radius-card: 20px;
+  }
+}
+
+/* ------------------------------------------------------------------
+   首页共用的小件：小标题、按钮
+   ------------------------------------------------------------------ */
+
+/* 带上 .vp-doc：要压过 VitePress 给 .vp-doc p / .vp-doc h2 的默认边距、上边线 */
+.vp-doc .m-eyebrow,
+.m-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: var(--m-fs-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--m-c-eyebrow);
+}
+
+/* 小标题前面一个小点，和 Logo 的节点呼应 */
+.m-eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.vp-doc .m-h2,
+.m-h2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: var(--m-fs-h2);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0;
+  color: #fff;
+  text-wrap: balance;
+}
+
+.m-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff !important;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none !important;
+  transition:
+    transform 220ms var(--meshora-ease-out),
+    background-color 200ms,
+    border-color 200ms,
+    box-shadow 260ms;
+}
+
+.m-btn svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+}
+
+.m-btn.brand {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, #5a82ff, var(--m-accent));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.25) inset,
+    0 10px 30px -10px rgba(61, 107, 255, 0.8);
+}
+
+.m-btn.ghost {
+  background: transparent;
+}
+
+.m-btn:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .m-btn:hover {
+    background-color: rgba(255, 255, 255, 0.13);
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: translateY(-1px);
+  }
+
+  .m-btn.brand:hover {
+    background: linear-gradient(180deg, #6a8fff, var(--m-accent-hi));
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.3) inset,
+      0 14px 36px -10px rgba(61, 107, 255, 0.95);
+  }
 }
 
 /*
@@ -76,7 +201,6 @@ body,
 .VPNavBar .content-body,
 .VPNavBar .divider,
 .VPSidebar,
-.VPHome .VPFeature,
 .vp-doc div[class*="language-"],
 .vp-doc .custom-block,
 .VPDocAsideOutline {
@@ -129,22 +253,26 @@ body,
 */
 @media (hover: none) and (pointer: coarse) {
   .VPDoc .content-container,
-  .VPFeature,
   .home-section,
   .vp-doc div[class*="language-"],
   .vp-doc .custom-block,
   .VPButton.alt,
   .VPSidebar,
-  .VPDocAsideOutline,
-  .steps .step {
+  .VPDocAsideOutline {
     background-color: rgba(30, 34, 46, 0.58) !important;
     backdrop-filter: blur(22px) saturate(140%);
     -webkit-backdrop-filter: blur(22px) saturate(140%);
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
   }
 
+  /*
+    正文面板比一屏高得多：backdrop-filter 铺这么大一块，手机上又费电、又可能超出 GPU 纹理上限只画出一截。
+    手机上点阵本来就不动，给一层够实的底就行，不模糊
+  */
   .VPDoc .content-container {
-    background-color: rgba(12, 14, 20, 0.78) !important;
+    background-color: rgba(12, 14, 20, 0.88) !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .VPButton.brand {
@@ -297,68 +425,6 @@ html.site-booted .VPContent {
   --vp-c-bg: transparent;
 }
 
-.VPHome .VPHero {
-  padding-top: 96px;
-}
-
-@media (max-width: 960px) {
-  .VPHome .VPHero { padding-top: 72px; }
-}
-
-.VPHome .VPHero .name,
-.VPHome .VPHero .text {
-  display: block;
-  color: #fff;
-  background: none;
-  -webkit-text-fill-color: #fff;
-}
-
-/* 项目名是最大的元素 —— Meshora 才是项目名，标语是次一级 */
-.VPHome .VPHero .name {
-  font-size: clamp(46px, 7.2vw, 78px);
-  font-weight: 600;
-  line-height: 1.04;
-  letter-spacing: -0.035em; /* 收紧只对拉丁文成立 */
-  text-transform: none;
-  opacity: 1;
-  margin-bottom: 10px;
-}
-
-/* 标语是中文，绝不能用负字距，汉字会挤在一起 */
-.VPHome .VPHero .text {
-  font-size: clamp(17px, 2.4vw, 25px);
-  font-weight: 500;
-  line-height: 1.45;
-  letter-spacing: 0;
-  max-width: 24ch;
-  color: #ffffff;
-  -webkit-text-fill-color: #ffffff;
-}
-
-/*
-  hero 的文字背后只有「背景 + 遮罩」，没有玻璃面板兜底，所以透明度不能太低。
-  当初按流体背景最亮处实测（+ 0.5 遮罩，合成底色 rgb(89,112,132)），点阵暗得多，只会更清楚：
-      0.72 → 3.56 不过   0.88 → 4.44 不过   0.92 → 4.68 过   1.0 → 5.18
-  层级差别改由字号和字重承担，不靠压低透明度。
-*/
-.VPHome .VPHero .tagline {
-  padding-top: 18px;
-  color: rgba(255, 255, 255, 0.94);
-  max-width: 46ch;
-  font-size: clamp(14.5px, 1.7vw, 17px);
-  line-height: 1.75;
-}
-
-.VPHome .VPHero .actions {
-  padding-top: 40px;
-}
-
-.VPHome .VPHero .actions .VPButton {
-  transition: background-color 0.18s, border-color 0.18s, transform 0.18s;
-}
-.VPHome .VPHero .actions .VPButton:hover {
-  transform: translateY(-1px);
-}
 /* 按钮是 Glassium 的玻璃胶囊（brand 带蓝色调）：自己不画底和边 */
 .VPButton.alt,
 .VPButton.brand {
@@ -366,39 +432,6 @@ html.site-booted .VPContent {
   border-color: transparent !important;
   color: #fff !important;
 }
-.VPHome .VPHero .actions .VPButton:active {
-  transform: scale(0.97);
-}
-
-/* ------------------------------------------------------------------
-   首屏入场编排
-
-   整组挂在 html.meshora-animate 之下，而那个类只由 reveal.ts 在挂载后添加。
-   原因：入场动画用的是 fill-mode: both，动画一旦没跑起来（JS 没执行、
-   脚本报错、标签页一直隐藏），元素就永久停在 opacity: 0。
-   加了这层门之后，没有 JS 就没有这些规则，hero 是完全可见的静态首屏。
-   ------------------------------------------------------------------ */
-
-@keyframes meshora-rise {
-  from { opacity: 0; transform: translateY(14px); }
-  to   { opacity: 1; transform: none; }
-}
-
-.meshora-animate .VPHome .VPHero .status-chip,
-.meshora-animate .VPHome .VPHero .name,
-.meshora-animate .VPHome .VPHero .text,
-.meshora-animate .VPHome .VPHero .tagline,
-.meshora-animate .VPHome .VPHero .actions .action {
-  animation: meshora-rise var(--meshora-dur) var(--meshora-ease) both;
-}
-
-.meshora-animate .VPHome .VPHero .status-chip { animation-delay: 80ms; }
-.meshora-animate .VPHome .VPHero .name        { animation-delay: 160ms; }
-.meshora-animate .VPHome .VPHero .text        { animation-delay: 240ms; }
-.meshora-animate .VPHome .VPHero .tagline     { animation-delay: 320ms; }
-.meshora-animate .VPHome .VPHero .actions .action:nth-child(1) { animation-delay: 400ms; }
-.meshora-animate .VPHome .VPHero .actions .action:nth-child(2) { animation-delay: 460ms; }
-.meshora-animate .VPHome .VPHero .actions .action:nth-child(3) { animation-delay: 520ms; }
 
 /* ------------------------------------------------------------------
    滚动渐入
@@ -471,12 +504,14 @@ html.site-booted .VPContent {
 
 /* 同样是 .home 而不是 .home.top：滚动后导航是深色玻璃，
    搜索框若回落到 VitePress 的浅色默认值，会变成一个突兀的白色胶囊。 */
-.VPNavBar.home .DocSearch-Button {
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-.VPNavBar.home .DocSearch-Button:hover {
-  background: rgba(255, 255, 255, 0.2);
+@media (min-width: 768px) {
+  .VPNavBar.home .DocSearch-Button {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+  .VPNavBar.home .DocSearch-Button:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
 }
 .VPNavBar.home .DocSearch-Search-Icon {
   color: rgba(255, 255, 255, 0.8);
@@ -511,46 +546,17 @@ html.site-booted .VPContent {
   transform-origin: left center;
   transition: transform 0.24s var(--meshora-ease);
 }
-.VPNavBarMenuLink:hover::after {
+@media (hover: hover) and (pointer: fine) {
+  .VPNavBarMenuLink:hover::after {
+    transform: scaleX(1);
+  }
+}
+
+/* 当前所在的那一栏：下划线常亮 */
+.VPNavBarMenuLink.active::after {
   transform: scaleX(1);
-}
-
-/* ------------------------------------------------------------------
-   能力卡片（毛玻璃）
-   内边距在 article.box 上，栅格间距在 .item 上，边框在 .VPFeature 上。
-   ------------------------------------------------------------------ */
-
-.VPHome .VPFeatures {
-  position: relative;
-  z-index: 1;
-}
-
-.VPHome .VPFeatures .item {
-  padding: 12px;
-}
-
-.VPHome .VPFeature {
-  border: 0;
-  border-radius: 22px;
-  transition: transform 0.24s var(--meshora-ease);
-}
-.VPHome .VPFeature:hover {
-  transform: translateY(-3px);
-}
-
-.VPHome .VPFeature .box {
-  padding: 28px;
-}
-.VPHome .VPFeature .title {
-  font-size: 16.5px;
-  line-height: 26px;
-  color: var(--meshora-on-glass);
-}
-.VPHome .VPFeature .details {
-  font-size: 15px;
-  line-height: 26px;
-  padding-top: 10px;
-  color: var(--meshora-on-glass-dim);
+  opacity: 0.9;
+  background: var(--vp-c-brand-1);
 }
 
 /* 首页正文区也浮在点阵上 */
@@ -724,8 +730,10 @@ html:has(.VPLocalSearchBox) .VPNav {
 .VPLocalSearchBox.VPLocalSearchBox .result {
   transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s var(--meshora-ease);
 }
-.VPLocalSearchBox.VPLocalSearchBox .result:hover {
-  transform: translateX(2px);
+@media (hover: hover) and (pointer: fine) {
+  .VPLocalSearchBox.VPLocalSearchBox .result:hover {
+    transform: translateX(2px);
+  }
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -760,4 +768,305 @@ html:has(.VPLocalSearchBox) .VPNav {
 /* 手机浏览器点按时默认铺一块蓝色方块，和玻璃很不搭：去掉（链接、按钮自己有悬停和按下的样子） */
 * {
   -webkit-tap-highlight-color: transparent;
+}
+
+/* ------------------------------------------------------------------
+   首页的左右留白（和 VitePress 首页容器的内边距一致），横向滑动的区块要用它出血到屏幕边
+   ------------------------------------------------------------------ */
+
+.VPHome {
+  --m-gutter: 24px;
+}
+
+@media (min-width: 640px) {
+  .VPHome {
+    --m-gutter: 48px;
+  }
+}
+
+@media (min-width: 960px) {
+  .VPHome {
+    --m-gutter: 64px;
+  }
+}
+
+/* 首页底部少空一点：收尾的下载区块已经撑出了结尾 */
+.VPHome {
+  padding-bottom: 32px !important;
+  margin-bottom: 24px !important;
+}
+
+/* ------------------------------------------------------------------
+   刘海屏 / 手势条（config.mts 里 viewport-fit=cover）
+   ------------------------------------------------------------------ */
+
+/*
+  加在 body 上，不碰 VitePress 容器自己的内边距（.VPContent 在宽屏上靠 padding-left 给侧边栏让位）。
+  没有刘海时 env() 是 0，等于没写
+*/
+@supports (padding: max(0px)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .VPFooter {
+    padding-bottom: max(32px, calc(env(safe-area-inset-bottom) + 16px)) !important;
+  }
+}
+
+/* 页脚：一行细线隔开，字小一点 */
+.VPFooter {
+  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+  background: rgba(7, 8, 12, 0.5) !important;
+}
+
+.VPFooter .message,
+.VPFooter .copyright {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* ------------------------------------------------------------------
+   文档页排版
+   ------------------------------------------------------------------ */
+
+.vp-doc {
+  text-wrap: pretty;
+}
+
+/* 二级标题：上面一条细线，段落分得开 */
+.VPDoc .vp-doc h2 {
+  margin-top: 56px;
+  padding-top: 28px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.VPDoc .vp-doc h3 {
+  margin-top: 36px;
+  font-size: 19px;
+  font-weight: 650;
+}
+
+.VPDoc .vp-doc h1 {
+  font-weight: 750;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+/* 行内代码：半透明的玻璃底，偏蓝一点 */
+.vp-doc :not(pre) > code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(122, 156, 255, 0.12);
+  border: 1px solid rgba(122, 156, 255, 0.16);
+  color: #d6e0ff;
+  font-size: 0.86em;
+}
+
+.vp-doc a:not(.header-anchor) {
+  text-underline-offset: 3px;
+}
+
+/* 表格：表头加一层底，悬停时整行亮一点 */
+.vp-doc th {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.vp-doc tr {
+  transition: background-color 160ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .vp-doc tbody tr:hover {
+    background: rgba(255, 255, 255, 0.035);
+  }
+}
+
+/*
+  窄屏表格：每列至少能放下几个字，不再逐字竖排；第一列钉在左边，横滑时还看得到是哪一行。
+  右边一道渐隐暗示还能往右滑
+*/
+@media (max-width: 767px) {
+  .vp-doc table {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    border: 1px solid var(--meshora-glass-border);
+  }
+
+  .vp-doc th,
+  .vp-doc td {
+    min-width: 7.5em;
+    padding: 10px 14px;
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  .vp-doc th:first-child,
+  .vp-doc td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 5.5em;
+    background: rgb(20, 23, 32);
+    box-shadow: 1px 0 0 var(--meshora-glass-border);
+  }
+}
+
+/*
+  手机上正文面板四周的留白收一点；代码块铺满面板的宽，长代码横滑时可用的宽度多一截
+*/
+@media (max-width: 640px) {
+  .VPDoc {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .VPDoc .content-container {
+    padding: 22px 18px 30px;
+    border-radius: 18px;
+  }
+
+  .VPDoc .vp-doc h1 {
+    font-size: 26px;
+    line-height: 1.35;
+  }
+
+  .VPDoc .vp-doc h2 {
+    margin-top: 44px;
+    padding-top: 22px;
+    font-size: 21px;
+  }
+
+  .VPDoc .vp-doc h3 {
+    font-size: 17.5px;
+  }
+
+  .VPDoc .vp-doc > div > p,
+  .VPDoc .vp-doc li {
+    font-size: 15.5px;
+    line-height: 1.85;
+  }
+
+  .vp-doc div[class*="language-"] {
+    margin-left: -18px !important;
+    margin-right: -18px !important;
+    border-radius: 0 !important;
+    border-left: 0 !important;
+    border-right: 0 !important;
+  }
+
+  .vp-doc .custom-block {
+    padding: 14px 16px;
+  }
+}
+
+/* ------------------------------------------------------------------
+   侧边栏
+   ------------------------------------------------------------------ */
+
+/* 当前页：一级条目也有品牌蓝的指示条，文字前面留出位置 */
+.VPSidebarItem.level-1 > .item {
+  position: relative;
+  border-radius: 10px;
+  transition: background-color 200ms;
+}
+
+.VPSidebarItem.level-1.is-active > .item {
+  background: rgba(122, 156, 255, 0.12);
+}
+
+.VPSidebarItem.level-1 > .item > .indicator {
+  left: -10px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  transform: scaleY(0);
+  transition: transform 300ms var(--meshora-ease-out), background-color 200ms;
+}
+
+.VPSidebarItem.level-1.is-active > .item > .indicator {
+  background-color: var(--vp-c-brand-1);
+  transform: scaleY(1);
+}
+
+.VPSidebarItem.level-1 > .item .link {
+  padding-left: 8px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .VPSidebarItem.level-1:not(.is-active) > .item:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* 手机：侧边栏抽屉滑出的缓动，和后面的遮罩一起淡入 */
+@media (max-width: 959px) {
+  .VPSidebar {
+    transition:
+      opacity 0.35s var(--meshora-ease-out),
+      transform 0.45s var(--meshora-ease-out) !important;
+    border-radius: 0 22px 22px 0;
+    padding-bottom: max(96px, env(safe-area-inset-bottom)) !important;
+  }
+
+  .VPBackdrop {
+    background: rgba(4, 5, 8, 0.55) !important;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+}
+
+/* 手机顶部"本页目录"的下拉：默认底色是半透明的，正文会透上来，改成够实的毛玻璃 */
+.VPLocalNavOutlineDropdown .items {
+  border-radius: 16px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background-color: rgba(16, 18, 26, 0.96);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.8);
+}
+
+.VPLocalNavOutlineDropdown .items .header,
+.VPLocalNavOutlineDropdown .items .outline {
+  background-color: transparent;
+}
+
+.VPLocalNavOutlineDropdown .items .header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* 上一页 / 下一页：玻璃卡片 */
+.VPDocFooter .pager-link {
+  border-radius: 16px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  transition:
+    border-color 200ms,
+    background-color 200ms,
+    transform 260ms var(--meshora-ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .VPDocFooter .pager-link:hover {
+    border-color: rgba(156, 182, 255, 0.5);
+    background: rgba(122, 156, 255, 0.08);
+    transform: translateY(-2px);
+  }
+}
+
+/* 手机：汉堡菜单展开的整屏导航 */
+.VPNavScreen {
+  background-color: rgba(7, 8, 12, 0.94) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.VPNavScreenMenuLink {
+  font-size: 17px !important;
+  padding: 14px 0 !important;
 }

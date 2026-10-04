@@ -16,15 +16,39 @@
   它们就各自渐入。
 */
 const TARGETS = [
-  '.VPHome .VPFeatures .item',
+  '.steps .head',
+  '.steps .step',
+  '.feature .copy',
+  '.feature .media',
   '.home-section',
+  '.home-cta',
   '.vp-doc .mesh-diagram',
   '.vp-doc .pipeline',
-  '.vp-doc table'
+  '.vp-doc table',
+  '.vp-doc .custom-block',
+  '.vp-doc div[class*="language-"]'
 ]
+
+/** 画面类的元素换一种入场（从侧面带一点缩放浮上来，比文字晚一拍），样式在 FeatureRow.vue */
+const MEDIA = '.feature .media'
+
+/**
+ * 只要"进没进过视口"、自己不藏的区块：进来时加 in-view，里面的装饰动画（比如三步之间的连线）跟着放
+ */
+const SECTIONS = ['.steps']
+
+/**
+ * 首屏的入场：给 .hero 加 hero-in，文字一行行浮上来、画面落进来（样式在 HomeHero.vue）。
+ * 开场动画还在放时先不放，等 intro.ts 放完调这里
+ */
+export function playHero() {
+  if (typeof document === 'undefined') return
+  document.querySelector('.hero')?.classList.add('hero-in')
+}
 
 let observer: IntersectionObserver | undefined
 let failsafe: number | undefined
+let heroFailsafe: number | undefined
 
 /**
  * 记录当前滚动条宽度，供 custom.css 在搜索弹窗打开时做补偿。
@@ -50,6 +74,10 @@ export function teardownReveal() {
     clearTimeout(failsafe)
     failsafe = undefined
   }
+  if (heroFailsafe !== undefined) {
+    clearTimeout(heroFailsafe)
+    heroFailsafe = undefined
+  }
   document.removeEventListener('visibilitychange', rescueVisible)
 }
 
@@ -69,6 +97,12 @@ function rescueVisible() {
     const r = el.getBoundingClientRect()
     if (r.top < window.innerHeight && r.bottom > 0) el.classList.add('reveal-in')
   })
+  SECTIONS.forEach(sel =>
+    document.querySelectorAll<HTMLElement>(sel).forEach(el => {
+      const r = el.getBoundingClientRect()
+      if (r.top < window.innerHeight && r.bottom > 0) el.classList.add('in-view')
+    })
+  )
 }
 
 /**
@@ -93,6 +127,12 @@ export function setupReveal() {
   // 页面长短变了，滚动条可能从有变无，重测一次
   updateScrollbarWidth()
 
+  // 首屏：开场动画在放就等它放完（intro.ts 会调 playHero）；兜底 4.2 秒后无条件放，免得首屏一直藏着
+  if (!document.documentElement.classList.contains('site-booting')) playHero()
+  heroFailsafe = window.setTimeout(playHero, 4200)
+
+  const sections = SECTIONS.flatMap(sel => Array.from(document.querySelectorAll<HTMLElement>(sel)))
+
   // 同一个元素可能被多个选择器命中，去重，并按各自分组算错峰序号。
   // 还要跳过「祖先已经在入场名单里」的元素：父子都渐入的话，两层 opacity
   // 会在过渡期间相乘，子元素出现得比预期更晚更突兀。
@@ -111,9 +151,12 @@ export function setupReveal() {
   })
 
   const all = groups.flat()
-  if (!all.length) return
+  if (!all.length && !sections.length) return
 
-  const revealAll = () => all.forEach(el => el.classList.add('reveal-in'))
+  const revealAll = () => {
+    all.forEach(el => el.classList.add('reveal-in'))
+    sections.forEach(el => el.classList.add('in-view'))
+  }
 
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   if (reduce || !('IntersectionObserver' in window)) {
@@ -126,7 +169,7 @@ export function setupReveal() {
       entries => {
         for (const e of entries) {
           if (!e.isIntersecting) continue
-          e.target.classList.add('reveal-in')
+          e.target.classList.add(e.target.classList.contains('reveal') ? 'reveal-in' : 'in-view')
           io.unobserve(e.target) // 入场一次就够，不做来回进出的重复动画
         }
       },
@@ -138,10 +181,12 @@ export function setupReveal() {
         // 错峰上限 8，避免长列表末尾等太久
         el.style.setProperty('--reveal-i', String(Math.min(i, 8)))
         el.classList.add('reveal')
+        if (el.matches(MEDIA)) el.classList.add('reveal--media')
       })
     })
 
     all.forEach(el => io.observe(el))
+    sections.forEach(el => io.observe(el))
     observer = io
 
     // 两道兜底：文档转为可见时补一次，以及 2.5 秒后无条件补一次

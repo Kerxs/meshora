@@ -56,13 +56,10 @@ export default defineConfig({
   sitemap: { hostname: SITE + '/' },
 
   head: [
-    ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
-    ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
-    ['link', {
-      rel: 'stylesheet',
-      href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap'
-    }],
+    // 不从 Google Fonts 拉字体：国内访问会卡住首屏，而且 IBM Plex 不含汉字，汉字本来就落到系统字体
     ['meta', { name: 'theme-color', content: '#07080c' }],
+    // 刘海屏横屏时内容别钻进刘海里（custom.css 里用 env(safe-area-inset-*) 让开）
+    ['meta', { name: 'viewport', content: 'width=device-width,initial-scale=1,viewport-fit=cover' }],
     // 开场动画（theme/intro.ts）：第一帧之前决定放不放，放的话先把页面内容藏起来，免得先闪一下。
     // 4 秒兜底：主题的 JS 没跑起来，内容也会出来
     ['script', {}, `try {
