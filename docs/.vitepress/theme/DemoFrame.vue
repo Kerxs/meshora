@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { withBase } from 'vitepress'
 
 /**
  * 客户端画面的画框：电脑窗口（圆角、细边）或者手机（厚边框、刘海）。
  *
  * 画面是 scripts/capture 录的截图（WebP）和录屏（WebM），放在 docs/public/demo/。
- * 有录屏时播录屏，截图当 poster：加载前、系统要求减少动画时都显示截图。
- * 不在屏幕里时暂停，省电；回到屏幕里接着播。
+ * 有录屏时播录屏，截图当 poster：加载前、系统要求减少动画、开了省流量时都显示截图。
+ * 录屏要等画框快滚进屏幕才开始下（src 那时才填上），不在屏幕里时暂停，省电也省流量；回到屏幕里接着播。
  *
  * 画框本身是 CSS 毛玻璃，不标 Glassium：画面里本来就是客户端的玻璃，再叠一层会糊。
  */
@@ -20,6 +20,8 @@ const props = defineProps<{
   /** 从第几秒开始放（同一段录屏在不同地方想从不同的地方看起）。不给就用下面 START 里的 */
   start?: number
   alt: string
+  /** 首屏里的画面：截图不懒加载 */
+  eager?: boolean
 }>()
 
 /**
@@ -30,32 +32,51 @@ const START: Record<string, number> = { connect: 0.9, punch: 1.0, boot: 0.3, pho
 
 const el = ref<HTMLVideoElement | null>(null)
 const still = ref(false)
+/** 已经滚到附近、可以开始下录屏了 */
+const near = ref(false)
 let observer: IntersectionObserver | null = null
 
-onMounted(() => {
-  still.value = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+function wire() {
+  observer?.disconnect()
+  observer = null
   const video = el.value
-  if (!video || still.value) return
+  if (!video) return
   const start = props.start ?? START[props.video ?? ''] ?? 0
   // 跳过开头；放完了回到开头接着放（原生的 loop 会回到 0，又露出那截黑屏）
   const rewind = () => {
     video.currentTime = start
   }
-  if (video.readyState >= 1) rewind()
-  else video.addEventListener('loadedmetadata', rewind, { once: true })
+  video.addEventListener('loadedmetadata', rewind, { once: true })
   video.addEventListener('ended', () => {
     rewind()
     video.play().catch(() => {})
   })
   observer = new IntersectionObserver(
     ([entry]) => {
-      if (entry.isIntersecting) video.play().catch(() => {})
-      else video.pause()
+      if (entry.isIntersecting) {
+        near.value = true
+        // src 刚填上时 play() 会等数据，不用等 loadedmetadata
+        nextTick(() => video.play().catch(() => {}))
+      } else video.pause()
     },
-    { threshold: 0.25 }
+    // 提前一点开始下，滚到眼前时已经能播
+    { rootMargin: '200px 0px', threshold: 0 }
   )
   observer.observe(video)
+}
+
+onMounted(() => {
+  const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData
+  still.value = window.matchMedia('(prefers-reduced-motion: reduce)').matches || !!saveData
+  if (still.value) return
+  wire()
 })
+
+// 首屏在窄屏上会把电脑窗口的录屏换成截图：换了之后重新接线
+watch(
+  () => props.video,
+  () => nextTick(wire)
+)
 
 onUnmounted(() => observer?.disconnect())
 
@@ -68,14 +89,20 @@ const src = (name: string, ext: string) => withBase(`/demo/${name}.${ext}`)
       <video
         v-if="props.video && !still"
         ref="el"
-        :src="src(props.video, 'webm')"
+        :src="near ? src(props.video, 'webm') : undefined"
         :poster="src(props.image, 'webp')"
         muted
         playsinline
-        preload="metadata"
+        preload="none"
         :aria-label="props.alt"
       />
-      <img v-else :src="src(props.image, 'webp')" :alt="props.alt" loading="lazy" decoding="async" />
+      <img
+        v-else
+        :src="src(props.image, 'webp')"
+        :alt="props.alt"
+        :loading="props.eager ? 'eager' : 'lazy'"
+        decoding="async"
+      />
     </div>
   </figure>
 </template>
@@ -121,6 +148,18 @@ const src = (name: string, ext: string) => withBase(`/demo/${name}.${ext}`)
 .is-phone .screen {
   aspect-ratio: 390 / 844;
   border-radius: 30px;
+}
+
+/* 画框上沿一道细高光，像玻璃边 */
+.is-desktop::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 12%;
+  right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  pointer-events: none;
 }
 
 .is-phone::before {

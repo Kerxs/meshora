@@ -80,7 +80,7 @@ MIT 许可，代码都在 [GitHub](https://github.com/Kerxs/meshora)。
 
 </HomeSection>
 
-<HomeSection title="常见问题" more="/guide/faq" moreText="更多问题">
+<HomeSection title="常见问题" more="/guide/faq" moreText="更多问题" faq>
 
 **现在能用吗？**
 能下载试用：[Windows 客户端](/guide/desktop)、[安卓客户端](/guide/android)。但它还没在两台真的电脑之间拿真的游戏
@@ -113,3 +113,5 @@ Windows 安装程序的代码签名（SmartScreen 会提示"未知发布者"）�
 如果这个方向对你有意思，[参与进来](/guide/contributing)说明了现阶段最需要什么样的帮助。
 
 </HomeSection>
+
+<HomeCta />

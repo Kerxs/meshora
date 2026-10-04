@@ -18,12 +18,14 @@ defineProps<{
   /** 指向完整版页面的链接，留空则不显示 */
   more?: string
   moreText?: string
+  /** 常见问题：段落开头加粗的那句当问题排 */
+  faq?: boolean
 }>()
 </script>
 
 <template>
-  <section class="home-section" glass="">
-    <p v-if="eyebrow" class="home-section__eyebrow">{{ eyebrow }}</p>
+  <section :class="['home-section', { faq }]" glass="">
+    <p v-if="eyebrow" class="m-eyebrow">{{ eyebrow }}</p>
     <h2 class="home-section__title">{{ title }}</h2>
 
     <div class="home-section__body">
@@ -44,23 +46,54 @@ defineProps<{
 <style scoped>
 .home-section {
   margin: 28px 0;
-  padding: clamp(22px, 3.4vw, 38px);
+  padding: clamp(22px, 3.4vw, 40px);
   border-radius: 26px;
 }
 
-.home-section__eyebrow {
-  margin: 0 0 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--meshora-on-glass-dim);
+@media (max-width: 640px) {
+  .home-section {
+    margin: 20px 0;
+    padding: 22px 18px;
+    border-radius: var(--m-radius-card);
+  }
+}
+
+/* 正文：和功能段同一套字号行高 */
+.home-section__body {
+  font-size: var(--m-fs-body);
+  line-height: var(--m-lh-body);
+}
+
+/*
+  常见问题（faq）：段落开头加粗的那句是问题，单独占一行、前面一个小标记，问答一眼分得开。
+  只认"段落的第一个元素就是加粗"的情况，正文中间的加粗不受影响
+*/
+.faq .home-section__body :deep(p > strong:first-child) {
+  display: block;
+  margin-bottom: 4px;
+  color: #fff;
+  font-size: 1.04em;
+}
+
+.faq .home-section__body :deep(p > strong:first-child)::before {
+  content: 'Q';
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  border-radius: 6px;
+  background: rgba(122, 156, 255, 0.18);
+  color: #b8caff;
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: 2px;
 }
 
 .home-section__title {
   margin: 0 0 18px;
-  font-size: clamp(21px, 2.6vw, 27px);
-  font-weight: 600;
+  font-size: clamp(22px, 2.6vw, 28px);
+  font-weight: 700;
   line-height: 1.3;
   letter-spacing: -0.01em;
   color: var(--meshora-on-glass);
@@ -93,9 +126,11 @@ defineProps<{
   text-underline-offset: 4px;
   transition: gap 0.2s var(--meshora-ease, ease), text-decoration-color 0.2s;
 }
-.home-section__more:hover {
-  gap: 10px;
-  text-decoration-color: currentColor;
+@media (hover: hover) and (pointer: fine) {
+  .home-section__more:hover {
+    gap: 10px;
+    text-decoration-color: currentColor;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,7 +1,8 @@
 import { h, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import type { Theme } from 'vitepress'
 import { useRoute } from 'vitepress'
-import DefaultTheme from 'vitepress/theme'
+// 不带 Inter 字体的版本：站点用系统字体（custom.css），省掉一个预加载的字体文件
+import DefaultTheme from 'vitepress/theme-without-fonts'
 import DotBackdrop from './DotBackdrop.vue'
 import MeshDiagram from './MeshDiagram.vue'
 import Pipeline from './Pipeline.vue'
@@ -11,8 +12,10 @@ import HomeHero from './HomeHero.vue'
 import HomeSteps from './HomeSteps.vue'
 import FeatureRow from './FeatureRow.vue'
 import DemoFrame from './DemoFrame.vue'
+import HomeCta from './HomeCta.vue'
 import {
   enableEntranceAnimations,
+  playHero,
   playPageEnter,
   setupReveal,
   teardownReveal,
@@ -54,6 +57,7 @@ export default {
     app.component('HomeSteps', HomeSteps)
     app.component('FeatureRow', FeatureRow)
     app.component('DemoFrame', DemoFrame)
+    app.component('HomeCta', HomeCta)
   },
 
   /**
@@ -66,7 +70,10 @@ export default {
 
     onMounted(() => {
       // 开场动画（每个会话一次）：放完再放页面的入场动画
-      runIntro(() => playPageEnter())
+      runIntro(() => {
+        playPageEnter()
+        playHero()
+      })
       startGlass()
       markHome(route.path === '/')
       enableEntranceAnimations()
