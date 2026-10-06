@@ -20,7 +20,7 @@ import { PANEL_STRIDE, PANEL_STRIDE_FLOATS, PANEL_STRUCT_BYTES } from "../shader
 import { READBACK_SIZE, IDLE_LAYER_FRAMES, sourceReady } from "../renderer/backend.js";
 import { LOCAL_SIGMA, MAX_LEVELS, levelForSigma } from "../renderer/blur.js";
 import { CANVAS_DEST, packFill, sceneDest, sceneScissor } from "../renderer/fills.js";
-import { layerRegion, levelRegion, splitLayers, unionRegion } from "../renderer/layers.js";
+import { layerRegion, levelRegion, unionRegion } from "../renderer/layers.js";
 import { sceneReusable } from "../renderer/idle.js";
 import { textureBytes, usage } from "../renderer/resources.js";
 import { PANEL_STRUCT_FLOATS, packGroup, packPanel } from "../renderer/panels.js";
@@ -472,7 +472,7 @@ export class Gl2Renderer {
             }
         }
         // 分层：第 0 层照旧，更高的层在第 6 步逐层画（与 gpu.ts 相同）
-        const layers = splitLayers(panels, groups, fills);
+        const layers = input.scene.layers;
         const base = layers[0]?.layer === 0 ? layers[0] : { layer: 0, panels: [], groups: [], fills: [] };
         let draws = 1; // 背景
         const backdropLevel = levelForSigma(backdrop.blurDp * viewport.sceneScale, this.#levels);

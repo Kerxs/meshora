@@ -17,6 +17,7 @@
  */
 import { sameOriginImage } from "../renderer/paint-content.js";
 import { inspectPanel } from "../renderer/layering.js";
+import { drawnWithCss } from "../renderer/panels.js";
 import { currentStage, onStageChange } from "../renderer/stage.js";
 import { placeImage, planBackground } from "./background.js";
 import { isContentBlock, releaseContent, scanContent } from "./content.js";
@@ -32,6 +33,14 @@ let timer = null;
 let frame = 0;
 let microtask = false;
 let subscribed = false;
+/** 滚动停下之后补一次全量扫描的定时器（见 scheduleScrollScan）。 */
+let settle = null;
+/** 排着的那一帧是不是只扫动了的玻璃（滚动排的是；别的原因排的是全量，两种都排了就全量）。 */
+let frameMovedOnly = true;
+/** 每块玻璃上一次扫描时在文档里的位置（视口矩形 + 页面的滚动量）。 */
+const placed = new WeakMap();
+/** 滚动停下这么久之后补一次全量扫描，毫秒。 */
+const SCROLL_SETTLE_MS = 150;
 /** 排一次扫描：immediate 在微任务里（stage 刚建好、玻璃刚注册 —— 要赶在 stage 自己的层级检查之前），否则节流。 */
 export function scheduleAbsorb(immediate = false) {
     subscribe();
@@ -55,14 +64,42 @@ export function scheduleAbsorb(immediate = false) {
 /**
  * 在下一帧画之前扫（滚动时：玻璃后面换了一块内容，要赶在这一帧画出来之前收进场景，不然 DOM 里的字先露一帧）。
  */
-export function scheduleAbsorbFrame() {
+export function scheduleAbsorbFrame(movedOnly = false) {
     subscribe();
+    if (!movedOnly)
+        frameMovedOnly = false;
     if (frame !== 0 || typeof requestAnimationFrame === 'undefined')
         return;
     frame = requestAnimationFrame(() => {
         frame = 0;
-        scan();
+        const only = frameMovedOnly;
+        frameMovedOnly = true;
+        scan(only);
     });
+}
+/**
+ * 滚动：下一帧只扫**相对页面动了**的玻璃（吸顶、固定定位的）。跟着页面一起滚的玻璃，下面的内容在滚动时不会换，
+ * 每帧对它们重做命中测试是白做 —— 一页十几块玻璃时每帧上百次 elementsFromPoint，滚动一卡一卡的。
+ * 已经收进来的块只要还靠近某块玻璃就不放（content.ts 的 RELEASE_MARGIN），跳过它们不会误放。
+ * 滚动停下 SCROLL_SETTLE_MS 之后补一次全量扫描，兜住少见的情况（固定定位的内容在滚动的玻璃后面）。
+ */
+function scheduleScrollScan() {
+    scheduleAbsorbFrame(true);
+    if (settle !== null)
+        clearTimeout(settle);
+    settle = setTimeout(() => {
+        settle = null;
+        scheduleAbsorbFrame();
+    }, SCROLL_SETTLE_MS);
+}
+/** 玻璃在文档里的位置变了吗（顺手记下这一次的）。滚动只改视口矩形、不改这个；吸顶、固定定位的玻璃滚动时会变。 */
+function movedInDocument(panel) {
+    const r = panel.getBoundingClientRect();
+    const key = `${r.left + window.scrollX},${r.top + window.scrollY},${r.width},${r.height}`;
+    if (placed.get(panel) === key)
+        return false;
+    placed.set(panel, key);
+    return true;
 }
 /** 这个元素的样式变了：收进去的背景要重读。返回它是不是收进去的元素。 */
 export function restyleAbsorbed(el) {
@@ -102,10 +139,11 @@ function subscribe() {
             scheduleAbsorb(true);
         }
     });
-    window.addEventListener('scroll', scheduleAbsorbFrame, { passive: true, capture: true });
-    window.addEventListener('resize', scheduleAbsorbFrame, { passive: true });
+    window.addEventListener('scroll', scheduleScrollScan, { passive: true, capture: true });
+    window.addEventListener('resize', () => scheduleAbsorbFrame(), { passive: true });
 }
-function scan() {
+/** @param movedOnly 只对相对页面动了的玻璃做命中测试（滚动时，见 scheduleScrollScan） */
+function scan(movedOnly = false) {
     const stage = currentStage();
     const config = getConfig();
     if (stage !== stageOf) {
@@ -115,15 +153,21 @@ function scan() {
         stageOf = stage;
     }
     const selector = config.absorbForComponents ? `[${GLASS_ID_ATTRIBUTE}], [data-glassium-active]` : `[${GLASS_ID_ATTRIBUTE}]`;
-    const panels = typeof document === 'undefined' ? [] : [...document.querySelectorAll(selector)];
+    // 用 CSS 画的玻璃不收它后面的东西（drawnWithCss）
+    const panels = typeof document === 'undefined' ? [] : [...document.querySelectorAll(selector)].filter((p) => !drawnWithCss(p));
+    // 每次扫描都记下每块玻璃的位置；只扫动了的时候，没动的跳过命中测试
+    const moved = new Set(panels.filter(movedInDocument));
+    const probe = (list) => (movedOnly ? list.filter((p) => moved.has(p)) : list);
     const content = stage && stage.active && config.absorbContent && panels.length > 0;
     if (!content)
         releaseContent();
     if (!stage || !stage.active || !config.absorbBackgrounds || panels.length === 0) {
         if (entries.size > 0)
             releaseAbsorbed();
-        if (content)
-            scanContent(stage, runtimePanels(), takeOverBackground);
+        if (content) {
+            const runtime = runtimePanels();
+            scanContent(stage, runtime, takeOverBackground, probe(runtime));
+        }
         return;
     }
     // 摘出文档的元素（单页应用换页、标签切走）：放掉它的填充、摘掉属性 —— 挂回来时按那时的样式重新收
@@ -140,7 +184,7 @@ function scan() {
         if (root)
             apply(root, rootBackground());
     }
-    for (const panel of panels) {
+    for (const panel of probe(panels)) {
         if (!panel.isConnected)
             continue;
         const problems = inspectPanel(panel, stage.canvas) ?? [];
@@ -160,12 +204,14 @@ function scan() {
         for (const e of entries.values())
             if (!e.fill)
                 register(stage, e);
-    if (content)
-        scanContent(stage, runtimePanels(), takeOverBackground);
+    if (content) {
+        const runtime = runtimePanels();
+        scanContent(stage, runtime, takeOverBackground, probe(runtime));
+    }
 }
 /** 内容块只看 runtime 的玻璃（组件里的字本来就在组件自己的层里）。 */
 function runtimePanels() {
-    return [...document.querySelectorAll(`[${GLASS_ID_ATTRIBUTE}]`)];
+    return [...document.querySelectorAll(`[${GLASS_ID_ATTRIBUTE}]`)].filter((p) => !drawnWithCss(p));
 }
 /** 内容块接管它自己的背景（背景色由内容的 painter 画）：背景层那一份放手。 */
 function takeOverBackground(el) {

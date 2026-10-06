@@ -27,7 +27,7 @@
 import { DEFAULT_SMOOTHING_DP } from "../renderer/panels.js";
 import { currentStage, onStageChange, prefersReducedMotion } from "../renderer/stage.js";
 import { describeElement } from "../renderer/layering.js";
-import { strictNumber } from "./attributes.js";
+import { strictNumber } from "../core/attributes.js";
 import { sharedSheet } from "./base.js";
 const HTMLElementBase = typeof HTMLElement === 'undefined' ? class {
 } : HTMLElement;

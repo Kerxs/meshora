@@ -45,6 +45,7 @@ import { acquireDevice, gpuCreationCounts, releaseDevice, simulateDeviceLoss } f
 import { Gl2Renderer, gl2CreationCounts } from "../webgl2/renderer.js";
 import { GpuRenderer } from "./gpu.js";
 import { unchangedFrame } from "./idle.js";
+import { buildScene } from "./scene.js";
 import { LayerWatcher } from "./layering.js";
 import { PanelRegistry } from "./panels.js";
 import { SceneSlot, sceneFallbackCss } from "./scene-source.js";
@@ -453,9 +454,8 @@ async function buildStage(options) {
             blendSpace,
             backdrop,
             sceneImage: scene.frame(viewport),
-            panels: measured.panels,
-            groups: measured.groups,
-            fills: measured.fills,
+            // 脏标记相对上一个画了的帧（unchangedFrame 比的也是它）
+            scene: buildScene(measured, lastFrame?.scene ?? null),
             panelDebugMode
         };
         // 与上一帧逐像素相同就不画：浏览器继续显示上一帧。回读与探针要一帧来服务，照画。
@@ -473,7 +473,8 @@ async function buildStage(options) {
         pendingProbe = null;
         pendingGroupProbe = null;
         pendingReadback = null;
-        const result = renderer.render({ ...frame, atlas: panels.atlas, probe, groupProbe, readback, reuseScene });
+        const { panels: drawn, groups, fills } = frame.scene;
+        const result = renderer.render({ ...frame, panels: drawn, groups, fills, atlas: panels.atlas, probe, groupProbe, readback, reuseScene });
         if (!result) {
             // 这一帧没画成（比如资源还没就绪、上下文刚丢）：请求放回去，下一帧再服务
             pendingProbe ??= probe;
@@ -895,7 +896,7 @@ async function buildStage(options) {
                 };
             },
             checkLayers: () => layers.check(),
-            scene: () => inspectFrame(lastFrame),
+            scene: () => (lastFrame ? inspectFrame({ viewport: lastFrame.viewport, ...lastFrame.scene }) : null),
             renderNow() {
                 if (!isActive())
                     return;

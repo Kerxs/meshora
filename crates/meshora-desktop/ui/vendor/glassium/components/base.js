@@ -18,7 +18,7 @@
 import { overlayHostRule } from "../core/overlay.js";
 import { describeElement } from "../renderer/layering.js";
 import { ACTIVE_ATTRIBUTE, GlassBinding } from "../runtime/binding.js";
-import { MATERIAL_ATTRIBUTES, parseMaterialAttributes } from "./attributes.js";
+import { MATERIAL_ATTRIBUTES, parseMaterialAttributes } from "../core/attributes.js";
 import { ScrollEdgeLayer } from "./scroll-edge.js";
 /** 玻璃生效时组件带上的属性（见 runtime/binding.ts）。 */
 export { ACTIVE_ATTRIBUTE };

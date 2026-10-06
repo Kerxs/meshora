@@ -141,10 +141,15 @@ textarea {
   padding: 0 var(--sp-4);
   border: 0;
   border-radius: calc(var(--h-ctl) / 2);
-  background: transparent;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* 按钮去掉浏览器默认的底色（GPU 玻璃要它透明）。用 :where 降到零优先级：玻璃标了 overlay、由 Glassium 用 CSS 画的时候，
+ * 它的着色（--glassium-tint）要能盖过这一条 —— 写成普通的 .btn 会把弹窗里蓝色的主按钮刷成透明 */
+:where(.btn, .path) {
+  background: transparent;
 }
 
 .btn.sm {
@@ -1069,7 +1074,6 @@ td.spark-cell .spark {
   padding: var(--sp-5) var(--sp-4);
   border: 0;
   border-radius: var(--r-card);
-  background: transparent;
   text-align: left;
   cursor: pointer;
 }
@@ -1211,27 +1215,31 @@ td.spark-cell .spark {
 
 /* ---------- 确认框 ---------- */
 
+/* 弹窗的遮罩。里面的框是 Glassium 的 overlay 玻璃（CSS 画的 backdrop-filter），两件事要小心：
+ * - 变暗的那层画在 ::before 上，遮罩本身不写背景：Glassium 会把玻璃后面"写了背景的元素"收进 GPU 场景
+ *   （画到页面最底下、DOM 背景清掉），遮罩就跑到正文底下去了
+ * - 淡入只用 backwards，播完就撤：一直挂着的透明度动画让遮罩成了 backdrop 的根，框的模糊只看得见遮罩里面，
+ *   正文的字就清清楚楚透上来 */
 .modal-scrim {
   position: fixed;
   inset: 0;
   z-index: 30;
   display: grid;
   place-items: center;
+  animation: fade var(--t-mid) var(--ease) backwards;
+}
+
+.modal-scrim::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: rgba(3, 6, 20, 0.62);
-  animation: fade var(--t-mid) var(--ease) both;
+  pointer-events: none;
 }
 
 .modal-scrim .dialog {
   text-align: center;
-}
-
-/* 盖在正文上的面：CSS 毛玻璃加实底。Glassium 的玻璃画在页面底下，盖不住上面的字 */
-.frost {
-  background: rgba(14, 19, 40, 0.94);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 24px 64px rgba(0, 0, 0, 0.5);
-  -webkit-backdrop-filter: blur(24px) saturate(140%);
-  backdrop-filter: blur(24px) saturate(140%);
 }
 
 /* 直连模式的连接码弹窗 */
@@ -1292,37 +1300,6 @@ td.spark-cell .spark {
   font-size: var(--fs-cap);
   line-height: 1.45;
   color: var(--mid);
-}
-
-/* 毛玻璃面上的按钮：CSS 画，不用 Glassium */
-.btn.solid {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--text);
-}
-
-.btn.solid:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.14);
-}
-
-.btn.solid.primary {
-  background: #3d6bff;
-  border-color: transparent;
-  color: #fff;
-}
-
-.btn.solid.primary:hover:not(:disabled) {
-  background: #5580ff;
-}
-
-.btn.solid.danger {
-  background: rgba(255, 92, 92, 0.16);
-  border-color: rgba(255, 92, 92, 0.3);
-  color: var(--bad);
-}
-
-.btn.solid.danger:hover:not(:disabled) {
-  background: rgba(255, 92, 92, 0.24);
 }
 
 @keyframes fade {
@@ -1675,33 +1652,24 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
   transform: scale(0.97);
 }
 
-/* ---------- 手机：CSS 毛玻璃 ----------
- * 手机上 app.js 把 glass 属性换成 data-glass（理由见 phoneGlass）。backdrop-filter 由合成器和滚动一起画，
- * 滑动时玻璃和字粘在一起。观感对齐桌面上 Glassium 的三种材质：frosted 重模糊、灰白半透明；clear 轻；tinted 带颜色 */
+/* ---------- 手机上的玻璃 ----------
+ * 手机上不起 Glassium 的 runtime，玻璃用 CSS 画（理由见 app.js 的 paintGlass）。材质的数由 Glassium 算好写成变量，
+ * 这条规则和 Glassium 画 overlay 玻璃的那条（vendor/glassium/runtime/styles.js 的 BASE_CSS）一字不差。
+ * 导航里垫在选中项下面的那块靠 transition 飞过去 */
 
-.phone [data-glass] {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  -webkit-backdrop-filter: blur(10px) saturate(130%);
-  backdrop-filter: blur(10px) saturate(130%);
-  background: rgba(255, 255, 255, 0.06);
+.phone [glass] {
+  background-color: var(--glassium-tint, rgba(255, 255, 255, 0.18));
+  box-shadow:
+    inset 0 1px 0 0 var(--glassium-rim-light, rgba(255, 255, 255, 0.495)),
+    inset 0 -1px 0 0 var(--glassium-rim-light, rgba(255, 255, 255, 0.495)),
+    inset 0 0 0 1px var(--glassium-rim-side, rgba(255, 255, 255, 0.223)),
+    0 0 0 0.5px var(--glassium-edge, rgba(41, 41, 41, 0.315)),
+    0 6px 12px -4px var(--glassium-shadow, rgba(0, 0, 0, 0.053));
+  -webkit-backdrop-filter: blur(var(--glassium-blur, 8px)) saturate(var(--glassium-saturate, 1.4));
+  backdrop-filter: blur(var(--glassium-blur, 8px)) saturate(var(--glassium-saturate, 1.4));
 }
 
-.phone [data-glass="frosted"] {
-  background: rgba(30, 34, 46, 0.58);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
-  backdrop-filter: blur(22px) saturate(140%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 10px 30px rgba(0, 0, 0, 0.35);
-}
-
-.phone [data-glass="tinted"] {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--glass-tint, #ffffff) 82%, transparent);
-  color: #fff;
-}
-
-/* 导航里垫在选中项下面的那块：飞过去 */
-.phone .nav-glide[data-glass] {
+.phone .nav-glide {
   transition: transform var(--t-mid) var(--ease), width var(--t-mid) var(--ease);
 }
 

@@ -14,22 +14,15 @@
  * - 背景参数：stage 每次 setBackdrop 都换一个新对象，比引用
  * - 场景：内置 gradient 场景随时间漂移（reduced-motion 下时间冻结在 0，就不动了）；用户场景
  *   dynamic 的每帧都变，其余比源、版本号与铺法
- * - 面板：同一块面板、同样的矩形 / 裁剪、同一个降级结果（材质或尺寸变了会重新降级，换一个新对象）
- * - 合并组：成员逐个同上，外加 smoothing 与裁剪矩形
- * - 填充：同一块、同样的矩形 / 裁剪 / 圆角 / 颜色（颜色的 CSS 过渡期间每帧都不同）/ 渐变（解算结果缓存在记录上，
+ * - 场景（scene.ts 的脏标记）：节点一个不多一个不少、顺序相同，每个节点四类都不脏 ——
+ *   面板：同一块面板、同样的矩形 / 裁剪、同一个降级结果（材质或尺寸变了会重新降级，换一个新对象）；
+ *   合并组：成员逐个同上，外加 smoothing 与裁剪矩形；
+ *   填充：同一块、同样的矩形 / 裁剪 / 圆角 / 颜色（颜色的 CSS 过渡期间每帧都不同）/ 渐变（解算结果缓存在记录上，
  *   渐变或尺寸没变就是同一个对象）/ 位图（图集里同一格、画过的次数相同 —— 重画一次就算变了）
  */
-import { sameMask } from "./mask.js";
+import { fillDirty, isClean, sameTuple, sceneChanged } from "./scene.js";
 /** 内置场景里随时间变化的只有 gradient（mode 0）。 */
 const GRADIENT_SCENE = 0;
-function sameTuple(a, b) {
-    if (a.length !== b.length)
-        return false;
-    for (let i = 0; i < a.length; i++)
-        if (a[i] !== b[i])
-            return false;
-    return true;
-}
 function sameViewport(a, b) {
     return (a.cssWidth === b.cssWidth &&
         a.cssHeight === b.cssHeight &&
@@ -52,102 +45,12 @@ function sameScene(a, b) {
         sameTuple(a.uvOffset, b.uvOffset) &&
         sameTuple(a.background, b.background));
 }
-function sameRoundedBox(a, b) {
-    if (a === null || b === null)
-        return a === b;
-    return (a.box.x0 === b.box.x0 &&
-        a.box.y0 === b.box.y0 &&
-        a.box.x1 === b.box.x1 &&
-        a.box.y1 === b.box.y1 &&
-        sameTuple(a.rx, b.rx) &&
-        sameTuple(a.ry, b.ry));
-}
-function samePanel(a, b) {
-    return (a.record === b.record &&
-        a.chain === b.chain &&
-        a.quality === b.quality &&
-        a.x === b.x &&
-        a.y === b.y &&
-        a.w === b.w &&
-        a.h === b.h &&
-        sameTuple(a.scissor, b.scissor) &&
-        a.clip.x0 === b.clip.x0 &&
-        a.clip.y0 === b.clip.y0 &&
-        a.clip.x1 === b.clip.x1 &&
-        a.clip.y1 === b.clip.y1 &&
-        sameTuple(a.clipRadii, b.clipRadii) &&
-        sameTuple(a.clipRadiiY, b.clipRadiiY) &&
-        sameRoundedBox(a.clipShape, b.clipShape) &&
-        sameMask(a.mask, b.mask) &&
-        sameTuple(a.light, b.light) &&
-        a.fade === b.fade &&
-        a.tone === b.tone &&
-        a.visualScale === b.visualScale &&
-        sameTuple(a.rotation, b.rotation) &&
-        a.layer === b.layer);
-}
-function samePanels(a, b) {
-    if (a.length !== b.length)
-        return false;
-    for (let i = 0; i < a.length; i++)
-        if (!samePanel(a[i], b[i]))
-            return false;
-    return true;
-}
-function sameGroups(a, b) {
-    if (a.length !== b.length)
-        return false;
-    for (let i = 0; i < a.length; i++) {
-        const g = a[i];
-        const h = b[i];
-        if (g.smoothingPx !== h.smoothingPx ||
-            g.layer !== h.layer ||
-            !sameTuple(g.scissor, h.scissor) ||
-            !samePanels(g.members, h.members)) {
-            return false;
-        }
-    }
-    return true;
-}
-function sameBitmap(a, b) {
-    if (!a || !b)
-        return !a && !b;
-    return a.version === b.version && sameTuple(a.geom, b.geom) && sameTuple(a.cell, b.cell);
-}
-function sameHole(a, b) {
-    if (!a || !b)
-        return !a && !b;
-    return a.alpha === b.alpha && sameRoundedBox(a.shape, b.shape);
-}
-function sameFill(a, b) {
-    return (a.record === b.record &&
-        a.x === b.x &&
-        a.y === b.y &&
-        a.w === b.w &&
-        a.h === b.h &&
-        sameTuple(a.rotation, b.rotation) &&
-        sameTuple(a.scissor, b.scissor) &&
-        a.clip.x0 === b.clip.x0 &&
-        a.clip.y0 === b.clip.y0 &&
-        a.clip.x1 === b.clip.x1 &&
-        a.clip.y1 === b.clip.y1 &&
-        sameTuple(a.clipRadii, b.clipRadii) &&
-        sameTuple(a.clipRadiiY, b.clipRadiiY) &&
-        sameRoundedBox(a.clipShape, b.clipShape) &&
-        sameMask(a.mask, b.mask) &&
-        sameTuple(a.radii, b.radii) &&
-        sameTuple(a.radiiY, b.radiiY) &&
-        sameTuple(a.color, b.color) &&
-        a.gradient === b.gradient &&
-        sameBitmap(a.bitmap, b.bitmap) &&
-        sameHole(a.hole, b.hole) &&
-        a.layer === b.layer);
-}
+/** 填充逐个相同（scene.ts 的 fillDirty 四类都不脏）。 */
 function sameFills(a, b) {
     if (a.length !== b.length)
         return false;
     for (let i = 0; i < a.length; i++)
-        if (!sameFill(a[i], b[i]))
+        if (!isClean(fillDirty(a[i], b[i])))
             return false;
     return true;
 }
@@ -186,7 +89,7 @@ export function unchangedFrame(prev, next) {
     if (next.sceneImage === null &&
         next.backdrop.sceneMode === GRADIENT_SCENE &&
         prev.time !== next.time &&
-        !sceneHidden(next.fills, next.viewport)) {
+        !sceneHidden(next.scene.fills, next.viewport)) {
         return false;
     }
     return (prev.backdrop === next.backdrop &&
@@ -194,9 +97,7 @@ export function unchangedFrame(prev, next) {
         prev.panelDebugMode === next.panelDebugMode &&
         sameViewport(prev.viewport, next.viewport) &&
         sameScene(prev.sceneImage, next.sceneImage) &&
-        samePanels(prev.panels, next.panels) &&
-        sameGroups(prev.groups, next.groups) &&
-        sameFills(prev.fills, next.fills));
+        !sceneChanged(prev.scene, next.scene));
 }
 export function sceneReusable(prev, next) {
     if (prev === null)

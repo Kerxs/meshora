@@ -19,7 +19,7 @@ import { probeCapabilities } from "../webgpu/probe.js";
 import { IDLE_LAYER_FRAMES, READBACK_SIZE, sourceReady } from "./backend.js";
 import { BACKDROP_FORMAT, backdropFormat, BlurChain, levelForSigma } from "./blur.js";
 import { CANVAS_DEST, packFill, sceneDest, sceneScissor } from "./fills.js";
-import { layerRegion, splitLayers, unionRegion } from "./layers.js";
+import { layerRegion, unionRegion } from "./layers.js";
 import { sceneReusable } from "./idle.js";
 import { GpuTimer } from "./gpu-timer.js";
 import { textureBytes, usage } from "./resources.js";
@@ -687,7 +687,7 @@ export class GpuRenderer {
         this.#timer?.begin(encoder);
         // 分层（layers.ts）：第 0 层（直接在场景上的玻璃与场景里的填充）照旧；写在玻璃里面的东西在更高的层，
         // 画之前把画布上已经画好的那一块采回来、只在那一块里重建模糊链
-        const layers = splitLayers(panels, groups, fills);
+        const layers = input.scene.layers;
         const base = layers[0]?.layer === 0 ? layers[0] : { layer: 0, panels: [], groups: [], fills: [] };
         let draws = 0;
         const withFills = base.fills.length > 0 && this.#fillSceneBindGroup !== null;

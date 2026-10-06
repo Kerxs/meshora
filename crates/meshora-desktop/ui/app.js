@@ -5,18 +5,21 @@
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
 import "./sky.js";
-import glassium from "./vendor/glassium/index.js";
+import glassium, { defineGlassElements, overlayVars, parseGlassAttributes } from "./vendor/glassium/index.js";
 import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
-
-// 开关是 Glassium 的组件：它们后面的背景也要收进场景，玻璃才折射得到
-glassium.configure({ absorbForComponents: true });
-
-const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
 // 安卓客户端（crates/meshora-android）用的也是这份界面：手机上没有标题栏、本机当主机、Windows 的网络设置，
 // 导航挪到屏幕底部。一打开就要知道（标题栏在拿到第一份状态之前就画了），所以看 User-Agent
 const PHONE = /Android/i.test(navigator.userAgent);
 document.documentElement.classList.toggle("phone", PHONE);
+
+// 开关是 Glassium 的组件：它们后面的背景也要收进场景，玻璃才折射得到。
+// 手机上不起 Glassium 的 runtime（见 paintGlass）：要在它启动之前（import 之后的同一个任务里）关掉
+glassium.configure(PHONE ? { auto: false } : { absorbForComponents: true });
+// 组件（开关）是 runtime 启动时注册的：手机上自己注册。没有 stage 时组件用 CSS 画轨道和白色旋钮，也不会去建 stage
+if (PHONE) defineGlassElements();
+
+const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 const DEVICE = PHONE ? "这台手机" : "这台电脑";
 
 const POLL_MS = 1000;
@@ -29,8 +32,25 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
   setProps(el, props);
+  if (PHONE && el.hasAttribute("glass")) paintGlass(el);
   append(el, children);
   return el;
+}
+
+/**
+ * 手机上的玻璃：Glassium 的材质，用 CSS 画（app.css 的"手机上的玻璃"）。
+ *
+ * GPU 玻璃画在页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、比主线程快一两帧，玻璃就落在文字后面。
+ * CSS 画的（backdrop-filter）由合成器和滚动一起画，天然同步。Glassium 给盖在正文上的玻璃（overlay）也是这么画的，
+ * 这里照搬：parseGlassAttributes 按 glass / glass-* 属性读出材质，overlayVars 算成模糊、饱和度、着色、亮边、投影的
+ * CSS 变量，和 Glassium 自己画的 overlay 玻璃是同一套数。
+ * runtime 不起：它起了就会建一块 GPU 画布、每帧量一遍所有玻璃，手机上全是 CSS 玻璃时白费电（画布上还会露出它的兜底底色）
+ */
+function paintGlass(el) {
+  const { material } = parseGlassAttributes((name) => el.getAttribute(name));
+  for (const [name, value] of Object.entries(overlayVars(material))) el.style.setProperty(name, value);
+  const radius = el.getAttribute("glass-corner-radius");
+  if (radius) el.style.borderRadius = `${radius}px`;
 }
 
 /**
@@ -60,20 +80,10 @@ function s(tag, props, ...children) {
   return el;
 }
 
-// 手机上不用 Glassium 画面板：它的玻璃画在页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、
-// 比主线程快一两帧，玻璃就落在文字后面。改用 CSS 毛玻璃（backdrop-filter），由合成器和滚动一起画，天然同步。
-// glass="x" 换成 data-glass="x"（样式在 app.css 的"手机：CSS 毛玻璃"），颜色、圆角走 CSSOM，别的 glass-* 丢掉
-function phoneGlass(el, key, value) {
-  if (key === "glass") el.setAttribute("data-glass", value === true ? "" : value);
-  else if (key === "glass-tint") el.style.setProperty("--glass-tint", value);
-  else if (key === "glass-corner-radius") el.style.borderRadius = `${value}px`;
-}
-
 function setProps(el, props) {
   for (const [key, value] of Object.entries(props || {})) {
     if (value === undefined || value === null || value === false) continue;
-    if (PHONE && (key === "glass" || key.startsWith("glass-"))) phoneGlass(el, key, value);
-    else if (key === "class") el.setAttribute("class", value);
+    if (key === "class") el.setAttribute("class", value);
     else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else el.setAttribute(key, value === true ? "" : value);
   }
@@ -1107,7 +1117,7 @@ function sheet(title, text) {
   const scrim = h(
     "div",
     { class: "modal-scrim", onclick: (event) => event.target === scrim && close() },
-    h("section", { class: "dialog frost sheet", role: "dialog", "aria-modal": "true" }, h("h2", {}, title), h("p", {}, text), body),
+    h("section", { class: "dialog sheet", glass: "frosted", overlay: "", "glass-corner-radius": "26", role: "dialog", "aria-modal": "true" }, h("h2", {}, title), h("p", {}, text), body),
   );
   document.addEventListener("keydown", onKey);
   document.body.append(scrim);
@@ -1118,13 +1128,13 @@ function sheet(title, text) {
 function codeField(code, what) {
   const area = h("textarea", { class: "code-area mono", readonly: "", spellcheck: "false", "aria-label": what }, code);
   area.addEventListener("focus", () => area.select());
-  return h("div", { class: "code-box" }, area, h("button", { class: "btn solid primary", type: "button", onclick: () => copy(code, what) }, `复制${what}`));
+  return h("div", { class: "code-box" }, area, h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(code, what) }, `复制${what}`));
 }
 
 /** 朋友：把回执码发给房主 */
 function showReply(result) {
   const { body, close } = sheet("把回执码发给房主", "房主贴进去之后，两边同时开始打洞，通了就在网络页上看得到房主。");
-  body.append(codeField(result.code, "回执码"), ...natWarnings(result), h("div", { class: "row end-row" }, h("button", { class: "btn solid", type: "button", onclick: close }, "完成")));
+  body.append(codeField(result.code, "回执码"), ...natWarnings(result), h("div", { class: "row end-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: close }, "完成")));
 }
 
 /** 房主：给一位朋友生成房主码，再收他的回执码 */
@@ -1135,12 +1145,12 @@ async function inviteDirect() {
   try {
     result = await invoke("direct_offer");
   } catch (err) {
-    body.replaceChildren(h("p", { class: "field-error" }, String(err)), h("div", { class: "row end-row" }, h("button", { class: "btn solid", type: "button", onclick: close }, "关闭")));
+    body.replaceChildren(h("p", { class: "field-error" }, String(err)), h("div", { class: "row end-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: close }, "关闭")));
     return;
   }
   const reply = h("textarea", { class: "code-area mono", spellcheck: "false", placeholder: "meshora-reply: 开头的回执码", "aria-label": "回执码" });
   const error = h("div", { class: "field-error", role: "alert" });
-  const accept = h("button", { class: "btn solid primary", type: "button" }, "加进来");
+  const accept = h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加进来");
   accept.addEventListener("click", async () => {
     setText(error, "");
     accept.disabled = true;
@@ -1161,12 +1171,13 @@ async function inviteDirect() {
     ...natWarnings(result),
     h("div", { class: "step" }, h("b", {}, "2. 贴上他发回来的回执码"), reply),
     error,
-    h("div", { class: "row end-row" }, h("button", { class: "btn solid", type: "button", onclick: close }, "以后再说"), accept),
+    h("div", { class: "row end-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: close }, "以后再说"), accept),
   );
 }
 
 // 盖在正文上的层（确认框）不用 Glassium：它的玻璃画在页面底下，盖不住上面的字，字会透上来。
-// 框和里面的按钮都用 CSS 画（.frost、.btn.solid）
+// 框是 Glassium 的玻璃，标了 overlay：盖在正文上，Glassium 用 CSS 画（GPU 玻璃在页面底下，盖不住上面的字）；
+// 里面的按钮跟着一起用 CSS 画
 function confirmBox(title, text, okLabel, { cancelLabel = "取消", danger = true } = {}) {
   return new Promise((resolve) => {
     const close = (answer) => {
@@ -1175,16 +1186,16 @@ function confirmBox(title, text, okLabel, { cancelLabel = "取消", danger = tru
       resolve(answer);
     };
     const onKey = (event) => event.key === "Escape" && close(false);
-    const ok = h("button", { class: `btn wide solid${danger ? " danger" : " primary"}`, type: "button", onclick: () => close(true) }, okLabel);
+    const ok = h("button", { class: `btn wide${danger ? " danger" : ""}`, glass: danger ? "clear" : "tinted", "glass-tint": danger ? null : "#3d6bff", type: "button", onclick: () => close(true) }, okLabel);
     const scrim = h(
       "div",
       { class: "modal-scrim", onclick: (event) => event.target === scrim && close(false) },
       h(
         "section",
-        { class: "dialog narrow frost", role: "alertdialog", "aria-modal": "true" },
+        { class: "dialog narrow", glass: "frosted", overlay: "", "glass-corner-radius": "26", role: "alertdialog", "aria-modal": "true" },
         h("h2", {}, title),
         h("p", {}, text),
-        h("div", { class: "row center-row" }, h("button", { class: "btn solid", type: "button", onclick: () => close(false) }, cancelLabel), ok),
+        h("div", { class: "row center-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: () => close(false) }, cancelLabel), ok),
       ),
     );
     document.addEventListener("keydown", onKey);

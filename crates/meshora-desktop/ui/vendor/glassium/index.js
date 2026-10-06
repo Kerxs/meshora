@@ -87,7 +87,7 @@ export { GlassCard } from "./components/glass-card.js";
 export { GlassButton } from "./components/glass-button.js";
 export { GlassContainer, MORPH_DROPLET, MORPH_EASING, MORPH_MS, dropletOffset } from "./components/glass-container.js";
 // 两块不相干的玻璃之间的变形（glassEffectID 那种「这一块变成那一块」）
-export { cubicBezier, morphGlass, MORPH_GLASS_EASE, MORPH_GLASS_FADE, MORPH_GLASS_MS } from "./components/morph-glass.js";
+export { cubicBezier, morphGlass, MORPH_GLASS_EASE, MORPH_GLASS_FADE, MORPH_GLASS_MS } from "./interaction/morph.js";
 export { GlassFill } from "./components/glass-fill.js";
 export { GlassSwitch } from "./components/glass-switch.js";
 export { GlassSegmented } from "./components/glass-segmented.js";
@@ -101,7 +101,7 @@ export { GlassSlider, defaultValue as sliderDefaultValue, parseRange as parseSli
 export { PressTween, SEGMENT_THUMB_PRESSED, THUMB_PRESSED, THUMB_REST, thumbMaterial } from "./components/thumb.js";
 // 文字进场景：把元素里的文字、图标画进 2D 画布（位图填充的 painter），分段控件与标签栏按住时用
 export { SceneLabels, paintContent } from "./components/scene-label.js";
-export { MATERIAL_ATTRIBUTES, parseMaterialAttributes } from "./components/attributes.js";
+export { MATERIAL_ATTRIBUTES, parseMaterialAttributes } from "./core/attributes.js";
 // —— 玻璃面板（T7 起）与合并组（T10 起）——
 export { DEFAULT_SMOOTHING_DP, LIGHT_GAIN, LIGHT_SIGMA_FRAC, MAX_GLASS_LAYER, OVERLAY_ATTRIBUTE, OVERLAY_OPT_IN, RIM_MIN_PX, RIM_WIDTH_DP, SHADOW_OPACITY, shadowShapeDp, presentRect } from "./renderer/panels.js";
 // —— 填充：画进场景的纯色形状（`<glass-fill>`）——
