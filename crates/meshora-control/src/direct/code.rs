@@ -203,6 +203,10 @@ impl Offer {
             hint: r.hint()?,
         };
         r.done()?;
+        let offer = Offer {
+            hint: plausible_hint(offer.hint, &offer.endpoints),
+            ..offer
+        };
         if offer.prefix_len > 30 || offer.host_ip == offer.guest_ip {
             return Err(CodeError::Damaged);
         }
@@ -240,8 +244,31 @@ impl Reply {
             hint: r.hint()?,
         };
         r.done()?;
-        Ok(reply)
+        Ok(Reply {
+            hint: plausible_hint(reply.hint, &reply.endpoints),
+            ..reply
+        })
     }
+}
+
+/// 码里的候选端点能不能拿来探测：一张码是别人给的，里面的地址不能完全信。
+///
+/// 只要普通的单播地址：不要 0.0.0.0、组播、广播（往这些地址发包没意义，还可能被利用来放大），
+/// 不要 1024 以下的端口（系统服务：DNS、NTP……往那发加密的探测报文没用，还像在扫描）。
+/// 回环地址留着：只会发到自己这台机器上的高端口，测试也要用
+fn probeable(addr: SocketAddr) -> bool {
+    let ip = addr.ip();
+    let broadcast = matches!(ip, IpAddr::V4(v4) if v4.is_broadcast());
+    addr.port() >= 1024 && !ip.is_unspecified() && !ip.is_multicast() && !broadcast
+}
+
+/// 端口提示只认对方自己的公网地址：提示里的 IP 得出现在同一张码的候选端点里
+fn plausible_hint(hint: Option<PortHint>, endpoints: &[SocketAddr]) -> Option<PortHint> {
+    hint.filter(|hint| {
+        endpoints
+            .iter()
+            .any(|addr| addr.ip() == IpAddr::V4(hint.ip))
+    })
 }
 
 /// FNV-1a，32 位。只用来发现抄错，不是安全机制（见模块文档）
@@ -415,10 +442,12 @@ impl Reader {
                 let port = u16::from_be_bytes(self.take::<2>()?);
                 Ok(SocketAddr::new(ip, port))
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()
+            .map(|all| all.into_iter().filter(|addr| probeable(*addr)).collect())
     }
 
-    /// 第 2 版起才有端口提示
+    /// 第 2 版起才有端口提示。提示里的 IP 必须是同一张码里某个候选端点的 IP（对方自己的公网地址）：
+    /// 不然一张码就能让客户端往随便哪个第三方的 IP 扫一大段端口，见 [`plausible_hint`]
     fn hint(&mut self) -> Result<Option<PortHint>, CodeError> {
         if self.version < 2 || self.u8()? == 0 {
             return Ok(None);
@@ -541,7 +570,7 @@ mod tests {
         let mut long = offer();
         long.name = "名".repeat(80);
         long.endpoints = (0..20)
-            .map(|i| SocketAddr::from(([10, 0, 0, i], 1000)))
+            .map(|i| SocketAddr::from(([10, 0, 0, i], 41641)))
             .collect();
         let back = Offer::decode_at(&long.encode(), NOW).unwrap();
         assert_eq!(back.name.chars().count(), 32);
@@ -601,6 +630,45 @@ mod tests {
         assert!(
             low.predict().iter().all(|a| a.port() >= 1024),
             "不预测系统端口"
+        );
+    }
+
+    #[test]
+    fn a_hint_pointing_at_someone_else_is_dropped() {
+        // 提示里的 IP 不是码里任何一个端点的：不认，免得往第三方扫端口
+        let mut offer = offer();
+        offer.hint = Some(PortHint {
+            ip: Ipv4Addr::new(198, 51, 100, 77),
+            port: 40000,
+            step: 1,
+        });
+        assert_eq!(Offer::decode_at(&offer.encode(), NOW).unwrap().hint, None);
+        // 是对方自己的公网地址：认
+        let mut own = offer.clone();
+        own.hint = Some(PortHint {
+            ip: Ipv4Addr::new(203, 0, 113, 9),
+            port: 40000,
+            step: 1,
+        });
+        assert_eq!(Offer::decode_at(&own.encode(), NOW).unwrap().hint, own.hint);
+    }
+
+    #[test]
+    fn junk_endpoints_are_dropped() {
+        let mut offer = offer();
+        offer.endpoints = vec![
+            "203.0.113.9:53122".parse().unwrap(),
+            "0.0.0.0:41641".parse().unwrap(),
+            "255.255.255.255:41641".parse().unwrap(),
+            "224.0.0.251:5353".parse().unwrap(),
+            "203.0.113.9:53".parse().unwrap(),
+            "[ff02::1]:41641".parse().unwrap(),
+        ];
+        offer.hint = None;
+        let back = Offer::decode_at(&offer.encode(), NOW).unwrap();
+        assert_eq!(
+            back.endpoints,
+            ["203.0.113.9:53122".parse::<SocketAddr>().unwrap()]
         );
     }
 }
