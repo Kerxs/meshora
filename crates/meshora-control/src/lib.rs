@@ -904,6 +904,16 @@ impl Node {
         let mut seen: Vec<SocketAddr> = self.stun_seen.values().copied().collect();
         seen.sort();
         seen.dedup();
+        let mut ips: Vec<IpAddr> = seen.iter().map(SocketAddr::ip).collect();
+        ips.dedup();
+        // 对称型：同一个公网 IP、不同的端口。公网 IP 都不一样的是出口不止一个（代理、多线宽带），另算
+        let symmetric = seen.len() > 1 && ips.len() == 1;
+        // Clash 之类的 fake-ip：域名被解析成 198.18.0.0/15
+        let fake_ip = self
+            .stun_servers
+            .iter()
+            .any(|server| matches!(server.ip(), IpAddr::V4(v4) if v4.octets()[0] == 198 && (v4.octets()[1] & 0xfe) == 18));
+        let proxied = fake_ip || ips.len() > 1;
         let answered_all = !self.stun_servers.is_empty()
             && self
                 .stun_servers
@@ -915,7 +925,8 @@ impl Node {
         direct::NatInfo {
             endpoints: self.endpoints(),
             public: self.reflexive,
-            symmetric: seen.len() > 1,
+            symmetric,
+            proxied,
             checked: answered_all || waited || self.stun_servers.is_empty(),
             mapped: self.hosting.extra_endpoints.first().copied(),
             hint: {
@@ -925,7 +936,9 @@ impl Node {
                     .iter()
                     .filter_map(|server| self.stun_seen.get(server).copied());
                 match (answered.next(), answered.next()) {
-                    (Some(first), Some(second)) => direct::PortHint::from_observed(first, second),
+                    (Some(first), Some(second)) if symmetric => {
+                        direct::PortHint::from_observed(first, second)
+                    }
                     _ => None,
                 }
             },

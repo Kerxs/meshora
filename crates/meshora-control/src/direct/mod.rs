@@ -40,9 +40,12 @@ pub const NETWORK: Ipv4Net = match Ipv4Net::new(Ipv4Addr::new(100, 96, 0, 0), 24
 /// 房主的 overlay 地址。
 pub const HOST_IP: Ipv4Addr = Ipv4Addr::new(100, 96, 0, 1);
 
-/// 默认问的公共 STUN 服务器。国内国外各有，问不通的跳过。
+/// 默认问的公共 STUN 服务器。国内的排前面（国外的在国内常常不通），问不通的跳过。
+/// 至少要两个回了，才判断得出 NAT 的类型
 pub const DEFAULT_STUN: &[&str] = &[
     "stun.miwifi.com:3478",
+    "stun.chat.bilibili.com:3478",
+    "stun.douyucdn.cn:18000",
     "stun.cloudflare.com:3478",
     "stun.l.google.com:19302",
 ];
@@ -99,8 +102,11 @@ pub struct NatInfo {
     pub endpoints: Vec<SocketAddr>,
     /// STUN 问到的公网端点。
     pub public: Option<SocketAddr>,
-    /// 两个 STUN 服务器看到的端点不一样：像是对称型 NAT，多半打不通。
+    /// 几个 STUN 服务器看到的是同一个公网 IP、不同的端口：对称型 NAT（每个目的地换一个端口）。
     pub symmetric: bool,
+    /// 像是开着代理：STUN 服务器的域名被解析成了 198.18.x.x（Clash 之类的 fake-ip），
+    /// 或者几个 STUN 服务器看到的公网 IP 不一样（流量从不同的出口出去）。这时公网 IPv4 端点多半是代理的，对方连不进来
+    pub proxied: bool,
     /// 这一轮 STUN 问完了（都回了，或者等够了）。生成连接码前等它。
     pub checked: bool,
     /// 路由器用 UPnP 映射出来的公网端点（见 [`DirectHandle::set_mapped`]）。

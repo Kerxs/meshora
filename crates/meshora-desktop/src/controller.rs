@@ -299,8 +299,10 @@ pub struct DirectView {
     pub host: bool,
     /// STUN 问到的本机公网端点。
     pub public_endpoint: Option<String>,
-    /// 两个 STUN 服务器看到的端点不一样：像是对称型 NAT，多半打不通。
+    /// 几个 STUN 服务器看到的是同一个公网 IP、不同的端口：对称型 NAT。
     pub symmetric: bool,
+    /// 像是开着代理（Clash 的 fake-ip，或者流量从不同的出口出去）：公网 IPv4 端点多半用不了。
+    pub proxied: bool,
     /// 这一轮 STUN 问完了。
     pub checked: bool,
     /// 路由器用 UPnP 或 NAT-PMP 开的端口，外面看到的端点；没开成是 `None`。
@@ -325,6 +327,8 @@ pub struct DirectCode {
     pub mapped: bool,
     /// 像是对称型 NAT，多半打不通。
     pub symmetric: bool,
+    /// 像是开着代理：公网 IPv4 端点多半用不了。
+    pub proxied: bool,
 }
 
 /// 连上之后的快照
@@ -488,6 +492,7 @@ impl Controller {
                     host: net.host,
                     public_endpoint: nat.public.map(|addr| addr.to_string()),
                     symmetric: nat.symmetric,
+                    proxied: nat.proxied,
                     checked: nat.checked,
                     mapped: nat.mapped.map(|addr| addr.to_string()),
                     upnp_tried: state.upnp_tried,
@@ -786,6 +791,7 @@ impl Controller {
             public: nat.public.is_some() || nat.mapped.is_some(),
             mapped: nat.mapped.is_some(),
             symmetric: nat.symmetric,
+            proxied: nat.proxied,
         })
     }
 
@@ -829,6 +835,7 @@ impl Controller {
             public: nat.public.is_some() || nat.mapped.is_some(),
             mapped: nat.mapped.is_some(),
             symmetric: nat.symmetric,
+            proxied: nat.proxied,
         })
     }
 
