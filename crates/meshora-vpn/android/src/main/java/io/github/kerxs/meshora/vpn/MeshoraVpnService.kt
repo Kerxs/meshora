@@ -2,6 +2,7 @@ package io.github.kerxs.meshora.vpn
 
 import android.net.VpnService
 import android.os.Build
+import android.system.OsConstants
 import android.util.Log
 
 /**
@@ -61,6 +62,9 @@ class MeshoraVpnService : VpnService() {
                 Log.w(TAG, "跳过路由 $route：$e")
             }
         }
+        // 网卡只有 IPv4：不说一声的话，系统会把别的 App 的 IPv6 流量整个拦掉（防泄漏的默认做法）。
+        // 放行 IPv6，它照常走原来的网络 —— 上网不受影响，Meshora 打洞也用得上公网 IPv6
+        builder.allowFamily(OsConstants.AF_INET6)
         try {
             builder.addDisallowedApplication(packageName)
         } catch (e: Exception) {

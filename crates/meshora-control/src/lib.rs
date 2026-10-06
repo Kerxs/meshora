@@ -901,6 +901,17 @@ impl Node {
             symmetric: seen.len() > 1,
             checked: answered_all || waited || self.stun_servers.is_empty(),
             mapped: self.hosting.extra_endpoints.first().copied(),
+            hint: {
+                // 按配置的顺序（也是发请求的顺序）取前两个回了的服务器
+                let mut answered = self
+                    .stun_servers
+                    .iter()
+                    .filter_map(|server| self.stun_seen.get(server).copied());
+                match (answered.next(), answered.next()) {
+                    (Some(first), Some(second)) => direct::PortHint::from_observed(first, second),
+                    _ => None,
+                }
+            },
         }
     }
 

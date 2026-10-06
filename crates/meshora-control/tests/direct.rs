@@ -171,6 +171,7 @@ async fn invite(
         prefix_len: direct::NETWORK.prefix_len(),
         name: "房主".into(),
         endpoints: nat.endpoints,
+        hint: nat.hint,
         expires: direct::expires_from_now(),
     }
     .encode();
@@ -183,6 +184,7 @@ async fn invite(
         ip: offer.host_ip,
         name: offer.name.clone(),
         endpoints: offer.endpoints.clone(),
+        hint: offer.hint,
     };
     let guest = start(
         guest_secret.clone(),
@@ -199,6 +201,7 @@ async fn invite(
         guest_ip: offer.guest_ip,
         name: "朋友".into(),
         endpoints: guest_nat.endpoints,
+        hint: guest_nat.hint,
         expires: direct::expires_from_now(),
     }
     .encode();
@@ -211,6 +214,7 @@ async fn invite(
         ip: reply.guest_ip,
         name: reply.name,
         endpoints: reply.endpoints,
+        hint: None,
     });
     host.handle.set_peers(guests.clone());
     guest
@@ -272,6 +276,7 @@ async fn a_wrong_address_in_one_code_is_learned_from_the_other_side() {
             ip: HOST_IP,
             name: String::new(),
             endpoints: vec![nowhere()],
+            hint: None,
         }],
         stun,
     )
@@ -283,6 +288,7 @@ async fn a_wrong_address_in_one_code_is_learned_from_the_other_side() {
         ip: guest_ip,
         name: String::new(),
         endpoints: guest_nat.endpoints,
+        hint: None,
     }]);
     assert_eq!(
         deliver(&guest, HOST_IP, &mut host, b"learned").await[20..],
@@ -306,6 +312,7 @@ async fn diagnostics_say_nothing_arrived_when_both_codes_are_wrong() {
             ip: HOST_IP,
             name: String::new(),
             endpoints: vec![nowhere()],
+            hint: None,
         }],
         stun,
     )
@@ -316,6 +323,7 @@ async fn diagnostics_say_nothing_arrived_when_both_codes_are_wrong() {
         ip: guest_ip,
         name: String::new(),
         endpoints: vec![wrong],
+        hint: None,
     }]);
     // 等几轮探测
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -361,6 +369,7 @@ async fn friends_connect_over_ipv6_alone() {
             ip: HOST_IP,
             name: String::new(),
             endpoints: vec![host_at],
+            hint: None,
         }],
         stun,
         Some(guest6),
@@ -371,6 +380,7 @@ async fn friends_connect_over_ipv6_alone() {
         ip: guest_ip,
         name: String::new(),
         endpoints: vec![guest_at],
+        hint: None,
     }]);
     assert_eq!(
         deliver(&guest, HOST_IP, &mut host, b"over v6").await[20..],

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use meshora_control::{AdminHandle, AdminRequest, ControlError, Entry, NameSetter, Status};
 use meshora_dataplane::PeerStatus;
 use meshora_types::{NodeSecret, Path};
-use meshorad::direct::{self, DirectHandle, DirectPeer, Offer, Reply, Role};
+use meshorad::direct::{self, DirectHandle, DirectPeer, Offer, PortHint, Reply, Role};
 use meshorad::{DirectOptions, Hosting, NetworkCode, Node, Options, StartError, TunOpener};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -366,6 +366,8 @@ struct State {
     upnp: Option<UdpMapping>,
     /// 直连模式：UPnP 试过了（成没成都算）。生成连接码前等它
     upnp_tried: bool,
+    /// 直连模式：码里带来的对方的端口提示（对称型 NAT），按公钥。只在打洞的头 30 秒有用，不存盘
+    hints: std::collections::HashMap<String, PortHint>,
 }
 
 struct Shared {
@@ -435,6 +437,7 @@ impl Controller {
                     pending: Vec::new(),
                     upnp: None,
                     upnp_tried: false,
+                    hints: std::collections::HashMap::new(),
                 }),
                 ops: tokio::sync::Mutex::new(()),
             }),
@@ -727,6 +730,12 @@ impl Controller {
         }
         {
             let _op = self.shared.ops.lock().await;
+            if let Some(hint) = offer.hint {
+                self.shared
+                    .state()
+                    .hints
+                    .insert(offer.host.to_string(), hint);
+            }
             let net = DirectNet {
                 host: false,
                 ip: offer.guest_ip.to_string(),
@@ -761,6 +770,7 @@ impl Controller {
             guest_ip: handle.ip(),
             name,
             endpoints: nat.endpoints,
+            hint: nat.hint,
             expires: direct::expires_from_now(),
         };
         Ok(DirectCode {
@@ -803,6 +813,7 @@ impl Controller {
             prefix_len: direct::NETWORK.prefix_len(),
             name,
             endpoints: nat.endpoints,
+            hint: nat.hint,
             expires: direct::expires_from_now(),
         };
         Ok(DirectCode {
@@ -844,7 +855,10 @@ impl Controller {
             endpoints: reply.endpoints.iter().map(ToString::to_string).collect(),
         });
         state.pending.retain(|pending| *pending != reply.guest_ip);
-        handle.set_peers(direct_peers(&net));
+        if let Some(hint) = reply.hint {
+            state.hints.insert(reply.guest.to_string(), hint);
+        }
+        handle.set_peers(direct_peers(&net, &state.hints));
         state.settings.direct = Some(net);
         self.shared.save(&state.settings);
         info!(name = %reply.name, ip = %reply.guest_ip, "直连：加了一位朋友");
@@ -862,7 +876,7 @@ impl Controller {
             .ok_or("只有房主才能移人")?;
         net.peers.retain(|peer| peer.key != id);
         if let Some(handle) = &state.direct {
-            handle.set_peers(direct_peers(&net));
+            handle.set_peers(direct_peers(&net, &state.hints));
         }
         state.settings.direct = Some(net);
         self.shared.save(&state.settings);
@@ -1190,8 +1204,11 @@ async fn watch(shared: &Shared, mut node: Node, mut stop: oneshot::Receiver<()>)
     }
 }
 
-/// 存着的 peer 换成控制面要的样子，坏了的条目跳过
-fn direct_peers(net: &DirectNet) -> Vec<DirectPeer> {
+/// 存着的 peer 换成控制面要的样子，坏了的条目跳过。`hints` 是这次运行里码带来的端口提示
+fn direct_peers(
+    net: &DirectNet,
+    hints: &std::collections::HashMap<String, PortHint>,
+) -> Vec<DirectPeer> {
     net.peers
         .iter()
         .filter_map(|peer| {
@@ -1204,6 +1221,7 @@ fn direct_peers(net: &DirectNet) -> Vec<DirectPeer> {
                     .iter()
                     .filter_map(|addr| addr.parse().ok())
                     .collect(),
+                hint: hints.get(&peer.key).copied(),
             })
         })
         .collect()
@@ -1223,6 +1241,7 @@ async fn run_direct(
         return;
     };
     let role = if net.host { Role::Host } else { Role::Guest };
+    let hints = shared.state().hints.clone();
     let options = |port| DirectOptions {
         secret: shared.secret.clone(),
         port,
@@ -1236,7 +1255,7 @@ async fn run_direct(
             .iter()
             .map(|s| (*s).to_owned())
             .collect(),
-        peers: direct_peers(&net),
+        peers: direct_peers(&net, &hints),
         open_tun: shared.open_tun.clone(),
     };
     let starting = async {

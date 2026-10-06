@@ -24,9 +24,64 @@ pub const REPLY_PREFIX: &str = "meshora-reply:";
 pub const CODE_TTL: Duration = Duration::from_secs(60 * 60);
 /// 码里最多几个候选端点。
 const MAX_ENDPOINTS: usize = 8;
-const VERSION: u8 = 1;
+/// 第 2 版多了端口提示（[`PortHint`]）。第 1 版（1.0.2、1.0.3 生成的）照样读
+const VERSION: u8 = 2;
 const KIND_OFFER: u8 = 1;
 const KIND_REPLY: u8 = 2;
+
+/// 对称型 NAT 的端口提示：问两个 STUN 服务器看到的外部端口不一样（每个目的地换一个端口），
+/// 很多路由器是按顺序分配的 —— 下一个目的地大概会拿到 `port + step`。
+/// 对方据此往预测的那一段端口集中探测（见 [`PortHint::predict`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PortHint {
+    /// 公网 IPv4 地址。
+    pub ip: Ipv4Addr,
+    /// 最后一次看到的外部端口。
+    pub port: u16,
+    /// 相邻两次分配的端口差（可以是负的）。
+    pub step: i16,
+}
+
+/// 预测往后推几个端口
+const PREDICT: i32 = 64;
+
+impl PortHint {
+    /// 从两个 STUN 服务器先后看到的端点推出提示：同一个公网 IP、端口不同、差得不多（按顺序分配）才算。
+    /// 端口差得很大（随机分配）时猜不中，不给
+    pub fn from_observed(first: SocketAddr, second: SocketAddr) -> Option<Self> {
+        let (SocketAddr::V4(a), SocketAddr::V4(b)) = (first, second) else {
+            return None;
+        };
+        let step = i32::from(b.port()) - i32::from(a.port());
+        if a.ip() != b.ip() || step == 0 || step.abs() > 64 {
+            return None;
+        }
+        Some(Self {
+            ip: *b.ip(),
+            port: b.port(),
+            step: step as i16,
+        })
+    }
+
+    /// 预测的端点：往后推 [`PREDICT`] 个分配，每个分配前后各放宽一个端口（中间别的程序也在占端口）
+    pub fn predict(&self) -> Vec<SocketAddr> {
+        let mut out = Vec::new();
+        for k in 1..=PREDICT {
+            let center = i32::from(self.port) + i32::from(self.step) * k;
+            for port in [center, center + 1] {
+                if let Ok(port) = u16::try_from(port)
+                    && port >= 1024
+                {
+                    let addr = SocketAddr::from((self.ip, port));
+                    if !out.contains(&addr) {
+                        out.push(addr);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
 
 /// 房主码：房主发给一位朋友。每位朋友一个，里面带着房主分给他的地址。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +98,8 @@ pub struct Offer {
     pub name: String,
     /// 房主的候选端点。
     pub endpoints: Vec<SocketAddr>,
+    /// 房主是对称型 NAT 时的端口提示。
+    pub hint: Option<PortHint>,
     /// 过期时间（Unix 秒）。
     pub expires: u64,
 }
@@ -60,6 +117,8 @@ pub struct Reply {
     pub name: String,
     /// 朋友的候选端点。
     pub endpoints: Vec<SocketAddr>,
+    /// 朋友是对称型 NAT 时的端口提示。
+    pub hint: Option<PortHint>,
     /// 过期时间（Unix 秒）。
     pub expires: u64,
 }
@@ -122,6 +181,7 @@ impl Offer {
         w.bytes.push(self.prefix_len);
         w.name(&self.name);
         w.endpoints(&self.endpoints);
+        w.hint(self.hint);
         w.finish(OFFER_PREFIX)
     }
 
@@ -140,6 +200,7 @@ impl Offer {
             prefix_len: r.u8()?,
             name: r.name()?,
             endpoints: r.endpoints()?,
+            hint: r.hint()?,
         };
         r.done()?;
         if offer.prefix_len > 30 || offer.host_ip == offer.guest_ip {
@@ -158,6 +219,7 @@ impl Reply {
         w.ip(self.guest_ip);
         w.name(&self.name);
         w.endpoints(&self.endpoints);
+        w.hint(self.hint);
         w.finish(REPLY_PREFIX)
     }
 
@@ -175,6 +237,7 @@ impl Reply {
             guest_ip: r.ip()?,
             name: r.name()?,
             endpoints: r.endpoints()?,
+            hint: r.hint()?,
         };
         r.done()?;
         Ok(reply)
@@ -235,6 +298,18 @@ impl Writer {
         }
     }
 
+    fn hint(&mut self, hint: Option<PortHint>) {
+        match hint {
+            None => self.bytes.push(0),
+            Some(hint) => {
+                self.bytes.push(1);
+                self.bytes.extend_from_slice(&hint.ip.octets());
+                self.bytes.extend_from_slice(&hint.port.to_be_bytes());
+                self.bytes.extend_from_slice(&hint.step.to_be_bytes());
+            }
+        }
+    }
+
     fn finish(mut self, prefix: &str) -> String {
         let sum = checksum(&self.bytes);
         self.bytes.extend_from_slice(&sum);
@@ -246,6 +321,7 @@ struct Reader {
     bytes: Vec<u8>,
     at: usize,
     expires: u64,
+    version: u8,
 }
 
 impl Reader {
@@ -275,8 +351,10 @@ impl Reader {
             bytes: payload.to_vec(),
             at: 0,
             expires: 0,
+            version: 0,
         };
-        if reader.u8()? != VERSION {
+        reader.version = reader.u8()?;
+        if !(1..=VERSION).contains(&reader.version) {
             return Err(CodeError::Version);
         }
         let kind = reader.u8()?;
@@ -340,6 +418,18 @@ impl Reader {
             .collect()
     }
 
+    /// 第 2 版起才有端口提示
+    fn hint(&mut self) -> Result<Option<PortHint>, CodeError> {
+        if self.version < 2 || self.u8()? == 0 {
+            return Ok(None);
+        }
+        Ok(Some(PortHint {
+            ip: self.ip()?,
+            port: u16::from_be_bytes(self.take::<2>()?),
+            step: i16::from_be_bytes(self.take::<2>()?),
+        }))
+    }
+
     fn done(&self) -> Result<(), CodeError> {
         if self.at == self.bytes.len() {
             Ok(())
@@ -366,6 +456,11 @@ mod tests {
                 "203.0.113.9:53122".parse().unwrap(),
                 "[2001:db8::7]:41641".parse().unwrap(),
             ],
+            hint: Some(PortHint {
+                ip: Ipv4Addr::new(203, 0, 113, 9),
+                port: 53122,
+                step: 2,
+            }),
             expires: 2_000_000_000,
         }
     }
@@ -388,6 +483,7 @@ mod tests {
             guest_ip: Ipv4Addr::new(100, 96, 0, 2),
             name: "小明".into(),
             endpoints: vec!["198.51.100.4:6000".parse().unwrap()],
+            hint: None,
             expires: 2_000_000_000,
         };
         let text = reply.encode();
@@ -450,5 +546,61 @@ mod tests {
         let back = Offer::decode_at(&long.encode(), NOW).unwrap();
         assert_eq!(back.name.chars().count(), 32);
         assert_eq!(back.endpoints.len(), MAX_ENDPOINTS);
+    }
+
+    #[test]
+    fn version_1_codes_still_read() {
+        // 1.0.2、1.0.3 生成的码：没有端口提示那一段
+        let mut offer = offer();
+        offer.hint = None;
+        let mut w = Writer::new(KIND_OFFER, offer.expires);
+        w.bytes[0] = 1;
+        w.key(&offer.host);
+        w.ip(offer.host_ip);
+        w.ip(offer.guest_ip);
+        w.bytes.push(offer.prefix_len);
+        w.name(&offer.name);
+        w.endpoints(&offer.endpoints);
+        let text = w.finish(OFFER_PREFIX);
+        assert_eq!(Offer::decode_at(&text, NOW), Ok(offer));
+    }
+
+    #[test]
+    fn a_hint_comes_from_sequential_ports_only() {
+        let a: SocketAddr = "203.0.113.9:40000".parse().unwrap();
+        let hint = PortHint::from_observed(a, "203.0.113.9:40002".parse().unwrap()).unwrap();
+        assert_eq!((hint.port, hint.step), (40002, 2));
+        assert_eq!(PortHint::from_observed(a, a), None, "端口一样：不是对称型");
+        assert_eq!(
+            PortHint::from_observed(a, "203.0.113.9:51234".parse().unwrap()),
+            None,
+            "随机分配，猜不中"
+        );
+        assert_eq!(
+            PortHint::from_observed(a, "198.51.100.1:40001".parse().unwrap()),
+            None,
+            "公网 IP 不一样"
+        );
+    }
+
+    #[test]
+    fn predictions_follow_the_step() {
+        let hint = PortHint {
+            ip: Ipv4Addr::new(203, 0, 113, 9),
+            port: 40002,
+            step: 2,
+        };
+        let ports: Vec<u16> = hint.predict().iter().map(SocketAddr::port).collect();
+        assert_eq!(&ports[..4], &[40004, 40005, 40006, 40007]);
+        assert!(ports.len() <= 2 * PREDICT as usize);
+        let low = PortHint {
+            ip: Ipv4Addr::new(203, 0, 113, 9),
+            port: 1030,
+            step: -4,
+        };
+        assert!(
+            low.predict().iter().all(|a| a.port() >= 1024),
+            "不预测系统端口"
+        );
     }
 }

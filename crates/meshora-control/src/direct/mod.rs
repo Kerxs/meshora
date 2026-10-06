@@ -26,7 +26,9 @@ use tokio::sync::{mpsc, watch};
 
 use crate::{Config, ControlError, Entry, Hosting, Node, Status, TICK, Welcome};
 
-pub use code::{CODE_TTL, CodeError, OFFER_PREFIX, Offer, REPLY_PREFIX, Reply, expires_from_now};
+pub use code::{
+    CODE_TTL, CodeError, OFFER_PREFIX, Offer, PortHint, REPLY_PREFIX, Reply, expires_from_now,
+};
 
 /// 直连模式的 overlay 网段：房主是 `.1`，朋友从 `.2` 起。
 pub const NETWORK: Ipv4Net = match Ipv4Net::new(Ipv4Addr::new(100, 96, 0, 0), 24) {
@@ -54,7 +56,12 @@ pub struct DirectPeer {
     pub name: String,
     /// 候选端点。
     pub endpoints: Vec<SocketAddr>,
+    /// 对方是对称型 NAT 时的端口提示：刚加进来的头 30 秒往预测的那一段端口也探测（见 [`PortHint::predict`]）。
+    pub hint: Option<PortHint>,
 }
+
+/// 预测的端点只在刚加进来的这段时间里探测：一直扫一大段端口，打不通也是白发
+const PREDICT_FOR: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// 本机在直连网络里的角色。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +103,8 @@ pub struct NatInfo {
     pub checked: bool,
     /// 路由器用 UPnP 映射出来的公网端点（见 [`DirectHandle::set_mapped`]）。
     pub mapped: Option<SocketAddr>,
+    /// 本机是对称型 NAT、端口像是按顺序分配时的提示，写进连接码。
+    pub hint: Option<PortHint>,
 }
 
 enum Command {
@@ -241,7 +250,9 @@ impl DirectSession {
         }
         let mut tick = tokio::time::interval(TICK);
         let started = Instant::now();
-        node.on_net_map(peer_infos(&self.peers), started);
+        // 端口预测的那批地址只在这之前带上
+        let mut predict_until = Some(started + PREDICT_FOR);
+        node.on_net_map(peer_infos(&self.peers, true), started);
 
         loop {
             tokio::select! {
@@ -251,11 +262,21 @@ impl DirectSession {
                 },
                 // 对协调服务要说的话（上报端点、请对方打洞、保活）在这里没有听的人：丢掉。
                 // 打洞靠两边各自按码里的端点一直探测
-                _ = tick.tick() => drop(node.on_tick(Instant::now())),
+                _ = tick.tick() => {
+                    let now = Instant::now();
+                    drop(node.on_tick(now));
+                    // 预测的端口扫够了：收回，只留码里的端点和学到的
+                    if predict_until.is_some_and(|until| now >= until) {
+                        predict_until = None;
+                        node.on_net_map(peer_infos(&self.peers, false), now);
+                    }
+                }
                 Some(command) = self.commands.recv() => match command {
                     Command::Set(peers) => {
                         self.peers = peers;
-                        node.on_net_map(peer_infos(&self.peers), Instant::now());
+                        let now = Instant::now();
+                        predict_until = Some(now + PREDICT_FOR);
+                        node.on_net_map(peer_infos(&self.peers, true), now);
                     }
                     Command::Mapped(mapped) => {
                         node.hosting.extra_endpoints = mapped.into_iter().collect();
@@ -276,7 +297,8 @@ impl DirectSession {
     }
 }
 
-fn peer_infos(peers: &[DirectPeer]) -> Vec<PeerInfo> {
+/// `predict`：对称型 NAT 的 peer 把预测的端点也带上
+fn peer_infos(peers: &[DirectPeer], predict: bool) -> Vec<PeerInfo> {
     // 同一把钥匙出现两次（同一个人贴了两次回执）只留最后一个
     let mut by_key: HashMap<NodeKey, &DirectPeer> = HashMap::new();
     for peer in peers {
@@ -287,7 +309,17 @@ fn peer_infos(peers: &[DirectPeer]) -> Vec<PeerInfo> {
         .map(|peer| PeerInfo {
             key: peer.key,
             overlay_ip: peer.ip,
-            endpoints: peer.endpoints.clone(),
+            endpoints: {
+                let mut endpoints = peer.endpoints.clone();
+                if predict && let Some(hint) = peer.hint {
+                    for addr in hint.predict() {
+                        if !endpoints.contains(&addr) {
+                            endpoints.push(addr);
+                        }
+                    }
+                }
+                endpoints
+            },
             name: peer.name.clone(),
         })
         .collect()
