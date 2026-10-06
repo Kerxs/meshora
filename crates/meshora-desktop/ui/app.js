@@ -5,7 +5,7 @@
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
 import "./sky.js";
-import glassium, { defineGlassElements, overlayVars, parseGlassAttributes } from "./vendor/glassium/index.js";
+import glassium from "./vendor/glassium/index.js";
 import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
 
 // 安卓客户端（crates/meshora-android）用的也是这份界面：手机上没有标题栏、本机当主机、Windows 的网络设置，
@@ -14,10 +14,10 @@ const PHONE = /Android/i.test(navigator.userAgent);
 document.documentElement.classList.toggle("phone", PHONE);
 
 // 开关是 Glassium 的组件：它们后面的背景也要收进场景，玻璃才折射得到。
-// 手机上不起 Glassium 的 runtime（见 paintGlass）：要在它启动之前（import 之后的同一个任务里）关掉
-glassium.configure(PHONE ? { auto: false } : { absorbForComponents: true });
-// 组件（开关）是 runtime 启动时注册的：手机上自己注册。没有 stage 时组件用 CSS 画轨道和白色旋钮，也不会去建 stage
-if (PHONE) defineGlassElements();
+// 手机上玻璃全用 CSS 画（backend: 'css'，不建 GPU 画布）：手机的滚动由合成线程直接做，画在页面底下的 GPU 玻璃
+// 会慢一两帧、落在文字后面；CSS 画的和滚动一起走。材质还是 Glassium 的，模糊、着色、亮边、投影照搬，只是没有折射。
+// 要在 runtime 启动之前设（import 之后的同一个任务里）
+glassium.configure(PHONE ? { backend: "css" } : { absorbForComponents: true });
 
 const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 const DEVICE = PHONE ? "这台手机" : "这台电脑";
@@ -32,25 +32,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
   setProps(el, props);
-  if (PHONE && el.hasAttribute("glass")) paintGlass(el);
   append(el, children);
   return el;
-}
-
-/**
- * 手机上的玻璃：Glassium 的材质，用 CSS 画（app.css 的"手机上的玻璃"）。
- *
- * GPU 玻璃画在页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、比主线程快一两帧，玻璃就落在文字后面。
- * CSS 画的（backdrop-filter）由合成器和滚动一起画，天然同步。Glassium 给盖在正文上的玻璃（overlay）也是这么画的，
- * 这里照搬：parseGlassAttributes 按 glass / glass-* 属性读出材质，overlayVars 算成模糊、饱和度、着色、亮边、投影的
- * CSS 变量，和 Glassium 自己画的 overlay 玻璃是同一套数。
- * runtime 不起：它起了就会建一块 GPU 画布、每帧量一遍所有玻璃，手机上全是 CSS 玻璃时白费电（画布上还会露出它的兜底底色）
- */
-function paintGlass(el) {
-  const { material } = parseGlassAttributes((name) => el.getAttribute(name));
-  for (const [name, value] of Object.entries(overlayVars(material))) el.style.setProperty(name, value);
-  const radius = el.getAttribute("glass-corner-radius");
-  if (radius) el.style.borderRadius = `${radius}px`;
 }
 
 /**
@@ -83,6 +66,8 @@ function s(tag, props, ...children) {
 function setProps(el, props) {
   for (const [key, value] of Object.entries(props || {})) {
     if (value === undefined || value === null || value === false) continue;
+    // 手机上不要 GPU 上的飞行：导航那块由 app.css 的 transition 飞过去，两套叠在一起会打架
+    if (PHONE && key === "glass-glide") continue;
     if (key === "class") el.setAttribute("class", value);
     else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else el.setAttribute(key, value === true ? "" : value);

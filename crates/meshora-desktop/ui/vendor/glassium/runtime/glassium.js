@@ -25,7 +25,7 @@ let webgpu = null;
 let webgpuProbe = null;
 function rendererOf(stage) {
     if (!stage)
-        return 'none';
+        return getConfig().backend === 'css' ? 'css' : 'none';
     if (!stage.active)
         return 'css';
     return stage.backend === 'webgpu' ? 'webgpu' : stage.backend === 'webgl2' ? 'webgl2' : 'css';
@@ -45,7 +45,9 @@ function ready() {
     // 先等 runtime 第一次扫描（import 之后马上读 ready 时它还没开始：那时还没有在建的 stage，renderer 会是 none）
     return whenScanned().then(() => {
         const pending = stageOrPending();
-        return Promise.all([probeWebGpu(), pending ? pending.catch(() => null) : Promise.resolve(null)]).then(() => capabilities());
+        // backend: 'css' 用不上 WebGPU：不去要适配器（手机上要一次也费时费电），webgpu 留 null
+        const probe = getConfig().backend === 'css' ? Promise.resolve(false) : probeWebGpu();
+        return Promise.all([probe, pending ? pending.catch(() => null) : Promise.resolve(null)]).then(() => capabilities());
     });
 }
 const debug = {

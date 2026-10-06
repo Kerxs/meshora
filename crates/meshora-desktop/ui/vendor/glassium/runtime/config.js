@@ -37,8 +37,8 @@ export function configure(options) {
             console.warn(`[Glassium] memoryBudget 只能是正的字节数或 null，收到 ${String(value)}`);
             continue;
         }
-        if (key === 'backend' && value !== 'auto' && value !== 'webgpu' && value !== 'webgl2') {
-            console.warn(`[Glassium] backend 只能是 'auto' | 'webgpu' | 'webgl2'，收到 ${String(value)}`);
+        if (key === 'backend' && value !== 'auto' && value !== 'webgpu' && value !== 'webgl2' && value !== 'css') {
+            console.warn(`[Glassium] backend 只能是 'auto' | 'webgpu' | 'webgl2' | 'css'，收到 ${String(value)}`);
             continue;
         }
         next[key] = value;
