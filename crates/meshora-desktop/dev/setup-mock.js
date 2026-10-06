@@ -1,5 +1,6 @@
 // 在普通浏览器里看安装程序界面用的假后端。打开 dev/setup.html?s=<场景>
-// 场景：fresh（新装）、upgrade（升级）、update（客户端发起的更新）、fail（装到一半出错）、uninstall、badpick（选了不能装的位置）
+// 场景：fresh（新装）、upgrade（升级）、update（客户端发起的更新）、fail（装到一半出错）、uninstall、badpick（选了不能装的位置）、
+// fast（和真的安装一样：好几步在同一毫秒里报上来，几十毫秒就装完）
 "use strict";
 
 (() => {
@@ -25,6 +26,14 @@
       return String.raw`D:\Meshora`;
     },
     install: async () => {
+      if (scenario === "fast") {
+        // 真的安装：关进程、卸旧版本、复制文件几乎同时报上来
+        for (const [step, percent] of [["关掉正在运行的 Meshora", 5], ["卸掉旧版本", 12], ["复制文件", 20], ["复制文件", 50], ["复制文件", 80], ["建快捷方式", 85], ["放行防火墙", 89]]) emit({ step, percent });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        emit({ step: "登记到“应用和功能”", percent: 92 });
+        emit({ step: "装好了", percent: 100 });
+        return;
+      }
       await steps([["关掉正在运行的 Meshora", 5], ["卸掉旧版本", 12], ["复制文件", 20], ["复制文件", 55], ["复制文件", 80]]);
       if (scenario === "fail") throw "写不了 C:\\Program Files\\Meshora\\wintun.dll：拒绝访问。 (os error 5)";
       await steps([["建快捷方式", 85], ["登记到“应用和功能”", 92], ["装好了", 100]]);

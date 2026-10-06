@@ -81,13 +81,14 @@
   animation: from-left var(--t-mid) var(--ease) both;
 }
 
+/* 退场比进场快：旧页退完新页才进来（setup.js 的 show、LEAVE_MS） */
 .page.to-left {
-  animation: to-left var(--t-mid) var(--ease-in) both;
+  animation: to-left 260ms var(--ease-in) both;
   pointer-events: none;
 }
 
 .page.to-right {
-  animation: to-right var(--t-mid) var(--ease-in) both;
+  animation: to-right 260ms var(--ease-in) both;
   pointer-events: none;
 }
 

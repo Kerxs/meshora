@@ -1,5 +1,6 @@
 // 安装程序的界面（crates/meshora-setup）。分步：欢迎 → 选项 → 安装中 → 完成；卸载是 确认 → 卸载中 → 卸载好了；
 // 客户端发起的更新（--update）直接进"安装中"，装完自己打开。步与步之间左右滑，Logo、进度环、对勾都有动画。
+// 动画一个接一个：旧页退完新页才进来；进度一步一步走，每步至少停一会儿；进度环走到头才出结果页。
 //
 // 和客户端同样的规矩：内容一律 textContent，不写内联样式（位置、进度走 CSSOM）。
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
@@ -124,25 +125,58 @@ function step(total, at) {
   [...dots.children].forEach((dot, i) => dot.classList.toggle("on", i === at));
 }
 
-/** 换一页。forward：新页从右边滑进来；后退反过来 */
+const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+/** 等一会儿（用定时器：窗口在后台时 rAF 不来）。要求减少动画时不等 */
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, still() ? 0 : ms));
+
+/** 旧页退场多久（setup.css 的 .page.to-left / .to-right） */
+const LEAVE_MS = 260;
+
+/** 换页排着队：上一次换完才换下一次 */
+let showing = Promise.resolve();
+
+/**
+ * 换一页。forward：新页从右边滑进来；后退反过来。
+ * 旧页先退场、退完新页才进来，不叠在一起；旧页里还在播的进场动画（点得快的时候）直接跳到结尾再退场
+ */
 function show(page, forward = true) {
-  const old = current;
-  current = page;
-  page.classList.add("page", forward ? "from-right" : "from-left");
-  stage.append(page);
-  if (old) {
-    old.classList.add(forward ? "to-left" : "to-right");
-    old.setAttribute("aria-hidden", "true");
-    old.inert = true;
-    setTimeout(() => old.remove(), 460);
-  }
-  // 主按钮拿焦点（回车就能接着走），但不画焦点框：不是用户按 Tab 过来的
-  setTimeout(() => page.querySelector("button.btn[glass='tinted']")?.focus({ focusVisible: false }), 60);
+  const swap = async () => {
+    const old = current;
+    current = page;
+    if (old) {
+      for (const animation of old.getAnimations({ subtree: true })) {
+        try {
+          animation.finish();
+        } catch {
+          // 无限循环的动画跳不到结尾：随它，反正马上要摘掉
+        }
+      }
+      old.classList.add(forward ? "to-left" : "to-right");
+      old.setAttribute("aria-hidden", "true");
+      old.inert = true;
+      await wait(LEAVE_MS);
+      old.remove();
+    }
+    page.classList.add("page", forward ? "from-right" : "from-left");
+    stage.append(page);
+    // 主按钮拿焦点（回车就能接着走），但不画焦点框：不是用户按 Tab 过来的
+    setTimeout(() => page.querySelector("button.btn[glass='tinted']")?.focus({ focusVisible: false }), 60);
+  };
+  showing = showing.then(swap, swap);
+  return showing;
 }
 
 // ---------- 进度 ----------
 
-/** 环形进度：描边画到当前百分比，中间的数字滚上去，下面一行是当前在做什么 */
+/** 每一步至少显示这么久：真的安装时好几步在同一毫秒里报上来，字来不及换就被下一步打断 */
+const STEP_MIN_MS = 400;
+/** 进度环走一段要多久（setup.css 的 .ring .arc，--t-slow） */
+const RING_MS = 640;
+
+/**
+ * 环形进度：描边画到当前百分比，中间的数字滚上去，下面一行是当前在做什么。
+ * 报上来的进度排队一步步显示（set），settled() 等到都显示完、环走到头
+ */
 const progress = {
   build(title) {
     const R = 52;
@@ -153,6 +187,11 @@ const progress = {
     this.number = h("b", {}, "0");
     this.step = h("p", { class: "sub step" }, "准备中");
     this.shown = 0;
+    this.queue = [];
+    this.pumping = null;
+    this.appliedAt = 0;
+    this.percent = 0;
+    this.visible = Promise.resolve();
     return h(
       "section",
       { class: "progress" },
@@ -161,8 +200,35 @@ const progress = {
       this.step,
     );
   },
-  set({ step, percent }) {
+  set(report) {
     if (!this.arc) return;
+    this.queue.push(report);
+    if (!this.pumping) this.pumping = this.pump();
+  },
+  /** 一步一步显示排着的进度。同一步接连报上来的只看最后一个（复制文件 20% → 55% → 80%） */
+  async pump() {
+    // 进度页换上来了才开始走（换页排着队，旧页还在退场时报上来的进度先存着）。
+    // 也顺带让出一下：this.pumping 赋上值之后才往下走，走完时清掉的才是它
+    await this.visible;
+    while (this.queue.length) {
+      // 上一步还没停够就等一等（不管下一步是不是早就报上来了）
+      const left = this.appliedAt ? STEP_MIN_MS - (performance.now() - this.appliedAt) : 0;
+      if (left > 0) await wait(left);
+      let next = this.queue.shift();
+      while (this.queue[0]?.step === next.step) next = this.queue.shift();
+      this.apply(next);
+    }
+    this.pumping = null;
+  },
+  /** 排着的都显示完了，最后一步也停够了、环也走到头了 */
+  async settled() {
+    while (this.pumping) await this.pumping;
+    const since = performance.now() - this.appliedAt;
+    await wait(Math.max(STEP_MIN_MS, RING_MS) - since);
+  },
+  apply({ step, percent }) {
+    this.appliedAt = performance.now();
+    this.percent = percent;
     this.arc.style.strokeDashoffset = String(this.length * (1 - percent / 100));
     if (this.step.textContent !== step) {
       // 换步骤时那行字淡出再淡入
@@ -199,13 +265,19 @@ async function work(title, command, args, total, at, done) {
   busy = true;
   closeBtn.disabled = true;
   step(total, at);
-  show(progress.build(title));
+  progress.visible = show(progress.build(title));
   try {
     await invoke(command, args);
-    progress.set({ step: "完成", percent: 100 });
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    // 后端最后会报一个 100%（"装好了"、"卸载好了"）；没报到的话补一个
+    const last = progress.queue.at(-1)?.percent ?? progress.percent;
+    if (last < 100) progress.set({ step: "完成", percent: 100 });
+    // 进度环走满、"完成"停一下，再出结果页
+    await progress.settled();
+    await wait(200);
     done();
   } catch (err) {
+    // 出错前报上来的几步也照样走完，再换成出错页
+    await progress.settled();
     failed(String(err), () => work(title, command, args, total, at, done));
   } finally {
     busy = false;
