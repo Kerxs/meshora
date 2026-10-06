@@ -42,8 +42,6 @@ const START_PATIENCE: Duration = Duration::from_secs(20);
 const REFRESH: Duration = Duration::from_secs(1);
 /// 停一个节点最多等多久
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
-/// 打开后就查一次更新（界面查到新版本会问要不要更新），之后隔这么久再查一次
-const UPDATE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 /// 官方服务器：托管很多网络的协调服务，客户端"建网络"默认用它。`公钥@地址:端口`。
 ///
 /// 部署在一台阿里云的服务器上（`scripts/deploy-hub.sh`），换服务器或换私钥时改这里。
@@ -1047,8 +1045,11 @@ impl Controller {
 
     /// 客户端刚打开：按设置自动连接上次的网络。
     pub async fn start_up(&self) {
-        let checking = self.clone();
-        tokio::spawn(async move { checking.update_loop().await });
+        // 打开时查一次更新（设置里关了就不查）。查到新版本，界面会问要不要更新
+        if self.shared.state().settings.check_updates {
+            let checking = self.clone();
+            tokio::spawn(async move { checking.shared.updater.check().await });
+        }
         let wanted = {
             let state = self.shared.state();
             state.settings.auto_connect
@@ -1056,16 +1057,6 @@ impl Controller {
         };
         if wanted && let Err(err) = self.connect(None).await {
             warn!(%err, "自动连接失败");
-        }
-    }
-
-    /// 隔一阵查一次更新（设置里关了就不查）
-    async fn update_loop(&self) {
-        loop {
-            if self.shared.state().settings.check_updates {
-                self.shared.updater.check().await;
-            }
-            tokio::time::sleep(UPDATE_INTERVAL).await;
         }
     }
 

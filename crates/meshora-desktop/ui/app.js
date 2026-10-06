@@ -1003,7 +1003,7 @@ views.settings = {
       ),
       this.network,
       this.serverGroup,
-      panel("更新", settingRow("自动检查更新", "每 6 小时问一次 GitHub 有没有新版本。新版本有签名，核对过才装", this.checkUpdates), this.versionRow),
+      panel("更新", settingRow("自动检查更新", "每次打开时问一次 GitHub 有没有新版本。新版本有签名，核对过才装", this.checkUpdates), this.versionRow),
       panel(
         "排查",
         settingRow("日志", "出问题时复制下来，发给帮你排查的人。里面有 IP 地址，没有密钥", showLogs, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: async () => copy((await invoke("logs")).join("\n"), "日志") }, "复制")),
