@@ -1,7 +1,7 @@
 # 它解决什么问题
 
 ::: warning 当前状态
-1.0.4 已发布，有 [Windows](/guide/desktop) 和[安卓](/guide/android)客户端，但还没在真实环境里验证过。
+1.0.5 已发布，有 [Windows](/guide/desktop) 和[安卓](/guide/android)客户端，但还没在真实环境里验证过。
 本页讲的是底层要解决的问题；做到哪了见[路线图](/guide/roadmap)。
 :::
 
