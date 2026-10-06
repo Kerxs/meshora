@@ -303,8 +303,12 @@ pub struct DirectView {
     pub symmetric: bool,
     /// 这一轮 STUN 问完了。
     pub checked: bool,
-    /// 路由器用 UPnP 开的端口，外面看到的端点；没开成是 `None`。
+    /// 路由器用 UPnP 或 NAT-PMP 开的端口，外面看到的端点；没开成是 `None`。
     pub mapped: Option<String>,
+    /// 写进连接码的本机候选端点：局域网地址、公网 IPv6、STUN 问到的、路由器开的（诊断用）。
+    pub endpoints: Vec<String>,
+    /// 本机是对称型 NAT、端口像是按顺序分配时的端口提示，比如 `203.0.113.9:40002 每次 +2`。
+    pub port_hint: Option<String>,
     /// UPnP 试过了（成没成都算）。
     pub upnp_tried: bool,
 }
@@ -487,6 +491,10 @@ impl Controller {
                     checked: nat.checked,
                     mapped: nat.mapped.map(|addr| addr.to_string()),
                     upnp_tried: state.upnp_tried,
+                    endpoints: nat.endpoints.iter().map(ToString::to_string).collect(),
+                    port_hint: nat
+                        .hint
+                        .map(|hint| format!("{}:{} 每次 {:+}", hint.ip, hint.port, hint.step)),
                 }
             }),
         }

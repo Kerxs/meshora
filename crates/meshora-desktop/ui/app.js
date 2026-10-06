@@ -536,13 +536,15 @@ async function directDiagnostics() {
     `Meshora ${ov.version} · ${ov.platform} · 直连${d.host ? "（房主）" : "（朋友）"}`,
     `本机地址 ${ov.me?.ip || "—"}`,
     `公网端点（STUN）${d.publicEndpoint || "没问到"}${d.symmetric ? " · 两个 STUN 看到的不一样：像是对称型 NAT" : ""}`,
-    `UPnP ${d.mapped ? `开了 ${d.mapped}` : d.upnpTried ? "没开成" : "还在试"}`,
+    `路由器开端口（UPnP / NAT-PMP）${d.mapped ? `开了 ${d.mapped}` : d.upnpTried ? "没开成" : "还在试"}`,
+    `端口预测 ${d.portHint || "没有（不是对称型 NAT，或者端口是随机分配的）"}`,
+    `本机候选 ${(d.endpoints || []).join(", ") || "（没有）"}`,
     "",
     ...ov.peers.map((p) => `${nameOf(p)} ${p.ip} · ${p.route}${p.online ? " · 在线" : ""} · ${p.heard ? "收到过对方报文" : "没收到过对方报文"} · 试过 ${(p.candidates || []).join(", ") || "（没有地址）"}`),
   ];
   let logs = [];
   try {
-    logs = (await invoke("logs")).filter((line) => /直连|探测|报文|切换路径|STUN|UPnP/.test(line)).slice(-40);
+    logs = (await invoke("logs")).filter((line) => /直连|探测|报文|切换路径|STUN|UPnP|NAT-PMP|IPv6/.test(line)).slice(-40);
   } catch {}
   return [...lines, "", "日志：", ...logs].join("\n");
 }
@@ -608,8 +610,9 @@ function meCard() {
         directButton.textContent = d.host ? "邀请朋友" : "回执码";
         host.textContent = d.host ? "直连（你是房主）" : "直连";
         const nat = d.publicEndpoint ? `公网 ${d.publicEndpoint}` : d.checked ? "没问到公网地址" : "正在问公网地址…";
-        const upnp = d.mapped ? " · 路由器开了端口（UPnP）" : "";
-        coord.textContent = `${nat}${upnp}${d.symmetric ? " · 像是对称型 NAT，可能打不通" : ""} · 网卡 ${ov.me.tun}`;
+        const upnp = d.mapped ? " · 路由器开了端口" : "";
+        const v6 = (d.endpoints || []).some((e) => e.startsWith("[")) ? " · 有公网 IPv6" : "";
+        coord.textContent = `${nat}${v6}${upnp}${d.symmetric ? (d.portHint ? " · 对称型 NAT，会试着预测端口" : " · 像是对称型 NAT，可能打不通") : ""} · 网卡 ${ov.me.tun}`;
       } else {
         host.textContent = hostOf(ov.network);
         coord.textContent = `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}`;
@@ -1023,7 +1026,7 @@ views.settings = {
 /** NAT 情况的提醒：没问到公网地址、像是对称型 NAT */
 function natWarnings(result) {
   const lines = [];
-  if (result.mapped) return [h("p", { class: "ok-line" }, "路由器用 UPnP 为你开了端口：对方不用打洞也连得进来。")];
+  if (result.mapped) return [h("p", { class: "ok-line" }, "路由器为你开了端口：对方不用打洞也连得进来。")];
   if (!result.public) lines.push("没问到你的公网地址（STUN 服务器连不上）：码里只有局域网地址，只有和你在同一个局域网的人连得上。");
   if (result.symmetric) lines.push("你的路由器像是对称型 NAT：直连多半打不通。打不通的话，换官方服务器建网络。");
   return lines.map((line) => h("p", { class: "warn-line" }, line));

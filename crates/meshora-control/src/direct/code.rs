@@ -63,7 +63,7 @@ impl PortHint {
         })
     }
 
-    /// 预测的端点：往后推 [`PREDICT`] 个分配，每个分配前后各放宽一个端口（中间别的程序也在占端口）
+    /// 预测的端点：往后推 64 个分配，每个分配前后各放宽一个端口（中间别的程序也在占端口）
     pub fn predict(&self) -> Vec<SocketAddr> {
         let mut out = Vec::new();
         for k in 1..=PREDICT {

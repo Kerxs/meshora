@@ -13,5 +13,6 @@ pub mod app;
 pub mod controller;
 pub mod host;
 pub mod logs;
+pub mod natpmp;
 pub mod store;
 pub mod update;

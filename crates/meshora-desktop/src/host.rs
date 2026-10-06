@@ -26,6 +26,7 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use crate::natpmp;
 use crate::store::Store;
 
 /// 协调服务（TCP）和端点探测（UDP）的端口
@@ -204,19 +205,47 @@ pub async fn start(dir: &Path, owner: NodeKey) -> Result<Host, String> {
     })
 }
 
-/// 本机的局域网地址：对一个公网地址做一次 UDP connect（不发包），看系统选了哪个本地地址
+/// 本机的局域网地址：对一个公网地址做一次 UDP connect（不发包），看系统选了哪个本地地址。
+/// 选出来的是代理软件的虚拟网卡（Clash、mihomo 的 TUN 是 198.18.0.1）时不能用：路由器不认它，
+/// 换成网卡里第一个真实的局域网地址
 fn lan_ip() -> Option<Ipv4Addr> {
-    let socket = StdUdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("1.1.1.1:80").ok()?;
-    match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(ip) if !ip.is_unspecified() && !ip.is_loopback() => Some(ip),
-        _ => None,
-    }
+    lan_interface().map(|(ip, _)| ip)
+}
+
+/// 本机真实的局域网地址和它的前缀长度（猜网关用，见 [`natpmp::guess_gateway`]）
+fn lan_interface() -> Option<(Ipv4Addr, u8)> {
+    let interfaces: Vec<(Ipv4Addr, u8)> = if_addrs::get_if_addrs()
+        .ok()?
+        .into_iter()
+        .filter_map(|interface| match interface.addr {
+            if_addrs::IfAddr::V4(v4) => Some((v4.ip, u32::from(v4.netmask).leading_ones() as u8)),
+            _ => None,
+        })
+        .filter(|&(ip, prefix)| real_lan(ip, prefix))
+        .collect();
+    // 系统往外走的那块网卡是真实的局域网，就用它；不是（被代理接管了）就用第一块真实的
+    let routed = StdUdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| socket.connect("1.1.1.1:80").map(|()| socket))
+        .and_then(|socket| socket.local_addr())
+        .ok()
+        .and_then(|addr| match addr.ip() {
+            IpAddr::V4(ip) => interfaces.iter().find(|(lan, _)| *lan == ip).copied(),
+            IpAddr::V6(_) => None,
+        });
+    routed.or_else(|| interfaces.first().copied())
+}
+
+/// 真实的局域网地址：私网、不是代理的虚拟网卡（198.18.0.0/15）、不是点对点的小网段（/30 以上）
+fn real_lan(ip: Ipv4Addr, prefix_len: u8) -> bool {
+    let [a, b, ..] = ip.octets();
+    ip.is_private() && !(a == 198 && (b & 0xfe) == 18) && prefix_len < 30
 }
 
 /// 找路由器、开端口、问公网地址。任何一步不行就是 `None`
 fn map_ports(lan: Ipv4Addr) -> Option<(igd_next::Gateway, Ipv4Addr)> {
     let gateway = igd_next::search_gateway(igd_next::SearchOptions {
+        // 从真实的局域网网卡发现路由器：默认绑 0.0.0.0，开着代理（Clash 的 TUN）时组播会被发进虚拟网卡
+        bind_addr: SocketAddr::V4(SocketAddrV4::new(lan, 0)),
         timeout: Some(UPNP_TIMEOUT),
         single_search_timeout: Some(UPNP_TIMEOUT),
         ..Default::default()
@@ -244,19 +273,39 @@ fn map_ports(lan: Ipv4Addr) -> Option<(igd_next::Gateway, Ipv4Addr)> {
     Some((gateway, public))
 }
 
-/// 直连模式在路由器上开的一个 UDP 端口。丢掉它就撤掉映射。
-pub struct UdpMapping {
-    gateway: Arc<igd_next::Gateway>,
-    port: u16,
+/// 直连模式在路由器上开的一个 UDP 端口（UPnP 或 NAT-PMP 开的）。丢掉它就撤掉映射。
+pub enum UdpMapping {
+    /// UPnP 开的
+    Upnp {
+        /// 路由器
+        gateway: Arc<igd_next::Gateway>,
+        /// 端口
+        port: u16,
+    },
+    /// NAT-PMP 开的
+    NatPmp {
+        /// 网关地址
+        gateway: Ipv4Addr,
+        /// 端口
+        port: u16,
+    },
 }
 
 impl Drop for UdpMapping {
     fn drop(&mut self) {
-        let (gateway, port) = (Arc::clone(&self.gateway), self.port);
         // 删端口映射是阻塞的网络请求，放到单独的线程里
-        std::thread::spawn(move || {
-            let _ = gateway.remove_port(igd_next::PortMappingProtocol::UDP, port);
-        });
+        match self {
+            Self::Upnp { gateway, port } => {
+                let (gateway, port) = (Arc::clone(gateway), *port);
+                std::thread::spawn(move || {
+                    let _ = gateway.remove_port(igd_next::PortMappingProtocol::UDP, port);
+                });
+            }
+            Self::NatPmp { gateway, port } => {
+                let (gateway, port) = (*gateway, *port);
+                std::thread::spawn(move || natpmp::unmap(gateway, port));
+            }
+        }
     }
 }
 
@@ -265,8 +314,38 @@ impl Drop for UdpMapping {
 /// 阻塞（找路由器最多 3 秒），在 `spawn_blocking` 里调。路由器不支持、不肯开，
 /// 或者路由器自己的公网地址是私网 / 运营商级 NAT 的（开了外面也连不进来）时是 `None`
 pub fn map_udp(port: u16) -> Option<(UdpMapping, SocketAddr)> {
-    let lan = lan_ip()?;
+    let (lan, prefix) = lan_interface()?;
+    map_upnp(lan, port).or_else(|| map_natpmp(lan, prefix, port))
+}
+
+/// NAT-PMP：UPnP 不行时的后备。往（猜出来的）网关单播一个请求，安卓上也能发
+fn map_natpmp(lan: Ipv4Addr, prefix: u8, port: u16) -> Option<(UdpMapping, SocketAddr)> {
+    let gateway = natpmp::guess_gateway(lan, prefix)?;
+    match natpmp::map(gateway, port, LEASE) {
+        Ok(outside) => {
+            let SocketAddr::V4(v4) = outside else {
+                return None;
+            };
+            if shared_or_private(*v4.ip()) {
+                info!(%outside, "直连：路由器自己在别的 NAT 后面（运营商级 NAT），NAT-PMP 开了也连不进来");
+                natpmp::unmap(gateway, port);
+                return None;
+            }
+            info!(%outside, %gateway, "直连：路由器用 NAT-PMP 开了端口");
+            Some((UdpMapping::NatPmp { gateway, port }, outside))
+        }
+        Err(err) => {
+            info!(%gateway, %err, "直连：NAT-PMP 也开不了端口");
+            None
+        }
+    }
+}
+
+/// UPnP：找路由器、问公网地址、开端口
+fn map_upnp(lan: Ipv4Addr, port: u16) -> Option<(UdpMapping, SocketAddr)> {
     let gateway = igd_next::search_gateway(igd_next::SearchOptions {
+        // 从真实的局域网网卡发现路由器：默认绑 0.0.0.0，开着代理（Clash 的 TUN）时组播会被发进虚拟网卡
+        bind_addr: SocketAddr::V4(SocketAddrV4::new(lan, 0)),
         timeout: Some(UPNP_TIMEOUT),
         single_search_timeout: Some(UPNP_TIMEOUT),
         ..Default::default()
@@ -298,7 +377,7 @@ pub fn map_udp(port: u16) -> Option<(UdpMapping, SocketAddr)> {
     let outside = SocketAddr::V4(SocketAddrV4::new(public, port));
     info!(%outside, "直连：路由器用 UPnP 开了端口");
     Some((
-        UdpMapping {
+        UdpMapping::Upnp {
             gateway: Arc::new(gateway),
             port,
         },
@@ -315,6 +394,17 @@ fn shared_or_private(ip: Ipv4Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_adapters_are_not_the_lan() {
+        assert!(real_lan(Ipv4Addr::new(192, 168, 1, 127), 24));
+        assert!(!real_lan(Ipv4Addr::new(198, 18, 0, 1), 30), "Clash 的 TUN");
+        assert!(
+            !real_lan(Ipv4Addr::new(172, 30, 221, 100), 32),
+            "点对点虚拟网卡"
+        );
+        assert!(!real_lan(Ipv4Addr::new(119, 123, 186, 54), 24), "公网");
+    }
 
     #[test]
     fn carrier_grade_nat_and_private_addresses_are_not_reachable() {
