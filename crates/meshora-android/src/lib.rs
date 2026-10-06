@@ -153,11 +153,18 @@ fn tun_opener(vpn: tauri_plugin_meshora_vpn::Vpn<tauri::Wry>) -> meshorad::TunOp
     std::sync::Arc::new(move |config: &meshorad::TunConfig| {
         // 要权限时会弹系统对话框、等用户点：别占着异步运行时的线程干等
         tokio::task::block_in_place(|| {
-            if !vpn.prepare().map_err(io::Error::other)? {
+            let granted = vpn.prepare().map_err(io::Error::other)?;
+            if !granted.vpn {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "没有允许 Meshora 建立 VPN 连接",
                 ));
+            }
+            if !granted.local_network {
+                tracing::warn!(
+                    "没有局域网权限（安卓 17 起要用户允许）：同一个局域网里的朋友、路由器都发不过去，\
+                     可以在系统设置 → 应用 → Meshora → 权限里打开"
+                );
             }
             let fd = vpn
                 .establish(&Establish {

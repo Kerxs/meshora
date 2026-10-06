@@ -1,6 +1,7 @@
 //! 安卓的 VpnService：安卓上 App 没有 root，建不了网卡，要请系统建。
 //!
-//! 1. `Vpn::prepare`：要 VPN 权限。第一次会弹系统对话框"Meshora 想要设置 VPN 连接"，等用户点
+//! 1. `Vpn::prepare`：要 VPN 权限。第一次会弹系统对话框"Meshora 想要设置 VPN 连接"，等用户点。
+//!    安卓 17 起还要局域网权限（往局域网地址发 UDP 要它），接着弹第二个对话框
 //! 2. `Vpn::establish`（只在安卓上有）：按协调服务分的地址建网卡，拿回文件描述符，交给 `meshora_tun::Tun::from_fd`
 //!
 //! 网卡只接管 overlay 网段（加上广播、组播），上网的流量不经过它；Meshora 自己的流量也排除在外。
@@ -46,10 +47,28 @@ impl<R: Runtime> Clone for Vpn<R> {
     }
 }
 
+/// [`Vpn::prepare`] 的结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Granted {
+    /// 用户允许建 VPN。
+    pub vpn: bool,
+    /// 能往局域网地址发：安卓 17 以前总是能；17 起要用户允许，拒了的话同一个局域网里的朋友、
+    /// 路由器（PCP、NAT-PMP）都发不过去，系统直接回 EPERM。
+    pub local_network: bool,
+}
+
 #[cfg(target_os = "android")]
 #[derive(serde::Deserialize)]
-struct Granted {
+#[serde(rename_all = "camelCase")]
+struct Answer {
     granted: bool,
+    #[serde(default = "yes")]
+    local_network: bool,
+}
+
+#[cfg(target_os = "android")]
+fn yes() -> bool {
+    true
 }
 
 #[cfg(target_os = "android")]
@@ -59,14 +78,17 @@ struct Fd {
 }
 
 impl<R: Runtime> Vpn<R> {
-    /// 要 VPN 权限。给过就马上返回真；没给过弹系统对话框，**阻塞到用户点了为止**。
-    /// 用户拒绝返回假。
-    pub fn prepare(&self) -> Result<bool, String> {
+    /// 要 VPN 权限（安卓 17 起连带局域网权限）。给过就马上返回；没给过弹系统对话框，
+    /// **阻塞到用户点了为止**。
+    pub fn prepare(&self) -> Result<Granted, String> {
         #[cfg(target_os = "android")]
         {
             self.handle
-                .run_mobile_plugin::<Granted>("prepare", ())
-                .map(|answer| answer.granted)
+                .run_mobile_plugin::<Answer>("prepare", ())
+                .map(|answer| Granted {
+                    vpn: answer.granted,
+                    local_network: answer.granted && answer.local_network,
+                })
                 .map_err(|err| err.to_string())
         }
         #[cfg(not(target_os = "android"))]

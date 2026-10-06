@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 安卓 17 起，目标 SDK 37 的 App 往局域网地址发 UDP 会直接 EPERM，要这个运行时权限。
+         打洞要发给同一个局域网里的朋友、发给路由器（PCP、NAT-PMP 开端口） -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <application>
         <!-- 系统凭 BIND_VPN_SERVICE 绑定它；别的 App 绑不上 -->
