@@ -42,6 +42,11 @@ const START_PATIENCE: Duration = Duration::from_secs(20);
 const REFRESH: Duration = Duration::from_secs(1);
 /// 停一个节点最多等多久
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 打开时要不要自动连接：设置里开着，并且存着一个网络（网络码或者直连网络）
+fn auto_connects(settings: &Settings) -> bool {
+    settings.auto_connect && (settings.network.is_some() || settings.direct.is_some())
+}
+
 /// 官方服务器：托管很多网络的协调服务，客户端"建网络"默认用它。`公钥@地址:端口`。
 ///
 /// 部署在一台阿里云的服务器上（`scripts/deploy-hub.sh`），换服务器或换私钥时改这里。
@@ -458,6 +463,12 @@ impl Controller {
         let store = Store::new(dir);
         let secret = store.load_or_create_key()?;
         let settings = store.load_settings();
+        // 要自动连接的话一开始就是"连接中"：界面第一眼就是它，不先闪一下"开始"页
+        let phase = if auto_connects(&settings) {
+            Phase::Connecting
+        } else {
+            Phase::Idle
+        };
         Ok(Self {
             shared: Arc::new(Shared {
                 secret,
@@ -467,7 +478,7 @@ impl Controller {
                 updater: Updater::default(),
                 state: Mutex::new(State {
                     settings,
-                    phase: Phase::Idle,
+                    phase,
                     snapshot: Snapshot::default(),
                     runner: None,
                     profile: None,
@@ -1050,13 +1061,15 @@ impl Controller {
             let checking = self.clone();
             tokio::spawn(async move { checking.shared.updater.check().await });
         }
-        let wanted = {
-            let state = self.shared.state();
-            state.settings.auto_connect
-                && (state.settings.network.is_some() || state.settings.direct.is_some())
-        };
+        let wanted = auto_connects(&self.shared.state().settings);
         if wanted && let Err(err) = self.connect(None).await {
             warn!(%err, "自动连接失败");
+            // 一开始就标成了"连接中"：没连起来的话退回去，别一直转圈
+            let mut state = self.shared.state();
+            if state.phase == Phase::Connecting && state.runner.is_none() && state.direct.is_none()
+            {
+                state.phase = Phase::Failed(Failure::new(FailureKind::Other, err));
+            }
         }
     }
 

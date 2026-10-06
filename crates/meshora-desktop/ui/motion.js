@@ -49,11 +49,12 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * 启动动画：点阵从中心扩散（sky.js 自己做），中间画 Logo；第一份状态到了以后，Logo 缩小飞到左上角的品牌位置，
  * 整个界面浮上来。`ready` 是第一份状态到了的 Promise；最多等 1.8 秒，不让启动变慢。
- * 返回动画走完的 Promise（走完之后界面才收到 enter 动画）
+ * 返回动画走完的 Promise（走完之后界面才收到 enter 动画），值是播没播：没播（减少动画、窗口藏着）的话，
+ * 界面第一次显示时已经自己浮过了，不必再浮一遍
  */
 export async function intro(ready) {
   const root = document.documentElement;
-  if (still() || document.hidden) return;
+  if (still() || document.hidden) return false;
   root.classList.add("booting");
   const mark = drawnLogo("logo-draw intro-logo");
   const layer = document.createElement("div");
@@ -79,6 +80,7 @@ export async function intro(ready) {
   await wait(780);
   layer.remove();
   setTimeout(() => root.classList.remove("booted"), 1400);
+  return true;
 }
 
 /**

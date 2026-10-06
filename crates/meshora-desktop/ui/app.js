@@ -33,6 +33,26 @@ function h(tag, props, ...children) {
   return el;
 }
 
+/**
+ * 只在变了时写字、换 class。界面每秒按新状态更新一遍，多数时候什么都没变；
+ * 照样写一遍的话 DOM 也算变了 —— Glassium 盯着玻璃后面的内容，一变就重画那一块
+ */
+function setText(el, text) {
+  const value = String(text ?? "");
+  if (el.textContent !== value) el.textContent = value;
+}
+
+function setClass(el, value) {
+  if (el.getAttribute("class") !== value) el.setAttribute("class", value);
+}
+
+/** 只在 `key` 变了时重建 `slot` 里的东西（`make` 返回要放进去的节点） */
+function fill(slot, key, make) {
+  if (slot.dataset.key === key) return;
+  slot.dataset.key = key;
+  slot.replaceChildren(make());
+}
+
 function s(tag, props, ...children) {
   const el = document.createElementNS(SVG_NS, tag);
   setProps(el, props);
@@ -140,8 +160,11 @@ function msText(ms) {
   return ms < 1 ? "<1" : String(ms);
 }
 
+/** 信号格亮几格 */
+const barLevel = (peer) => (!peer.online || peer.rttMs == null ? 0 : peer.rttMs < 30 ? 4 : peer.rttMs < 60 ? 3 : peer.rttMs < 100 ? 2 : 1);
+
 function bars(peer) {
-  const on = !peer.online || peer.rttMs == null ? 0 : peer.rttMs < 30 ? 4 : peer.rttMs < 60 ? 3 : peer.rttMs < 100 ? 2 : 1;
+  const on = barLevel(peer);
   return h("span", { class: `bars ${tone(peer)}` }, [1, 2, 3, 4].map((n) => h("i", { class: n <= on ? "on" : "" })));
 }
 
@@ -149,6 +172,17 @@ function route(peer) {
   if (!peer.online) return h("span", { class: "route off" }, peer.route === "pending" ? (state.overview?.direct ? "○ 正在打洞" : "○ 等待中") : "○ 不在线");
   if (peer.route === "direct") return h("span", { class: "route direct", title: "两台设备之间直接连通，游戏流量不经过第三方" }, "● 直连");
   return h("span", { class: "route relay", title: "打不通直连，经中继服务器转发（全程加密，中继看不到内容）" }, "◆ 经中继");
+}
+
+/** 决定 bars()、route() 画成什么样的那几样，拼成键：键没变就不重建 */
+const barsKey = (peer) => `${tone(peer)}|${barLevel(peer)}`;
+const routeKey = (peer) => `${peer.online}|${peer.route}|${Boolean(state.overview?.direct)}`;
+
+/** 几个节点（或字）装进一个片段，交给 fill */
+function frag(...children) {
+  const out = document.createDocumentFragment();
+  out.append(...children);
+  return out;
 }
 
 /** 一条延迟曲线 */
@@ -275,13 +309,13 @@ const pass = {
     }
     const changed = this.stateCls !== undefined && this.stateCls !== cls;
     this.stateCls = cls;
-    this.state.className = `state ${cls}${changed ? " changed" : ""}`;
-    this.state.lastChild.textContent = text;
-    this.version.textContent = `Meshora ${ov.version}`;
+    setClass(this.state, `state ${cls}${changed ? " changed" : ""}`);
+    setText(this.state.lastChild, text);
+    setText(this.version, `Meshora ${ov.version}`);
     const u = ov.update;
     this.updateChip.hidden = !(u.status === "available" || u.status === "downloading");
     this.updateChip.disabled = u.status === "downloading";
-    this.updateChip.textContent = u.status === "downloading" ? "下载中…" : `可更新到 ${u.version || ""}`;
+    setText(this.updateChip, u.status === "downloading" ? "下载中…" : `可更新到 ${u.version || ""}`);
     this.updateChip.title = u.version ? `新版本 ${u.version}：点一下更新` : "";
     this.updateNav(ov);
   },
@@ -314,7 +348,7 @@ const pass = {
         }),
       );
     }
-    for (const [page, , count] of items) this.buttons.get(page).count.textContent = count;
+    for (const [page, , count] of items) setText(this.buttons.get(page).count, count);
     if (!this.buttons.has(state.page)) state.page = "home";
     for (const [page, { button }] of this.buttons) {
       button.classList.toggle("on", page === state.page);
@@ -465,7 +499,7 @@ function meshGraph() {
       }
       for (const peer of ov.peers) {
         const text = labels.get(peer.id);
-        if (text) text.textContent = peer.rttMs == null ? "—" : `${msText(peer.rttMs)} ms`;
+        if (text) setText(text, peer.rttMs == null ? "—" : `${msText(peer.rttMs)} ms`);
       }
     },
     redraw() {
@@ -505,19 +539,20 @@ function friendCard(peer) {
     update(next) {
       current = next;
       el.classList.toggle("off", !next.online);
-      avatar.className = `ava ${colorClass(next.id)}`;
-      avatar.textContent = initialOf(next);
-      name.textContent = nameOf(next);
-      ip.textContent = next.ip;
-      barsSlot.replaceChildren(bars(next));
-      ms.className = `fms t-${tone(next)}`;
-      if (next.online && next.rttMs != null) ms.replaceChildren(msText(next.rttMs), h("small", {}, "ms"));
-      else ms.replaceChildren("—");
-      routeSlot.replaceChildren(route(next));
-      sparkSlot.replaceChildren(spark(state.history.get(next.id) || [], 200, 30));
+      setClass(avatar, `ava ${colorClass(next.id)}`);
+      setText(avatar, initialOf(next));
+      setText(name, nameOf(next));
+      setText(ip, next.ip);
+      fill(barsSlot, barsKey(next), () => bars(next));
+      setClass(ms, `fms t-${tone(next)}`);
+      const shown = next.online && next.rttMs != null;
+      fill(ms, shown ? String(next.rttMs) : "", () => (shown ? frag(msText(next.rttMs), h("small", {}, "ms")) : frag("—")));
+      fill(routeSlot, routeKey(next), () => route(next));
+      const points = state.history.get(next.id) || [];
+      fill(sparkSlot, points.join(), () => spark(points, 200, 30));
       const stuck = state.overview?.direct && next.route === "pending";
       why.hidden = !stuck;
-      if (stuck) why.textContent = punchHint(next);
+      if (stuck) setText(why, punchHint(next));
     },
   };
 }
@@ -627,22 +662,22 @@ function meCard() {
   return {
     el,
     update(ov) {
-      ip.textContent = ov.me.ip;
-      who.textContent = ov.name || "没起名字";
+      setText(ip, ov.me.ip);
+      setText(who, ov.name || "没起名字");
       const d = ov.direct;
       directButton.hidden = !d;
       diagButton.hidden = !d;
       if (d) {
-        directButton.textContent = d.host ? "邀请朋友" : "回执码";
-        host.textContent = d.host ? "直连（你是房主）" : "直连";
+        setText(directButton, d.host ? "邀请朋友" : "回执码");
+        setText(host, d.host ? "直连（你是房主）" : "直连");
         const nat = d.publicEndpoint ? `公网 ${d.publicEndpoint}` : d.checked ? "没问到公网地址" : "正在问公网地址…";
         const upnp = d.mapped ? " · 路由器开了端口" : "";
         const v6 = (d.endpoints || []).some((e) => e.startsWith("[")) ? " · 有公网 IPv6" : "";
         const proxy = d.proxied ? " · 像是开着代理，公网 IPv4 可能用不了" : "";
-        coord.textContent = `${nat}${v6}${upnp}${proxy}${d.symmetric ? (d.portHint ? " · 对称型 NAT，会试着预测端口" : " · 像是对称型 NAT，可能打不通") : ""} · 网卡 ${ov.me.tun}`;
+        setText(coord, `${nat}${v6}${upnp}${proxy}${d.symmetric ? (d.portHint ? " · 对称型 NAT，会试着预测端口" : " · 像是对称型 NAT，可能打不通") : ""} · 网卡 ${ov.me.tun}`);
       } else {
-        host.textContent = hostOf(ov.network);
-        coord.textContent = `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}`;
+        setText(host, hostOf(ov.network));
+        setText(coord, `${ov.coordConnected ? "协调服务正常" : "协调服务重连中…"} · 网卡 ${ov.me.tun}`);
       }
     },
   };
@@ -700,13 +735,13 @@ views.overview = {
     const online = ov.peers.filter((p) => p.online);
     tweenText(this.down, state.speed.rx, (v) => `${formatBytes(v)}/s`);
     tweenText(this.up, state.speed.tx, (v) => `${formatBytes(v)}/s`);
-    this.paths.textContent = `${online.filter((p) => p.route === "direct").length} / ${online.filter((p) => p.route === "relay").length}`;
+    setText(this.paths, `${online.filter((p) => p.route === "direct").length} / ${online.filter((p) => p.route === "relay").length}`);
     this.empty.hidden = ov.peers.length > 0;
     this.invite.hidden = !ov.roster?.code;
     const reach = ov.hosting?.reach;
     this.hostChip.hidden = !reach;
-    this.hostChip.className = `chip ${reach === "open" ? "ok" : "warn"}`;
-    this.hostChip.textContent = HOST_REACH[reach] || "";
+    setClass(this.hostChip, `chip ${reach === "open" ? "ok" : "warn"}`);
+    setText(this.hostChip, HOST_REACH[reach] || "");
     this.hostChip.title = reach === "open" ? `公网地址 ${ov.hosting.publicIp}` : HOST_REACH_HINT[reach] || "";
     // 第一次 update 在 mount 里，SVG 还没进文档、量不出尺寸：放进微任务，那时已经插进去了。
     // 不用 requestAnimationFrame：窗口藏在托盘里时它不触发
@@ -762,26 +797,27 @@ function friendRow(peer) {
   const avatar = h("div", { class: "ava sm" });
   const name = h("span");
   const cells = Array.from({ length: 7 }, () => h("td"));
-  cells[3].className = "spark-cell";
+  setClass(cells[3], "spark-cell");
   let current = peer;
   const el = h("tr", { title: "点一下复制地址", onclick: () => copy(current.ip, "地址") }, h("td", {}, h("div", { class: "who" }, avatar, name)), ...cells);
   return {
     el,
     update(next) {
       current = next;
-      avatar.className = `ava sm ${colorClass(next.id)}`;
-      avatar.textContent = initialOf(next);
-      name.textContent = nameOf(next);
-      cells[0].textContent = next.ip;
-      cells[0].className = "mono";
-      cells[1].replaceChildren(route(next));
-      cells[2].className = `t-${tone(next)}`;
-      cells[2].textContent = next.online && next.rttMs != null ? `${msText(next.rttMs)} ms` : "—";
-      cells[3].replaceChildren(spark(state.history.get(next.id) || [], 140, 24));
-      cells[4].textContent = next.online && next.jitterMs != null ? `${next.jitterMs} ms` : "—";
-      cells[5].textContent = next.online && next.lossPercent != null ? `${next.lossPercent}%` : "—";
-      cells[6].className = "t-none";
-      cells[6].textContent = `${formatBytes(next.rx)} / ${formatBytes(next.tx)}`;
+      setClass(avatar, `ava sm ${colorClass(next.id)}`);
+      setText(avatar, initialOf(next));
+      setText(name, nameOf(next));
+      setText(cells[0], next.ip);
+      setClass(cells[0], "mono");
+      fill(cells[1], routeKey(next), () => route(next));
+      setClass(cells[2], `t-${tone(next)}`);
+      setText(cells[2], next.online && next.rttMs != null ? `${msText(next.rttMs)} ms` : "—");
+      const points = state.history.get(next.id) || [];
+      fill(cells[3], points.join(), () => spark(points, 140, 24));
+      setText(cells[4], next.online && next.jitterMs != null ? `${next.jitterMs} ms` : "—");
+      setText(cells[5], next.online && next.lossPercent != null ? `${next.lossPercent}%` : "—");
+      setClass(cells[6], "t-none");
+      setText(cells[6], `${formatBytes(next.rx)} / ${formatBytes(next.tx)}`);
       el.title = `${next.id}（点一下复制地址）`;
     },
   };
@@ -809,7 +845,7 @@ views.friends = {
   },
   update(ov) {
     const online = ov.peers.filter((p) => p.online).length;
-    this.count.textContent = `${ov.peers.length} 人 · ${online} 在线 · 名字是对方自己起的，认人以地址为准`;
+    setText(this.count, `${ov.peers.length} 人 · ${online} 在线 · 名字是对方自己起的，认人以地址为准`);
     this.table.hidden = !ov.peers.length;
     this.empty.hidden = ov.peers.length > 0;
     syncList(this.body, this.rows, ov.peers, friendRow);
@@ -963,7 +999,7 @@ views.settings = {
     const loadLogs = async () => {
       const lines = await invoke("logs");
       const atBottom = this.logs.scrollTop + this.logs.clientHeight >= this.logs.scrollHeight - 8;
-      this.logs.textContent = lines.length ? lines.join("\n") : "还没有日志";
+      setText(this.logs, lines.length ? lines.join("\n") : "还没有日志");
       if (atBottom) this.logs.scrollTop = this.logs.scrollHeight;
     };
     const showLogs = h(
@@ -975,7 +1011,7 @@ views.settings = {
         onclick: () => {
           const show = this.logs.hidden;
           this.logs.hidden = !show;
-          showLogs.textContent = show ? "收起" : "查看";
+          setText(showLogs, show ? "收起" : "查看");
           clearInterval(timer);
           if (show) {
             loadLogs();
@@ -1032,14 +1068,14 @@ views.settings = {
       );
     }
     if (this.checkUpdates.checked !== ov.checkUpdates) this.checkUpdates.checked = ov.checkUpdates;
-    this.updateStatus.textContent = updateText(ov);
+    setText(this.updateStatus, updateText(ov));
     const u = ov.update;
-    this.updateButton.textContent = u.status === "available" ? `更新到 ${u.version}` : u.status === "checking" ? "检查中…" : "检查更新";
+    setText(this.updateButton, u.status === "available" ? `更新到 ${u.version}` : u.status === "checking" ? "检查中…" : "检查更新");
     if (u.status === "downloading" || u.status === "checking") this.updateButton.disabled = true;
     else if (!this.updateButton.matches(":active")) this.updateButton.disabled = false;
     this.network.hidden = !ov.network;
-    this.code.textContent = ov.network ? ov.network.replace(/#.*$/, "#••••••") : "";
-    this.codeNote.textContent = ov.network && ov.network.includes("#") ? "带着邀请码：发给谁，谁就能加入这个网络。只发给要一起玩的人" : "";
+    setText(this.code, ov.network ? ov.network.replace(/#.*$/, "#••••••") : "");
+    setText(this.codeNote, ov.network && ov.network.includes("#") ? "带着邀请码：发给谁，谁就能加入这个网络。只发给要一起玩的人" : "");
   },
 };
 
@@ -1106,7 +1142,7 @@ async function inviteDirect() {
   const error = h("div", { class: "field-error", role: "alert" });
   const accept = h("button", { class: "btn solid primary", type: "button" }, "加进来");
   accept.addEventListener("click", async () => {
-    error.textContent = "";
+    setText(error, "");
     accept.disabled = true;
     try {
       const name = await invoke("direct_accept", { code: reply.value });
@@ -1114,7 +1150,7 @@ async function inviteDirect() {
       close();
       refresh();
     } catch (err) {
-      error.textContent = String(err);
+      setText(error, String(err));
     } finally {
       accept.disabled = false;
     }
@@ -1275,10 +1311,10 @@ views.start = {
     const picker = choices(options, this.where, (value) => {
       this.where = value;
       serverRow.hidden = value !== "server";
-      createError.textContent = "";
+      setText(createError, "");
     });
     createButton.addEventListener("click", async () => {
-      createError.textContent = "";
+      setText(createError, "");
       if (this.where === "direct") {
         createButton.disabled = true;
         try {
@@ -1287,7 +1323,7 @@ views.start = {
           refresh();
           inviteDirect();
         } catch (err) {
-          createError.textContent = String(err);
+          setText(createError, String(err));
         } finally {
           createButton.disabled = false;
         }
@@ -1295,7 +1331,7 @@ views.start = {
       }
       const name = this.netName.value.trim();
       if (!name) {
-        createError.textContent = "给网络起个名字";
+        setText(createError, "给网络起个名字");
         return;
       }
       let at = { kind: this.where };
@@ -1303,7 +1339,7 @@ views.start = {
         try {
           at = { kind: "server", code: await invoke("add_server", { code: this.server.value }) };
         } catch (err) {
-          createError.textContent = String(err);
+          setText(createError, String(err));
           return;
         }
       }
@@ -1313,7 +1349,7 @@ views.start = {
         state.page = "home";
         refresh();
       } catch (err) {
-        createError.textContent = String(err);
+        setText(createError, String(err));
       } finally {
         createButton.disabled = false;
       }
@@ -1339,13 +1375,13 @@ views.start = {
     const submit = async () => {
       const code = area.value.trim();
       if (!code) {
-        error.textContent = "先粘贴一个网络码";
+        setText(error, "先粘贴一个网络码");
         area.focus();
         return;
       }
-      error.textContent = "";
+      setText(error, "");
       if (code.startsWith("meshora-reply:")) {
-        error.textContent = "这是回执码：要贴在房主的\"邀请朋友\"里，不是这里";
+        setText(error, "这是回执码：要贴在房主的\"邀请朋友\"里，不是这里");
         return;
       }
       button.disabled = true;
@@ -1360,7 +1396,7 @@ views.start = {
         await invoke("connect", { code });
         refresh();
       } catch (err) {
-        error.textContent = String(err);
+        setText(error, String(err));
       } finally {
         button.disabled = false;
       }
@@ -1412,7 +1448,7 @@ views.start = {
   },
   update(ov) {
     this.saved.hidden = !ov.network && !ov.direct;
-    this.savedHost.textContent = ov.direct ? (ov.direct.host ? "直连网络（你是房主）" : "直连网络") : hostOf(ov.network);
+    setText(this.savedHost, ov.direct ? (ov.direct.host ? "直连网络（你是房主）" : "直连网络") : hostOf(ov.network));
   },
 };
 
@@ -1519,7 +1555,7 @@ views.admin = {
     const roster = ov.roster;
     if (!roster) return;
     if (document.activeElement !== this.title && this.title.value !== roster.name) this.title.value = roster.name;
-    this.code.textContent = roster.code ? roster.code.replace(/#.*$/, "#••••••") : "";
+    setText(this.code, roster.code ? roster.code.replace(/#.*$/, "#••••••") : "");
     const inviteKey = roster.invites.map((i) => i.invite + i.usesLeft + i.expires).join();
     if (inviteKey !== this.inviteKey) {
       this.inviteKey = inviteKey;
@@ -1535,7 +1571,7 @@ views.admin = {
         ),
       );
     }
-    this.memberCount.textContent = `${roster.members.length} 人 · ${roster.members.filter((m) => m.online).length} 在线`;
+    setText(this.memberCount, `${roster.members.length} 人 · ${roster.members.filter((m) => m.online).length} 在线`);
     const memberKey = roster.members.map((m) => m.id + m.name + m.online).join();
     if (memberKey !== this.memberKey) {
       this.memberKey = memberKey;
@@ -1588,7 +1624,7 @@ views.connecting = {
     return el;
   },
   update(ov) {
-    this.host.textContent = hostOf(ov.network);
+    setText(this.host, hostOf(ov.network));
   },
 };
 
@@ -1717,9 +1753,9 @@ views.failed = {
   },
   update(ov) {
     const info = FAILURES[failureKind(ov.error)] || FAILURES.other;
-    this.title.textContent = info.title;
-    this.hint.textContent = info.hint;
-    this.detail.textContent = ov.error.message;
+    setText(this.title, info.title);
+    setText(this.hint, info.hint);
+    setText(this.detail, ov.error.message);
     this.copyId.hidden = !info.showId;
   },
 };
@@ -1791,7 +1827,10 @@ function render(ov) {
     const dir = PAGE_ORDER.indexOf(name) >= PAGE_ORDER.indexOf(state.view) ? 1 : -1;
     state.view = name;
     state.current = Object.create(views[name]);
-    swapView(main, state.current.mount(ov), dir, enter);
+    const next = state.current.mount(ov);
+    // 启动动画还盖着：直接换上，不播换页和卡片浮上来 —— 动画走完时统一浮一次
+    if (document.documentElement.classList.contains("booting")) main.replaceChildren(next);
+    else swapView(main, next, dir, enter);
     main.scrollTop = 0;
   } else {
     state.current.update(ov);
@@ -1803,15 +1842,33 @@ function go(page) {
   if (state.overview) render(state.overview);
 }
 
+/** 上一次的状态（JSON）：没变就不重画 */
+let lastOverview = "";
+
 async function refresh() {
   try {
     const ov = await invoke("overview");
     track(ov);
+    const json = JSON.stringify(ov);
+    // 连着的时候延迟曲线每秒往前走，照样要画；别的时候状态没变就什么都不动
+    if (json === lastOverview && ov.phase !== "connected") return;
+    lastOverview = json;
     render(ov);
   } catch (err) {
     console.error(err);
   }
 }
+
+/** 每秒问一次状态；窗口藏起来（托盘里、最小化、手机切到后台）时不问，回来马上问一次 */
+let polling = 0;
+function poll() {
+  clearInterval(polling);
+  polling = document.hidden ? 0 : setInterval(refresh, POLL_MS);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+  poll();
+});
 
 async function act(command, args) {
   try {
@@ -1825,12 +1882,22 @@ async function act(command, args) {
 }
 
 shell();
-// 启动动画：第一份状态到了，Logo 飞到左上角，界面浮上来；然后当前这一页的卡片再依次浮一遍
-let firstRender;
-const ready = new Promise((resolve) => (firstRender = resolve));
-intro(ready).then(() => {
+// 启动动画：状态定下来了（不在"连接中"，或者等够了），Logo 飞到左上角，界面浮上来，当前这一页的卡片依次浮一遍。
+// 动画期间换页不播动画，只在最后浮这一次
+let settled;
+const ready = new Promise((resolve) => (settled = resolve));
+intro(ready).then((played) => {
+  clearInterval(settling);
   const view = main.firstElementChild;
-  if (view) enter(view);
+  if (played && view) enter(view);
 });
-refresh().then(firstRender, firstRender);
-setInterval(refresh, POLL_MS);
+const firstLook = () => {
+  if (state.overview?.phase !== "connecting") settled();
+};
+refresh().then(firstLook, settled);
+// 自动连接时头一两秒在"连接中"：启动动画等它连上（最多等到动画的上限），免得刚浮上来就又换一页
+const settling = setInterval(() => {
+  refresh().then(firstLook);
+}, 200);
+ready.then(() => clearInterval(settling));
+poll();

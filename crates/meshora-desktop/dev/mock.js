@@ -4,6 +4,7 @@
 // direct-host、direct-guest、direct-symmetric
 // 剧本（给官网录屏用，状态随时间变）：story-connect（贴网络码连上，朋友一个个加入）、
 // story-punch（直连打洞 3 秒后打通）、story-boot（第一份状态晚到，启动动画走完整）
+// 自动连接：autoconnect（打开就是"连接中"，1.2 秒后连上）、autoconnect-late（以前的后端：头 0.3 秒还是"没连"）
 "use strict";
 
 (() => {
@@ -131,9 +132,17 @@
   scenarios["story-connect"] = {};
   scenarios["story-punch"] = scenarios["direct-host"];
   scenarios["story-boot"] = scenarios.connected;
+  scenarios.autoconnect = { network: code, phase: "connecting" };
+  scenarios["autoconnect-late"] = { network: code, phase: "idle" };
   let ov = { ...base, ...(scenarios[scenario] || {}) };
   let tick = 0;
   let firstOverview = true;
+
+  if (scenario === "autoconnect" || scenario === "autoconnect-late") {
+    const connecting = scenario === "autoconnect" ? 0 : 300;
+    setTimeout(() => (ov = { ...ov, phase: "connecting" }), connecting);
+    setTimeout(() => (ov = { ...ov, phase: "connected", me, coordConnected: true, peers }), connecting + 1200);
+  }
 
   // 直连打洞：那个"正在打洞"的朋友 3 秒后打通
   if (scenario === "story-punch") {
