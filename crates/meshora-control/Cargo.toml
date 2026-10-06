@@ -12,6 +12,7 @@ meshora-types.workspace = true
 meshora-dataplane.workspace = true
 meshora-proto.workspace = true
 base64.workspace = true
+if-addrs.workspace = true
 ipnet.workspace = true
 rand_core.workspace = true
 tokio.workspace = true

@@ -664,6 +664,8 @@ struct Node {
     reflexive: Option<SocketAddr>,
     /// 本机的局域网端点，每个节拍重新看一次。没有网络时是 None
     local: Option<SocketAddr>,
+    /// 本机所有能用的局域网地址（见 [`lan_endpoints`]），每个节拍重新看一次
+    lan: Vec<SocketAddr>,
     /// 最近一次有网络时的本机地址。换网络往往中间断一下（None），所以跟它比，不跟上一拍比
     last_local_ip: Option<IpAddr>,
     network_changed: bool,
@@ -703,6 +705,7 @@ impl Node {
             disco_budget: TokenBucket::new(DISCO_RATE, now),
             reflexive: None,
             local: None,
+            lan: Vec::new(),
             last_local_ip: None,
             network_changed: false,
             reported: None,
@@ -1056,6 +1059,7 @@ impl Node {
     /// 到协调服务的连接由 [`Session::run`] 重连
     fn check_network(&mut self, now: Instant) {
         self.local = local_endpoint(self.coord, self.local_port);
+        self.lan = lan_endpoints(self.local_port);
         let Some(new) = self.local.map(|local| local.ip()) else {
             return;
         };
@@ -1136,8 +1140,17 @@ impl Node {
         if self.relay_only {
             return endpoints;
         }
-        if let Some(local) = self.local {
+        // 每块真实网卡的局域网地址都带上：在同一个局域网里的人靠它直接连，不用绕路由器
+        // （很多路由器不支持从里面绕回自己的公网地址）。通往外面那条路由用的网卡排第一
+        if let Some(local) = self.local
+            && usable_lan(local.ip(), None)
+        {
             endpoints.push(local);
+        }
+        for lan in &self.lan {
+            if !endpoints.contains(lan) {
+                endpoints.push(*lan);
+            }
         }
         if let Some(reflexive) = self.reflexive
             && !endpoints.contains(&reflexive)
@@ -1264,6 +1277,49 @@ fn local_endpoint(coord: SocketAddr, port: u16) -> Option<SocketAddr> {
     (!ip.is_unspecified()).then_some(SocketAddr::new(ip, port))
 }
 
+/// 最多带几个局域网地址：虚拟机、容器的网卡也是私网地址，全带上会挤掉公网端点
+const MAX_LAN: usize = 4;
+
+/// 本机每块网卡上能用的局域网地址（见 [`usable_lan`]），配上数据面 socket 的端口
+fn lan_endpoints(port: u16) -> Vec<SocketAddr> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for interface in interfaces {
+        let if_addrs::IfAddr::V4(v4) = interface.addr else {
+            continue;
+        };
+        let prefix = u32::from(v4.netmask).leading_ones() as u8;
+        let ip = IpAddr::V4(v4.ip);
+        let addr = SocketAddr::new(ip, port);
+        if usable_lan(ip, Some(prefix)) && !out.contains(&addr) {
+            out.push(addr);
+        }
+        if out.len() == MAX_LAN {
+            break;
+        }
+    }
+    out
+}
+
+/// 一个本机地址能不能当局域网候选：
+///
+/// - 只要私网地址（10/8、172.16/12、192.168/16）。公网地址由 STUN 问
+/// - 不要 198.18.0.0/15：代理软件（Clash、mihomo 的 TUN、fake-ip）用的虚拟网卡，别人往那发收不到
+/// - 不要 100.64.0.0/10：Meshora 自己的网卡（还有运营商级 NAT 的地址）
+/// - 不要掩码在 /30 以上的：点对点的虚拟网卡（sing-box 默认 172.19.0.1/30 之类），不是真的局域网
+fn usable_lan(ip: IpAddr, prefix_len: Option<u8>) -> bool {
+    let IpAddr::V4(v4) = ip else {
+        return false;
+    };
+    let [a, b, ..] = v4.octets();
+    let benchmark = a == 198 && (b & 0xfe) == 18;
+    let shared = a == 100 && (b & 0xc0) == 64;
+    let point_to_point = prefix_len.is_some_and(|len| len >= 30);
+    v4.is_private() && !benchmark && !shared && !point_to_point
+}
+
 /// 控制面出错的原因。
 #[derive(Debug)]
 pub enum ControlError {
@@ -1323,6 +1379,51 @@ impl std::error::Error for ControlError {
             Self::Io(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod lan_tests {
+    use super::*;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn real_lan_addresses_are_candidates() {
+        assert!(usable_lan(ip("192.168.1.20"), Some(24)));
+        assert!(usable_lan(ip("10.0.0.5"), Some(8)));
+        assert!(usable_lan(ip("172.20.3.4"), Some(16)));
+        assert!(usable_lan(ip("192.168.1.20"), None));
+    }
+
+    #[test]
+    fn proxy_and_overlay_adapters_are_not() {
+        // Clash / mihomo 的 TUN（fake-ip）
+        assert!(!usable_lan(ip("198.18.0.1"), Some(16)));
+        assert!(!usable_lan(ip("198.19.255.1"), None));
+        // sing-box 的点对点 TUN
+        assert!(!usable_lan(ip("172.19.0.1"), Some(30)));
+        // Meshora 自己的网卡、运营商级 NAT
+        assert!(!usable_lan(ip("100.96.0.1"), Some(24)));
+        assert!(!usable_lan(ip("100.64.0.3"), Some(10)));
+        // 公网、回环、链路本地、IPv6
+        assert!(!usable_lan(ip("119.123.186.54"), None));
+        assert!(!usable_lan(ip("127.0.0.1"), Some(8)));
+        assert!(!usable_lan(ip("169.254.3.4"), Some(16)));
+        assert!(!usable_lan(ip("fd00::1"), None));
+    }
+
+    #[test]
+    fn lan_endpoints_carry_the_port_and_are_capped() {
+        let found = lan_endpoints(41641);
+        assert!(found.len() <= MAX_LAN);
+        assert!(
+            found
+                .iter()
+                .all(|addr| addr.port() == 41641 && usable_lan(addr.ip(), None))
+        );
     }
 }
 
