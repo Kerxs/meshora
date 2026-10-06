@@ -1442,24 +1442,47 @@ fn lan_endpoints(port: u16) -> Vec<SocketAddr> {
 }
 
 /// 最多带几个 IPv6 地址：系统常常同时有一个固定的和几个临时的，带两个够了
+/// （第一个是系统真正拿来发包的那个，见 [`source_ipv6`]）
 const MAX_IPV6: usize = 2;
+
+/// 查路由用的一个公网 IPv6 地址（阿里的公共 DNS）。只是让系统选出口、选源地址，不往它发任何东西
+const ROUTE_PROBE_V6: SocketAddr = SocketAddr::new(
+    IpAddr::V6(std::net::Ipv6Addr::new(0x2400, 0x3200, 0, 0, 0, 0, 0, 1)),
+    53,
+);
+
+/// 系统往公网发 IPv6 时用哪个源地址：一般是临时地址（隐私扩展），不是网卡上那个固定的。
+/// 对方路由器的 IPv6 防火墙只放行它发过去的那个地址的回包 —— 连接码里没有这个地址，
+/// 对方发得出来、我们的回包却进不去。UDP 的 connect 只查路由，不发包
+fn source_ipv6() -> Option<std::net::Ipv6Addr> {
+    let socket = UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect(ROUTE_PROBE_V6).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V6(ip) if global_ipv6(ip) => Some(ip),
+        _ => None,
+    }
+}
 
 /// 本机每块网卡上的公网 IPv6 地址（全球单播 2000::/3），配上数据面 IPv6 socket 的端口
 fn ipv6_endpoints(port: u16) -> Vec<SocketAddr> {
     let Ok(interfaces) = if_addrs::get_if_addrs() else {
         return Vec::new();
     };
-    let mut out = Vec::new();
+    // 系统真正用的源地址排第一，免得被网卡上别的地址挤掉
+    let mut out: Vec<SocketAddr> = source_ipv6()
+        .map(|ip| SocketAddr::new(IpAddr::V6(ip), port))
+        .into_iter()
+        .collect();
     for interface in interfaces {
+        if out.len() == MAX_IPV6 {
+            break;
+        }
         let if_addrs::IfAddr::V6(v6) = interface.addr else {
             continue;
         };
         let addr = SocketAddr::new(IpAddr::V6(v6.ip), port);
         if global_ipv6(v6.ip) && !out.contains(&addr) {
             out.push(addr);
-        }
-        if out.len() == MAX_IPV6 {
-            break;
         }
     }
     out
@@ -1606,6 +1629,24 @@ mod lan_tests {
             found
                 .iter()
                 .all(|addr| addr.port() == 41641 && usable_lan(addr.ip(), None))
+        );
+    }
+
+    #[test]
+    fn the_address_the_system_sends_from_comes_first() {
+        // 本机没有公网 IPv6 时两边都是空的，照样成立
+        let found = ipv6_endpoints(41641);
+        assert!(found.len() <= MAX_IPV6);
+        if let Some(source) = source_ipv6() {
+            assert_eq!(
+                found.first(),
+                Some(&SocketAddr::new(IpAddr::V6(source), 41641))
+            );
+        }
+        assert!(
+            found
+                .iter()
+                .all(|addr| matches!(addr.ip(), IpAddr::V6(ip) if global_ipv6(ip)))
         );
     }
 }
