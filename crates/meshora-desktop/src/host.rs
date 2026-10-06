@@ -282,6 +282,17 @@ pub enum UdpMapping {
         /// 端口
         port: u16,
     },
+    /// PCP 开的
+    Pcp {
+        /// 网关地址
+        gateway: Ipv4Addr,
+        /// 本机的局域网地址
+        client: Ipv4Addr,
+        /// 端口
+        port: u16,
+        /// 开映射时用的随机数，删的时候要同一个
+        nonce: [u8; 12],
+    },
     /// NAT-PMP 开的
     NatPmp {
         /// 网关地址
@@ -301,6 +312,15 @@ impl Drop for UdpMapping {
                     let _ = gateway.remove_port(igd_next::PortMappingProtocol::UDP, port);
                 });
             }
+            Self::Pcp {
+                gateway,
+                client,
+                port,
+                nonce,
+            } => {
+                let (gateway, client, port, nonce) = (*gateway, *client, *port, *nonce);
+                std::thread::spawn(move || natpmp::pcp_unmap(gateway, client, port, nonce));
+            }
             Self::NatPmp { gateway, port } => {
                 let (gateway, port) = (*gateway, *port);
                 std::thread::spawn(move || natpmp::unmap(gateway, port));
@@ -315,7 +335,40 @@ impl Drop for UdpMapping {
 /// 或者路由器自己的公网地址是私网 / 运营商级 NAT 的（开了外面也连不进来）时是 `None`
 pub fn map_udp(port: u16) -> Option<(UdpMapping, SocketAddr)> {
     let (lan, prefix) = lan_interface()?;
-    map_upnp(lan, port).or_else(|| map_natpmp(lan, prefix, port))
+    map_upnp(lan, port)
+        .or_else(|| map_pcp(lan, prefix, port))
+        .or_else(|| map_natpmp(lan, prefix, port))
+}
+
+/// PCP：NAT-PMP 的后继，新一些的路由器只开了它。同样是往（猜出来的）网关单播
+fn map_pcp(lan: Ipv4Addr, prefix: u8, port: u16) -> Option<(UdpMapping, SocketAddr)> {
+    let gateway = natpmp::guess_gateway(lan, prefix)?;
+    match natpmp::pcp_map(gateway, lan, port, LEASE) {
+        Ok((outside, nonce)) => {
+            let SocketAddr::V4(v4) = outside else {
+                return None;
+            };
+            if shared_or_private(*v4.ip()) {
+                info!(%outside, "直连：路由器自己在别的 NAT 后面（运营商级 NAT），PCP 开了也连不进来");
+                natpmp::pcp_unmap(gateway, lan, port, nonce);
+                return None;
+            }
+            info!(%outside, %gateway, "直连：路由器用 PCP 开了端口");
+            Some((
+                UdpMapping::Pcp {
+                    gateway,
+                    client: lan,
+                    port,
+                    nonce,
+                },
+                outside,
+            ))
+        }
+        Err(err) => {
+            info!(%gateway, %err, "直连：PCP 开不了端口");
+            None
+        }
+    }
 }
 
 /// NAT-PMP：UPnP 不行时的后备。往（猜出来的）网关单播一个请求，安卓上也能发

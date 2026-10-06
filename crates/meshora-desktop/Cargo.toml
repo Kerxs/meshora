@@ -30,6 +30,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 igd-next.workspace = true
 if-addrs.workspace = true
+rand_core.workspace = true
 # 自动更新：下载、验签
 ureq.workspace = true
 ring.workspace = true
