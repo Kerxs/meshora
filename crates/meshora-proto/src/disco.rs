@@ -43,11 +43,22 @@ pub enum DiscoMessage {
         /// 端点探测（类 STUN）靠的就是它。
         observed: SocketAddr,
     },
+    /// 发送方此刻的候选端点（完整列表）。已经连上的两边靠它互相告知新地址：
+    /// 后来才拿到的路由器映射、新的公网 IPv6、换了网络之后的地址。
+    /// 直连模式没有协调服务转告，只能这样
+    Endpoints {
+        /// 候选端点，最多 [`MAX_ANNOUNCED`] 个。
+        endpoints: Vec<SocketAddr>,
+    },
 }
+
+/// [`DiscoMessage::Endpoints`] 里最多几个端点
+pub const MAX_ANNOUNCED: usize = 16;
 
 mod tag {
     pub const PING: u8 = 1;
     pub const PONG: u8 = 2;
+    pub const ENDPOINTS: u8 = 3;
 }
 
 impl DiscoMessage {
@@ -63,6 +74,11 @@ impl DiscoMessage {
                 w.bytes(tx);
                 w.socket_addr(observed);
             }
+            Self::Endpoints { endpoints } => {
+                w.u8(tag::ENDPOINTS);
+                let endpoints = &endpoints[..endpoints.len().min(MAX_ANNOUNCED)];
+                w.list(endpoints, |w, addr| w.socket_addr(addr));
+            }
         }
         w.finish()
     }
@@ -75,6 +91,13 @@ impl DiscoMessage {
                 tx: r.array()?,
                 observed: r.socket_addr()?,
             },
+            tag::ENDPOINTS => {
+                let endpoints = r.list(|r| r.socket_addr())?;
+                if endpoints.len() > MAX_ANNOUNCED {
+                    return Err(DecodeError::Invalid("候选端点太多"));
+                }
+                Self::Endpoints { endpoints }
+            }
             other => return Err(DecodeError::UnknownType(other)),
         };
         r.finish()?;

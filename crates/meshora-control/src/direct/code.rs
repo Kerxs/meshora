@@ -256,7 +256,7 @@ impl Reply {
 /// 只要普通的单播地址：不要 0.0.0.0、组播、广播（往这些地址发包没意义，还可能被利用来放大），
 /// 不要 1024 以下的端口（系统服务：DNS、NTP……往那发加密的探测报文没用，还像在扫描）。
 /// 回环地址留着：只会发到自己这台机器上的高端口，测试也要用
-fn probeable(addr: SocketAddr) -> bool {
+pub(crate) fn probeable(addr: SocketAddr) -> bool {
     let ip = addr.ip();
     let broadcast = matches!(ip, IpAddr::V4(v4) if v4.is_broadcast());
     addr.port() >= 1024 && !ip.is_unspecified() && !ip.is_multicast() && !broadcast

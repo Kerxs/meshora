@@ -393,3 +393,31 @@ async fn friends_connect_over_ipv6_alone() {
         status.peers[0].path
     );
 }
+
+#[tokio::test]
+async fn a_new_endpoint_is_announced_over_the_working_path() {
+    // 连上之后房主才拿到路由器映射（或者新的公网 IPv6）：经已经通了的路告诉朋友，朋友加进候选
+    let stun = fake_stun().await;
+    let mut host = start(NodeSecret::generate(), HOST_IP, Role::Host, vec![], stun).await;
+    let mut guests = Vec::new();
+    let mut b = invite(&host, Ipv4Addr::new(100, 96, 0, 2), stun, &mut guests).await;
+    deliver(&b, host.ip, &mut host, b"connected").await;
+
+    let mapped: SocketAddr = "203.0.113.5:40000".parse().unwrap();
+    host.handle.set_mapped(Some(mapped));
+    let heard = tokio::time::timeout(CONVERGE, async {
+        loop {
+            b.status.changed().await.unwrap();
+            if b.status
+                .borrow()
+                .peers
+                .iter()
+                .any(|p| p.candidates.contains(&mapped))
+            {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(heard.is_ok(), "朋友没收到房主的新端点");
+}

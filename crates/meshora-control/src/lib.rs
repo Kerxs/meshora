@@ -67,6 +67,10 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const DISCO_RATE: u32 = 200;
 /// 网主的管理请求最多等多久回音
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// 本机候选端点变了，告诉已经连上的人：连发几拍（控制报文可能丢，没有确认）
+const ANNOUNCE_REPEATS: u8 = 3;
+/// 对方告诉我们的端点最多收几个（和连接码一样）
+const MAX_PEER_ANNOUNCED: usize = 8;
 /// 一轮 STUN 最多等多久：有的服务器问不通（被墙、被封 UDP），不能一直等它
 const STUN_WAIT: Duration = Duration::from_secs(3);
 /// 直连模式：一个 peer 加进来后，加密探测（见 [`paths::PeerPaths::punch_eagerly`]）持续多久
@@ -605,6 +609,13 @@ struct PeerState {
     last_call_me_maybe: Option<Instant>,
     /// 直接收到过它的报文（见 [`PeerView::heard`]）
     heard: bool,
+    /// 协调服务（或者直连模式的连接码）给的端点
+    advertised: Vec<SocketAddr>,
+    /// 它自己经已经通了的路告诉我们的端点（[`DiscoMessage::Endpoints`]）
+    announced: Vec<SocketAddr>,
+    /// 上次告诉它的本机端点，和还要再发几拍
+    told: Option<Vec<SocketAddr>>,
+    tell_left: u8,
 }
 
 /// 令牌桶：每秒补满
@@ -810,11 +821,17 @@ impl Node {
                     current: None,
                     last_call_me_maybe: None,
                     heard: false,
+                    advertised: Vec::new(),
+                    announced: Vec::new(),
+                    told: None,
+                    tell_left: 0,
                 }
             });
             state.overlay_ip = peer.overlay_ip;
             state.name.clone_from(&peer.name);
-            state.paths.set_advertised(&peer.endpoints);
+            state.advertised.clone_from(&peer.endpoints);
+            let merged = merge_endpoints(&state.advertised, &state.announced);
+            state.paths.set_advertised(&merged);
         }
         self.update_paths(now);
         self.ping_due(now);
@@ -952,6 +969,76 @@ impl Node {
                 }
             }
             DiscoMessage::Pong { tx, observed } => self.on_pong(sender, tx, observed, now),
+            DiscoMessage::Endpoints { endpoints } => self.on_announced(sender, endpoints, now),
+        }
+    }
+
+    /// 对方经已经通了的路告诉我们它现在的候选端点。码里的地址不全信，这里也一样：
+    /// 过滤掉组播、广播、系统端口（同连接码），最多收 [`MAX_PEER_ANNOUNCED`] 个
+    fn on_announced(&mut self, sender: NodeKey, endpoints: Vec<SocketAddr>, now: Instant) {
+        if self.relay_only {
+            return;
+        }
+        let Some(state) = self.peers.get_mut(&sender) else {
+            return;
+        };
+        let endpoints: Vec<SocketAddr> = endpoints
+            .into_iter()
+            .filter(|addr| direct::probeable(*addr))
+            .take(MAX_PEER_ANNOUNCED)
+            .collect();
+        if state.announced == endpoints {
+            return;
+        }
+        info!(peer = %sender, ?endpoints, "对方告诉了新的候选端点");
+        let new: Vec<SocketAddr> = endpoints
+            .iter()
+            .filter(|addr| !state.announced.contains(addr) && !state.advertised.contains(addr))
+            .copied()
+            .collect();
+        state.announced = endpoints;
+        let merged = merge_endpoints(&state.advertised, &state.announced);
+        state.paths.set_advertised(&merged);
+        // 新地址马上探测，不等下一轮
+        for addr in new {
+            state.paths.ping_now(addr);
+        }
+        self.ping_due(now);
+    }
+
+    /// 本机候选端点变了（拿到了路由器映射、有了公网 IPv6、换了网络……）：经已经通了的路告诉每个人。
+    /// 直连模式没有协调服务转告，对方只能从这里知道
+    fn announce_endpoints(&mut self) {
+        if self.relay_only {
+            return;
+        }
+        let endpoints = self.endpoints();
+        let mut sends = Vec::new();
+        for (key, state) in &mut self.peers {
+            let Some(path) = state.current else {
+                continue;
+            };
+            if state.told.as_ref() != Some(&endpoints) {
+                state.told = Some(endpoints.clone());
+                state.tell_left = ANNOUNCE_REPEATS;
+            }
+            if state.tell_left == 0 {
+                continue;
+            }
+            state.tell_left -= 1;
+            sends.push((*key, path));
+        }
+        for (key, path) in sends {
+            let datagram = disco::seal(
+                &self.secret,
+                &key,
+                &DiscoMessage::Endpoints {
+                    endpoints: endpoints.clone(),
+                },
+            );
+            if let Err(err) = self.dataplane.send_control_via(path, &key, &datagram) {
+                debug!(peer = %key, %err, "告诉对方新端点失败");
+            }
         }
     }
 
@@ -1001,6 +1088,7 @@ impl Node {
                 }
             }
             DiscoMessage::Pong { tx, observed } => self.on_pong(sender, tx, observed, now),
+            DiscoMessage::Endpoints { endpoints } => self.on_announced(sender, endpoints, now),
         }
     }
 
@@ -1054,6 +1142,7 @@ impl Node {
         }
 
         self.ping_due(now);
+        self.announce_endpoints();
         for (key, state) in &mut self.peers {
             let waited = state
                 .last_call_me_maybe
@@ -1300,6 +1389,17 @@ fn local_endpoint(coord: SocketAddr, port: u16) -> Option<SocketAddr> {
     socket.connect(coord).ok()?;
     let ip = socket.local_addr().ok()?.ip();
     (!ip.is_unspecified()).then_some(SocketAddr::new(ip, port))
+}
+
+/// 协调服务（或连接码）给的端点，加上对方自己告诉的，去重
+fn merge_endpoints(advertised: &[SocketAddr], announced: &[SocketAddr]) -> Vec<SocketAddr> {
+    let mut merged = advertised.to_vec();
+    for addr in announced {
+        if !merged.contains(addr) {
+            merged.push(*addr);
+        }
+    }
+    merged
 }
 
 /// 最多带几个局域网地址：虚拟机、容器的网卡也是私网地址，全带上会挤掉公网端点

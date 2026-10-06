@@ -12,6 +12,8 @@
 
 mod code;
 
+pub(crate) use code::probeable;
+
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::num::NonZeroU16;
