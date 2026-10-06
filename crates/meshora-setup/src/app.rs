@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use meshora_setup::{acl, location};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::install;
@@ -131,6 +131,10 @@ fn launch() -> Result<(), String> {
 
 #[tauri::command]
 fn quit(app: AppHandle) {
+    // 安装程序自己的界面缓存（WebView2 的数据目录）：装完、卸完都用不着了，退出之后删掉
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        install::remove_after_exit(&dir);
+    }
     app.exit(0);
 }
 

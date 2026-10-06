@@ -162,15 +162,19 @@ function start(sky) {
     kick();
   }
 
-  window.addEventListener("pointermove", move, { passive: true });
-  window.addEventListener("pointerdown", move, { passive: true });
-  document.documentElement.addEventListener("pointerleave", leave);
-  window.addEventListener("touchstart", touch, { passive: true });
-  window.addEventListener("touchmove", touch, { passive: true });
-  // 手机上手指抬起就散开
-  window.addEventListener("touchend", (event) => event.touches.length === 0 && leave(), { passive: true });
-  window.addEventListener("touchcancel", leave, { passive: true });
-  window.addEventListener("blur", leave);
+  // 安装程序的窗口小、整个被一块面板盖着，指针几乎总在字上面：亮起来的点会压着字，不跟指针
+  const follow = !document.body.classList.contains("setup");
+  if (follow) {
+    window.addEventListener("pointermove", move, { passive: true });
+    window.addEventListener("pointerdown", move, { passive: true });
+    document.documentElement.addEventListener("pointerleave", leave);
+    window.addEventListener("touchstart", touch, { passive: true });
+    window.addEventListener("touchmove", touch, { passive: true });
+    // 手机上手指抬起就散开
+    window.addEventListener("touchend", (event) => event.touches.length === 0 && leave(), { passive: true });
+    window.addEventListener("touchcancel", leave, { passive: true });
+    window.addEventListener("blur", leave);
+  }
   window.addEventListener("resize", resize);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && frame) {

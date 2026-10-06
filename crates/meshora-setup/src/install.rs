@@ -308,6 +308,23 @@ pub fn uninstall(purge: bool, progress: &dyn Fn(&str, u8)) -> Result<(), String>
     Ok(())
 }
 
+/// 安装程序退出之后删掉它自己的数据目录（`%LOCALAPPDATA%\io.github.kerxs.meshora.setup`，界面的缓存）。
+/// 正在用着删不掉，交给一个等几秒再动手的 cmd。只删这一个名字的目录，别的一概不碰
+pub fn remove_after_exit(dir: &Path) {
+    if !dir.is_absolute()
+        || dir
+            .file_name()
+            .is_none_or(|name| name != "io.github.kerxs.meshora.setup")
+    {
+        return;
+    }
+    let script = format!(
+        "ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"{}\"",
+        dir.display()
+    );
+    let _ = quiet("cmd.exe").arg("/c").raw_arg(&script).spawn();
+}
+
 /// 装完打开 Meshora
 pub fn launch() -> Result<(), String> {
     Command::new(current_dir().join("meshora.exe"))

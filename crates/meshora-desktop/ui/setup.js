@@ -104,7 +104,7 @@ let current = null;
 
 function titlebar() {
   const icon = (d) => s("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" }, s("path", { d, stroke: "currentColor", "stroke-width": 1.4, "stroke-linecap": "round", fill: "none" }));
-  dots = h("div", { class: "dots", "aria-hidden": "true" });
+  dots = h("div", { class: "steps", "aria-hidden": "true" });
   closeBtn = h("button", { class: "tb-btn close", type: "button", title: "关闭", "aria-label": "关闭", onclick: () => !busy && bye() }, icon("M3 3l6 6M9 3l-6 6"));
   return h(
     "header",
@@ -258,6 +258,7 @@ function options(info) {
   const safe = "只有管理员能改这个文件夹，别的程序换不掉里面的文件";
   const dir = h("span", { class: "mono dir" }, info.dir);
   const note = h("span", { class: "note" }, info.movable ? safe : "已经装在这里，升级装回原处");
+  const error = h("p", { class: "where-err", hidden: true });
   const change = info.movable
     ? h(
         "button",
@@ -271,11 +272,11 @@ function options(info) {
               if (!picked) return;
               info.dir = picked;
               dir.textContent = picked;
-              note.textContent = safe;
-              note.classList.remove("err");
+              error.hidden = true;
             } catch (err) {
-              note.textContent = String(err);
-              note.classList.add("err");
+              // 原来选的位置不变，只说新选的为什么不行
+              error.textContent = String(err);
+              error.hidden = false;
             }
           },
         },
@@ -290,7 +291,7 @@ function options(info) {
       h(
         "div",
         { class: "opts" },
-        h("div", { class: "opt where" }, h("span", { class: "t" }, h("b", {}, "装到"), dir, note), change),
+        h("div", { class: "opt where" }, h("span", { class: "t" }, h("b", {}, "装到"), dir, note), change, error),
         option("桌面快捷方式", "开始菜单里总会有一个", desktop),
         option("装完打开", null, open),
       ),
@@ -299,42 +300,38 @@ function options(info) {
         { class: "actions" },
         secondary("上一步", () => welcome(info, false)),
         primary(info.installed ? "升级" : "安装", () =>
-          work(info.installed ? `正在升级到 ${info.version}` : "正在安装", "install", { desktop: desktop.checked, dir: info.dir }, 4, 2, () => installed(info, open.checked)),
+          work(info.installed ? `正在升级到 ${info.version}` : "正在安装", "install", { desktop: desktop.checked, dir: info.dir }, 4, 2, () => installed(open.checked, 4)),
         ),
       ),
     ),
   );
 }
 
-async function installed(info, launch) {
-  step(4, 3);
-  if (launch) {
-    try {
-      await invoke("launch");
-    } catch (err) {
-      failed(String(err), () => installed(info, true));
-      return;
-    }
-    show(result(tick(), "装好了", "Meshora 正在打开。", primary("完成", bye)));
-    setTimeout(bye, 1600);
+/** 装好了。`launch`：顺手打开 Meshora。`total`：一共几步（装是 4 步，客户端发起的更新是 2 步），这是最后一步 */
+async function installed(launch, total) {
+  step(total, total - 1);
+  const later = (note) =>
+    show(result(tick(), "装好了", note, secondary("完成", bye), primary("打开 Meshora", () => installed(true, total))));
+  if (!launch) {
+    later("从开始菜单打开 Meshora。它要管理员权限来建虚拟网卡，打开时 Windows 会问一次。");
     return;
   }
-  show(
-    result(
-      tick(),
-      "装好了",
-      "从开始菜单打开 Meshora。它要管理员权限来建虚拟网卡，打开时 Windows 会问一次。",
-      secondary("完成", bye),
-      primary("打开 Meshora", () => installed(info, true)),
-    ),
-  );
+  try {
+    await invoke("launch");
+  } catch (err) {
+    // 装是装好了，只是没打开：别给"没能做完、再试一次"（那会重装一遍）
+    later(`没能自动打开 Meshora（${err}）。可以从开始菜单打开。`);
+    return;
+  }
+  show(result(tick(), "装好了", "Meshora 正在打开。", primary("完成", bye)));
+  setTimeout(bye, 1600);
 }
 
 // ---------- 更新（客户端发起，带 --update）----------
 
 /** 不用点：直接装，桌面快捷方式照旧，装完把 Meshora 打开 */
 function updatePage(info) {
-  work(`正在更新到 ${info.version}`, "install", { desktop: null, dir: null }, 2, 0, () => installed(info, true));
+  work(`正在更新到 ${info.version}`, "install", { desktop: null, dir: null }, 2, 0, () => installed(true, 2));
 }
 
 // ---------- 卸 ----------
@@ -349,7 +346,7 @@ function uninstallPage(info) {
       "section",
       { class: "options" },
       h("h1", {}, "卸载 Meshora"),
-      h("p", { class: "sub" }, `会关掉正在运行的 Meshora，删掉 ${info.dir} 和快捷方式。`),
+      h("p", { class: "sub" }, "会关掉正在运行的 Meshora，删掉快捷方式和安装目录：", h("span", { class: "mono dir" }, info.dir)),
       h("div", { class: "opts" }, option("同时删除我的私钥和设置", "默认留着：以后装回来还是同一台电脑", purge)),
       warn,
       h(

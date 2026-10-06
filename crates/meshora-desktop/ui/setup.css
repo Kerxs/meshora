@@ -22,13 +22,13 @@
   color: var(--dim);
 }
 
-/* 步骤点：当前这一步拉长成一小段 */
-.dots {
+/* 步骤点：当前这一步拉长成一小段。不叫 .dots：那是背景点阵画布的名字（app.css 把它钉在左上角） */
+.steps {
   display: flex;
   gap: 6px;
 }
 
-.dots i {
+.steps i {
   width: 6px;
   height: 6px;
   border-radius: 3px;
@@ -36,7 +36,7 @@
   transition: width var(--t-mid) var(--ease), background var(--t-mid) var(--ease);
 }
 
-.dots i.on {
+.steps i.on {
   width: 18px;
   background: #fff;
 }
@@ -206,9 +206,26 @@
   overflow-wrap: anywhere;
 }
 
-.opt .t .note.err {
+/* 选的位置不能装：原因单独占一整行，写在"更改"下面，不和按钮挤 */
+.opt.where {
+  flex-wrap: wrap;
+}
+
+.opt .where-err {
+  flex-basis: 100%;
+  margin: calc(var(--sp-1) * -1) 0 0;
+  font-size: var(--fs-cap);
+  line-height: 1.5;
   color: var(--bad);
   animation: rise var(--t-fast) var(--ease) both;
+}
+
+/* 卸载页：要删的目录单独一行 */
+.page .sub .dir {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .options > * {
