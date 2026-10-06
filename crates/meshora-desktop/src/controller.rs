@@ -152,6 +152,41 @@ pub struct PeerRow {
     pub heard: bool,
     /// 正在探测的候选地址（诊断用）。
     pub candidates: Vec<String>,
+    /// 每个候选的探测情况（诊断用），见 [`ProbeRow`]。
+    pub probes: Vec<ProbeRow>,
+}
+
+/// 一个候选地址的探测情况（诊断用）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeRow {
+    /// 地址。
+    pub addr: String,
+    /// `ipv6`、`lan`（私网 IPv4）或 `ipv4`（公网 IPv4）。
+    pub family: &'static str,
+    /// 我们的 Ping 从这里得到过回应。
+    pub answered: bool,
+    /// 现在还通着。
+    pub working: bool,
+    /// 对方从这个地址发来过 Ping。
+    pub heard: bool,
+}
+
+impl From<&meshora_control::paths::CandidateReport> for ProbeRow {
+    fn from(report: &meshora_control::paths::CandidateReport) -> Self {
+        let family = match report.addr.ip() {
+            std::net::IpAddr::V6(_) => "ipv6",
+            std::net::IpAddr::V4(v4) if v4.is_private() => "lan",
+            std::net::IpAddr::V4(_) => "ipv4",
+        };
+        Self {
+            addr: report.addr.to_string(),
+            family,
+            answered: report.answered,
+            working: report.working,
+            heard: report.heard,
+        }
+    }
 }
 
 /// 网主看到的一个成员。
@@ -1555,6 +1590,7 @@ fn rows(status: &Status, peers: &[PeerStatus], now: Instant) -> Vec<PeerRow> {
                 tx: data.map_or(0, |peer| peer.tx_bytes),
                 heard: view.heard,
                 candidates: view.candidates.iter().map(ToString::to_string).collect(),
+                probes: view.probes.iter().map(ProbeRow::from).collect(),
             }
         })
         .collect()
@@ -1602,6 +1638,12 @@ mod tests {
                     loss_percent: Some(3),
                     heard: true,
                     candidates: vec![SocketAddr::from(([192, 0, 2, 1], 41641))],
+                    probes: vec![meshora_control::paths::CandidateReport {
+                        addr: SocketAddr::from(([192, 0, 2, 1], 41641)),
+                        answered: true,
+                        working: true,
+                        heard: false,
+                    }],
                 },
                 PeerView {
                     key: key(2),
@@ -1613,6 +1655,7 @@ mod tests {
                     loss_percent: None,
                     heard: false,
                     candidates: Vec::new(),
+                    probes: Vec::new(),
                 },
                 PeerView {
                     key: key(3),
@@ -1624,6 +1667,7 @@ mod tests {
                     loss_percent: None,
                     heard: false,
                     candidates: Vec::new(),
+                    probes: Vec::new(),
                 },
             ],
         };
@@ -1660,6 +1704,13 @@ mod tests {
                 tx: 20,
                 heard: true,
                 candidates: vec!["192.0.2.1:41641".into()],
+                probes: vec![ProbeRow {
+                    addr: "192.0.2.1:41641".into(),
+                    family: "ipv4",
+                    answered: true,
+                    working: true,
+                    heard: false,
+                }],
             }
         );
         assert_eq!(rows_now[1].route, "relay");

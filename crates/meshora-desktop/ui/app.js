@@ -528,6 +528,28 @@ function punchHint(peer) {
   return "对方的报文一次都没到：可能是你这边的路由器挡了，或者有一边是对称型 NAT。点地址卡片上的\"诊断\"把信息发给帮你看的人";
 }
 
+/**
+ * 一位朋友的各个地址试得怎么样，IPv6、公网 IPv4、局域网分开写：一眼看出哪条通了、哪条被挡。
+ * "发出去有回应"是往对方那边通，"对方发来过"是从对方那边到这里通
+ */
+function probeLines(p) {
+  const probes = p.probes || [];
+  if (!probes.length) return [`  （没有地址可试）`];
+  const state = (x) =>
+    x.working ? "通着" : [x.answered ? "回应过、现在不通" : "没回应", x.heard ? "对方发来过" : ""].filter(Boolean).join("，");
+  const groups = [
+    ["IPv6", "ipv6"],
+    ["公网 IPv4", "ipv4"],
+    ["局域网", "lan"],
+  ];
+  return groups
+    .map(([label, family]) => {
+      const list = probes.filter((x) => x.family === family);
+      return list.length ? `  ${label}：${list.map((x) => `${x.addr}（${state(x)}）`).join("，")}` : null;
+    })
+    .filter(Boolean);
+}
+
 /** 直连模式的诊断信息：一段纯文本，复制了发给帮忙排查的人。不含私钥，有 IP 地址 */
 async function directDiagnostics() {
   const ov = state.overview;
@@ -541,7 +563,10 @@ async function directDiagnostics() {
     `代理 ${d.proxied ? "像是开着（STUN 域名被解析成 198.18.x.x，或者出口不止一个）：公网 IPv4 多半用不了" : "没看出来"}`,
     `本机候选 ${(d.endpoints || []).join(", ") || "（没有）"}`,
     "",
-    ...ov.peers.map((p) => `${nameOf(p)} ${p.ip} · ${p.route}${p.online ? " · 在线" : ""} · ${p.heard ? "收到过对方报文" : "没收到过对方报文"} · 试过 ${(p.candidates || []).join(", ") || "（没有地址）"}`),
+    ...ov.peers.flatMap((p) => [
+      `${nameOf(p)} ${p.ip} · ${p.route}${p.online ? " · 在线" : ""} · ${p.heard ? "收到过对方报文" : "没收到过对方报文"}`,
+      ...probeLines(p),
+    ]),
   ];
   let logs = [];
   try {

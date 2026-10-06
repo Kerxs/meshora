@@ -266,6 +266,8 @@ pub struct PeerView {
     pub heard: bool,
     /// 正在探测的候选地址（诊断用）。
     pub candidates: Vec<SocketAddr>,
+    /// 每个候选的探测情况（诊断用）：往它那边通不通、从它那边来过报文没有。
+    pub probes: Vec<paths::CandidateReport>,
 }
 
 /// 和协调服务的一条连接：读由单独的任务负责（Noise 的读不能在 select 里被中途取消），
@@ -806,13 +808,14 @@ impl Node {
         }
 
         self.peers.retain(|key, _| set.get(key).is_some());
+        let v6_first = !self.ipv6.is_empty();
         for peer in &peers {
             let eager = self.eager;
             let state = self.peers.entry(peer.key).or_insert_with(|| {
                 info!(peer = %peer.key, ip = %peer.overlay_ip, endpoints = ?peer.endpoints, "新的 peer，开始探测");
                 let mut paths = PeerPaths::default();
                 if eager {
-                    paths.punch_eagerly(now + EAGER_PUNCH);
+                    paths.punch_eagerly(now, now + EAGER_PUNCH, v6_first);
                 }
                 PeerState {
                     overlay_ip: peer.overlay_ip,
@@ -1203,6 +1206,7 @@ impl Node {
 
     /// 把此刻的样子交给订阅者，没变就不通知
     fn publish(&self, status: &watch::Sender<Status>, coord_connected: bool) {
+        let now = Instant::now();
         let mut peers: Vec<PeerView> = self
             .peers
             .iter()
@@ -1235,6 +1239,7 @@ impl Node {
                 .map(|loss| (loss * 100.0).round().clamp(0.0, 100.0) as u8),
                 heard: state.heard,
                 candidates: state.paths.candidate_addrs(),
+                probes: state.paths.report(now),
             })
             .collect();
         peers.sort_by_key(|peer| peer.overlay_ip);
@@ -1255,39 +1260,42 @@ impl Node {
         std::mem::take(&mut self.network_changed)
     }
 
-    /// 本机的候选端点：局域网地址，加上探测到的公网地址
+    /// 本机的候选端点：公网 IPv6、STUN 问到的公网地址、路由器开的端口，再是局域网地址。
+    ///
+    /// 顺序有讲究：连接码最多带 8 个，放不下时从后面截掉。公网的排前面 —— 隔着公网的朋友只能靠它们；
+    /// 局域网地址只对同一个局域网里的人有用
     fn endpoints(&self) -> Vec<SocketAddr> {
         let mut endpoints = Vec::new();
         if self.relay_only {
             return endpoints;
+        }
+        let mut push = |addr: SocketAddr| {
+            if !endpoints.contains(&addr) {
+                endpoints.push(addr);
+            }
+        };
+        // 公网 IPv6：不用问 STUN，地址本身就是公网的。第一个是系统真正拿来发包的那个（见 source_ipv6）
+        if let Some(first) = self.ipv6.first() {
+            push(*first);
+        }
+        if let Some(reflexive) = self.reflexive {
+            push(reflexive);
+        }
+        for extra in &self.hosting.extra_endpoints {
+            push(*extra);
+        }
+        for v6 in self.ipv6.iter().skip(1) {
+            push(*v6);
         }
         // 每块真实网卡的局域网地址都带上：在同一个局域网里的人靠它直接连，不用绕路由器
         // （很多路由器不支持从里面绕回自己的公网地址）。通往外面那条路由用的网卡排第一
         if let Some(local) = self.local
             && usable_lan(local.ip(), None)
         {
-            endpoints.push(local);
+            push(local);
         }
         for lan in &self.lan {
-            if !endpoints.contains(lan) {
-                endpoints.push(*lan);
-            }
-        }
-        // 公网 IPv6：不用问 STUN，地址本身就是公网的
-        for v6 in &self.ipv6 {
-            if !endpoints.contains(v6) {
-                endpoints.push(*v6);
-            }
-        }
-        if let Some(reflexive) = self.reflexive
-            && !endpoints.contains(&reflexive)
-        {
-            endpoints.push(reflexive);
-        }
-        for extra in &self.hosting.extra_endpoints {
-            if !endpoints.contains(extra) {
-                endpoints.push(*extra);
-            }
+            push(*lan);
         }
         endpoints
     }
@@ -1441,9 +1449,9 @@ fn lan_endpoints(port: u16) -> Vec<SocketAddr> {
     out
 }
 
-/// 最多带几个 IPv6 地址：系统常常同时有一个固定的和几个临时的，带两个够了
-/// （第一个是系统真正拿来发包的那个，见 [`source_ipv6`]）
-const MAX_IPV6: usize = 2;
+/// 最多带几个 IPv6 地址：系统常常同时有一个固定的和几个临时的，手机连着 Wi-Fi 又开着流量时两套都有。
+/// 第一个是系统真正拿来发包的那个（见 [`source_ipv6`]）
+const MAX_IPV6: usize = 4;
 
 /// 查路由用的一个公网 IPv6 地址（阿里的公共 DNS）。只是让系统选出口、选源地址，不往它发任何东西
 const ROUTE_PROBE_V6: SocketAddr = SocketAddr::new(

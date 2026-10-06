@@ -28,7 +28,8 @@ use meshora_types::Path;
 /// 每个候选多久探测一次。
 pub const PING_INTERVAL: Duration = Duration::from_secs(3);
 /// 正在用的直连多久探测一次。它断了要尽快发现：游戏的报文正往那边发。
-pub const ACTIVE_PING_INTERVAL: Duration = Duration::from_secs(1);
+/// 丢一次马上补探，断线五六秒内就能发现；不必每秒一个
+pub const ACTIVE_PING_INTERVAL: Duration = Duration::from_secs(2);
 /// 一个 Ping 发出去多久没回应，就算丢了一次。
 pub const PONG_WAIT: Duration = Duration::from_secs(1);
 /// 连着丢几次就算不通。一次不算：UDP 丢一个包很平常，丢了就立刻补探一次。
@@ -70,10 +71,19 @@ pub const SETTLED_SAMPLES: u32 = 5;
 pub const RELAY_PATIENCE: Duration = Duration::from_secs(30);
 /// 打洞期间（见 [`PeerPaths::punch_eagerly`]）没通的候选多久探测一次。
 ///
-/// 发出去的 Ping 要等 [`PONG_WAIT`] 才判丢、才发下一个，所以再密也就是这个节奏。
-/// 比平时的 [`PING_INTERVAL`] 密三倍：有的路由器给"只出不进"的映射留的时间很短，
-/// 3 秒一次的话两边的洞可能错开
-pub const EAGER_INTERVAL: Duration = PONG_WAIT;
+/// 比平时的 [`PING_INTERVAL`] 密一些：两边的洞要在路由器的映射过期前对上。
+/// 家用路由器给 UDP 映射留的时间一般在 30 秒以上，2 秒一次足够，不必每秒一个
+pub const EAGER_INTERVAL: Duration = Duration::from_secs(2);
+/// 一直没回应的候选，探测间隔从 [`PING_INTERVAL`] 起每没回应一次翻一倍，最多到这么久。
+///
+/// 打不通的地址（对方的局域网地址、被防火墙挡死的端口）不必一直 3 秒一个地发；
+/// 对方换了地址、重新加进来、本机换了网络时会马上重新探测
+pub const MAX_IDLE_INTERVAL: Duration = Duration::from_secs(30);
+/// 两边都有公网 IPv6 时，打洞先只打 IPv6 这么久，再加上 IPv4。
+///
+/// IPv6 没有 NAT，同时发包基本就能通；IPv4 要碰运气。先集中打 IPv6，通了的话 IPv4 那些就按
+/// [`MAX_IDLE_INTERVAL`] 慢慢探，不跟着密集地发
+pub const V6_HEAD_START: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Debug, Default)]
 struct Candidate {
@@ -154,14 +164,7 @@ impl Candidate {
     /// 到没到探测的时候。顺带结算上一个 Ping：等够了还没回就记一次丢失。
     /// 到了的话记为"刚探测过"
     fn poll_due(&mut self, now: Instant, interval: Duration) -> bool {
-        if let Some(sent) = self.awaiting
-            && now.duration_since(sent) >= PONG_WAIT
-        {
-            // 先不记进丢包率：这次丢失是"偶尔丢一个"还是"整条路断了"，要等下文。
-            // 见 pong()
-            self.awaiting = None;
-            self.misses = self.misses.saturating_add(1);
-        }
+        self.settle(now);
         let working = self
             .last_pong
             .is_some_and(|pong| now.duration_since(pong) < FRESH);
@@ -177,6 +180,18 @@ impl Candidate {
             return true;
         }
         false
+    }
+
+    /// 结算上一个 Ping：等够了还没回就记一次丢失
+    fn settle(&mut self, now: Instant) {
+        if let Some(sent) = self.awaiting
+            && now.duration_since(sent) >= PONG_WAIT
+        {
+            // 先不记进丢包率：这次丢失是"偶尔丢一个"还是"整条路断了"，要等下文。
+            // 见 pong()
+            self.awaiting = None;
+            self.misses = self.misses.saturating_add(1);
+        }
     }
 
     /// 收到了回应
@@ -196,6 +211,14 @@ impl Candidate {
         self.last_pong = Some(now);
         self.misses = 0;
         self.sample(rtt);
+    }
+
+    /// 没通的候选多久探测一次：从 [`PING_INTERVAL`] 起，每多没回应一次翻一倍，
+    /// 最多 [`MAX_IDLE_INTERVAL`]。前 [`MAX_MISSES`] 次和紧接着的一次不算
+    /// （那是"刚断"或者刚被叫醒，要按正常节奏探）
+    fn idle_interval(&self) -> Duration {
+        let doublings = self.misses.saturating_sub(MAX_MISSES + 1).min(4);
+        (PING_INTERVAL * (1 << doublings)).min(MAX_IDLE_INTERVAL)
     }
 
     /// 此前的探测结果作废，马上重新探测
@@ -220,6 +243,21 @@ pub struct PeerPaths {
     relay_favored_since: Option<Instant>,
     /// 打洞期间到什么时候（见 [`punch_eagerly`](Self::punch_eagerly)）
     eager_until: Option<Instant>,
+    /// 打洞时先只打 IPv6，到这个时刻才加上 IPv4（见 [`V6_HEAD_START`]）
+    v4_from: Option<Instant>,
+}
+
+/// 一个候选的探测情况（给诊断看）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CandidateReport {
+    /// 地址。
+    pub addr: SocketAddr,
+    /// 我们发的 Ping 从这里得到过回应：往它那个方向是通的。
+    pub answered: bool,
+    /// 现在还通着（最近收到过回应）。
+    pub working: bool,
+    /// 对方从这个地址发来过 Ping：从它那个方向到我们是通的。
+    pub heard: bool,
 }
 
 impl PeerPaths {
@@ -251,19 +289,36 @@ impl PeerPaths {
             candidate.last_ping = None;
             // 正在等的那个 Ping 不算丢：这一次是另起炉灶
             candidate.awaiting = None;
+            // 退避也从头来：对方刚说了"现在打"，接下来按正常节奏探测
+            candidate.misses = candidate.misses.min(MAX_MISSES);
         }
     }
 
     /// 到 `until` 为止，没通的候选每 [`EAGER_INTERVAL`] 探测一次，而不是平时的 [`PING_INTERVAL`]。
     ///
     /// 直连模式里一个 peer 刚加进来时用：没有中继兜底，两边的洞得尽快对上。
-    pub fn punch_eagerly(&mut self, until: Instant) {
+    /// `v6_first`：本机有公网 IPv6，先只打 IPv6（见 [`V6_HEAD_START`]）
+    pub fn punch_eagerly(&mut self, now: Instant, until: Instant, v6_first: bool) {
         self.eager_until = Some(until);
+        self.v4_from = v6_first.then(|| now + V6_HEAD_START);
     }
 
     /// 现在的候选地址（给诊断看）。
     pub fn candidate_addrs(&self) -> Vec<SocketAddr> {
         self.candidates.keys().copied().collect()
+    }
+
+    /// 每个候选的探测情况（给诊断看）。
+    pub fn report(&self, now: Instant) -> Vec<CandidateReport> {
+        self.candidates
+            .iter()
+            .map(|(addr, candidate)| CandidateReport {
+                addr: *addr,
+                answered: candidate.last_pong.is_some(),
+                working: candidate.fresh(now),
+                heard: candidate.learned.is_some(),
+            })
+            .collect()
     }
 
     /// 本机换了网络：此前的探测结果一律作废，所有候选马上重新探测。
@@ -292,17 +347,31 @@ impl PeerPaths {
         self.candidates.retain(|_, candidate| {
             candidate.advertised || candidate.fresh(now) || candidate.remembered(now)
         });
-        let idle = if self.eager_until.is_some_and(|until| now < until) {
-            EAGER_INTERVAL
-        } else {
-            PING_INTERVAL
-        };
+        let eager = self.eager_until.is_some_and(|until| now < until);
+        let has_v6 = self.candidates.keys().any(SocketAddr::is_ipv6);
+        // IPv6 已经通了：IPv4 那些不必再密集地打
+        let v6_working = self
+            .candidates
+            .iter()
+            .any(|(addr, candidate)| addr.is_ipv6() && candidate.fresh(now));
+        let v4_waiting = has_v6 && self.v4_from.is_some_and(|from| now < from);
         let mut due = Vec::new();
         for (addr, candidate) in &mut self.candidates {
+            // 先结算上一个 Ping，退避的间隔才算得对
+            candidate.settle(now);
+            let working = candidate.fresh(now);
+            // 对方从这个地址发来过 Ping 的不等：洞已经开了一半
+            if addr.is_ipv4() && v4_waiting && !working && candidate.learned.is_none() {
+                continue;
+            }
             let interval = if Some(*addr) == active {
                 ACTIVE_PING_INTERVAL
+            } else if working {
+                PING_INTERVAL
+            } else if eager && !(addr.is_ipv4() && v6_working) {
+                EAGER_INTERVAL
             } else {
-                idle
+                candidate.idle_interval()
             };
             if candidate.poll_due(now, interval) {
                 due.push(*addr);
@@ -502,23 +571,90 @@ mod tests {
     }
 
     #[test]
-    fn punching_probes_every_second_then_backs_off() {
+    fn punching_probes_every_two_seconds_then_backs_off() {
         let now = Instant::now();
         let mut paths = PeerPaths::default();
         paths.set_advertised(&[addr(1)]);
-        paths.punch_eagerly(now + 3 * SEC);
+        paths.punch_eagerly(now, now + 5 * SEC, false);
         assert_eq!(paths.due_pings(now, None), [addr(1)]);
-        // 打洞期间：没回应，一秒后再探
-        assert!(paths.due_pings(now + SEC - MS, None).is_empty());
-        assert_eq!(paths.due_pings(now + SEC, None), [addr(1)]);
+        // 打洞期间：没回应，两秒后再探
+        assert!(paths.due_pings(now + 2 * SEC - MS, None).is_empty());
         assert_eq!(paths.due_pings(now + 2 * SEC, None), [addr(1)]);
-        // 过了打洞期：回到平时的节奏
-        assert!(paths.due_pings(now + 4 * SEC, None).is_empty());
-        assert_eq!(
-            paths.due_pings(now + 2 * SEC + PING_INTERVAL, None),
-            [addr(1)]
-        );
+        assert_eq!(paths.due_pings(now + 4 * SEC, None), [addr(1)]);
+        // 过了打洞期：一直没回应的，间隔一次比一次长（3、6、12、24 秒），最多 30 秒
+        let mut last = now + 4 * SEC;
+        for gap in [3, 6, 12, 24, 30, 30] {
+            let next = last + gap * SEC;
+            assert!(
+                paths.due_pings(next - MS, None).is_empty(),
+                "{gap} 秒之前不探"
+            );
+            assert_eq!(paths.due_pings(next, None), [addr(1)], "{gap} 秒");
+            last = next;
+        }
         assert_eq!(paths.candidate_addrs(), [addr(1)]);
+    }
+
+    #[test]
+    fn a_fresh_nudge_restarts_the_backoff() {
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        let mut t = now;
+        for _ in 0..6 {
+            t += 30 * SEC;
+            paths.due_pings(t, None);
+        }
+        // 对方说"现在打"（新端点、打洞请求）：马上探，之后回到 3 秒的节奏
+        paths.ping_now(addr(1));
+        assert_eq!(paths.due_pings(t + MS, None), [addr(1)]);
+        assert_eq!(paths.due_pings(t + MS + PING_INTERVAL, None), [addr(1)]);
+    }
+
+    #[test]
+    fn ipv6_gets_a_head_start_and_ipv4_slows_down_once_it_works() {
+        let now = Instant::now();
+        let v6: SocketAddr = "[2001:db8::1]:41641".parse().unwrap();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1), v6]);
+        paths.punch_eagerly(now, now + 30 * SEC, true);
+        // 先只打 IPv6
+        assert_eq!(paths.due_pings(now, None), [v6]);
+        assert_eq!(paths.due_pings(now + 2 * SEC, None), [v6]);
+        // 先打一会儿之后加上 IPv4
+        assert_eq!(paths.due_pings(now + V6_HEAD_START, None), [addr(1), v6]);
+        // IPv6 通了：IPv4 不再每 2 秒一个，退回慢节奏
+        paths.on_pong(v6, 20 * MS, now + V6_HEAD_START + 20 * MS);
+        let t = now + V6_HEAD_START + 2 * SEC;
+        assert!(!paths.due_pings(t, None).contains(&addr(1)));
+        assert_eq!(
+            paths.report(t),
+            [
+                CandidateReport {
+                    addr: addr(1),
+                    answered: false,
+                    working: false,
+                    heard: false
+                },
+                CandidateReport {
+                    addr: v6,
+                    answered: true,
+                    working: true,
+                    heard: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ipv4_address_the_peer_pinged_from_is_not_held_back() {
+        let now = Instant::now();
+        let v6: SocketAddr = "[2001:db8::1]:41641".parse().unwrap();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[v6]);
+        paths.punch_eagerly(now, now + 30 * SEC, true);
+        assert!(paths.learn(addr(9), now));
+        assert_eq!(paths.due_pings(now, None), [addr(9), v6]);
     }
 
     #[test]
@@ -559,12 +695,19 @@ mod tests {
     }
 
     #[test]
-    fn the_path_in_use_is_pinged_every_second() {
+    fn the_path_in_use_is_pinged_more_often() {
         let now = Instant::now();
         let mut paths = working(now);
         let active = Some(addr(1));
-        assert!(paths.due_pings(now + SEC - MS, active).is_empty());
-        assert_eq!(paths.due_pings(now + SEC, active), [addr(1)]);
+        assert!(
+            paths
+                .due_pings(now + ACTIVE_PING_INTERVAL - MS, active)
+                .is_empty()
+        );
+        assert_eq!(
+            paths.due_pings(now + ACTIVE_PING_INTERVAL, active),
+            [addr(1)]
+        );
     }
 
     #[test]
@@ -573,15 +716,20 @@ mod tests {
         let mut paths = working(now);
         let current = Some(Path::Direct(addr(1)));
         let active = Some(addr(1));
-        // 1 秒：例行探测，从此再也没有回应
-        assert_eq!(paths.due_pings(now + SEC, active), [addr(1)]);
-        // 2 秒：丢了一次 —— 还算通，马上补探
-        assert_eq!(paths.due_pings(now + 2 * SEC, active), [addr(1)]);
-        assert_eq!(paths.choose(current, &relays(), now + 2 * SEC), current);
-        // 3 秒：连丢两次，回落中继。以前要等到 6.5 秒
-        paths.due_pings(now + 3 * SEC, active);
-        assert_eq!(paths.choose(current, &relays(), now + 3 * SEC), relay());
-        assert!(!paths.has_fresh(now + 3 * SEC));
+        let a = ACTIVE_PING_INTERVAL;
+        // 例行探测，从此再也没有回应
+        assert_eq!(paths.due_pings(now + a, active), [addr(1)]);
+        // 丢了一次 —— 还算通，马上补探
+        assert_eq!(paths.due_pings(now + a + PONG_WAIT, active), [addr(1)]);
+        assert_eq!(
+            paths.choose(current, &relays(), now + a + PONG_WAIT),
+            current
+        );
+        // 连丢两次，回落中继（4 秒）。以前要等到 6.5 秒
+        let t = now + a + 2 * PONG_WAIT;
+        paths.due_pings(t, active);
+        assert_eq!(paths.choose(current, &relays(), t), relay());
+        assert!(!paths.has_fresh(t));
     }
 
     #[test]
@@ -704,11 +852,12 @@ mod tests {
         let mut paths = working(now);
         assert_eq!(paths.loss(addr(1)), Some(0.0));
         let active = Some(addr(1));
-        paths.due_pings(now + SEC, active);
+        let a = now + ACTIVE_PING_INTERVAL;
+        paths.due_pings(a, active);
         // 1 秒没回：丢了一次，补探
-        assert_eq!(paths.due_pings(now + 2 * SEC, active), [addr(1)]);
+        assert_eq!(paths.due_pings(a + PONG_WAIT, active), [addr(1)]);
         // 补探的回来了：那一次算偶尔丢包
-        paths.on_pong(addr(1), 20 * MS, now + 2 * SEC + 20 * MS);
+        paths.on_pong(addr(1), 20 * MS, a + PONG_WAIT + 20 * MS);
         let loss = paths.loss(addr(1)).unwrap();
         assert!(loss > 0.05, "{loss}");
     }
@@ -784,8 +933,8 @@ mod tests {
         assert_eq!(rtt, 40 * MS);
         assert_eq!(loss, 0.0);
         // 正在走中继时探测得更勤
-        assert!(paths.relay_due(relay().unwrap(), now + SEC, true));
-        assert!(!paths.relay_due(relay().unwrap(), now + SEC + MS, false));
+        assert!(paths.relay_due(relay().unwrap(), now + ACTIVE_PING_INTERVAL, true));
+        assert!(!paths.relay_due(relay().unwrap(), now + ACTIVE_PING_INTERVAL + MS, false));
     }
 
     #[test]
@@ -1019,15 +1168,19 @@ mod tests {
         measure_relay_n(&mut paths, relay_n(1), 40 * MS, now);
         let on_0 = Some(relay_n(0));
         assert_eq!(paths.choose(None, &both, now), on_0);
-        // 中继 0 挂了：正在用它，每秒探测，连丢两次就换到中继 1
-        assert!(paths.relay_due(relay_n(0), now + SEC, true));
+        // 中继 0 挂了：正在用它，探测得勤，连丢两次就换到中继 1
+        let a = now + ACTIVE_PING_INTERVAL;
+        assert!(paths.relay_due(relay_n(0), a, true));
         assert!(
-            paths.relay_due(relay_n(0), now + 2 * SEC, true),
+            paths.relay_due(relay_n(0), a + PONG_WAIT, true),
             "丢了一次，补探"
         );
-        assert_eq!(paths.choose(on_0, &both, now + 2 * SEC), on_0);
-        paths.relay_due(relay_n(0), now + 3 * SEC, true);
-        assert_eq!(paths.choose(on_0, &both, now + 3 * SEC), Some(relay_n(1)));
+        assert_eq!(paths.choose(on_0, &both, a + PONG_WAIT), on_0);
+        paths.relay_due(relay_n(0), a + 2 * PONG_WAIT, true);
+        assert_eq!(
+            paths.choose(on_0, &both, a + 2 * PONG_WAIT),
+            Some(relay_n(1))
+        );
     }
 
     #[test]
