@@ -16,6 +16,8 @@ publish = false
 igd-next = { version = "0.17", default-features = false }
 # 列出本机每块网卡的地址：局域网候选端点要把真实的局域网地址都带上
 if-addrs = "0.15"
+# 数据面的 IPv6 socket 要设 IPV6_V6ONLY，才能和 IPv4 的用同一个端口号
+socket2 = "0.6"
 meshora-types = { path = "crates/meshora-types" }
 meshora-dataplane = { path = "crates/meshora-dataplane" }
 meshora-proto = { path = "crates/meshora-proto" }

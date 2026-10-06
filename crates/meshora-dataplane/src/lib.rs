@@ -116,6 +116,14 @@ pub trait DataPlane: Send + Sync {
 
     /// 所有 peer 的当前状态，顺序不做保证。
     fn status(&self) -> Vec<PeerStatus>;
+
+    /// 只收发 IPv6 的那个 socket 的本地端口，没有 IPv6 时是 `None`。
+    ///
+    /// 有的话控制面把本机的公网 IPv6 地址也当候选端点：IPv6 大多没有 NAT，只有路由器的防火墙，
+    /// 两边同时发包就打通了。报文照样经 [`send_control`](Self::send_control) 发，数据面按地址类型选 socket
+    fn ipv6_port(&self) -> Option<u16> {
+        None
+    }
 }
 
 /// 一个 peer 的运行时状态快照。

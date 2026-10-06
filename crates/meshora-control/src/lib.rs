@@ -666,6 +666,10 @@ struct Node {
     local: Option<SocketAddr>,
     /// 本机所有能用的局域网地址（见 [`lan_endpoints`]），每个节拍重新看一次
     lan: Vec<SocketAddr>,
+    /// 本机的公网 IPv6 地址（见 [`ipv6_endpoints`]），每个节拍重新看一次；数据面没有 IPv6 时一直是空的
+    ipv6: Vec<SocketAddr>,
+    /// 数据面 IPv6 socket 的端口
+    ipv6_port: Option<u16>,
     /// 最近一次有网络时的本机地址。换网络往往中间断一下（None），所以跟它比，不跟上一拍比
     last_local_ip: Option<IpAddr>,
     network_changed: bool,
@@ -689,6 +693,7 @@ struct Node {
 impl Node {
     fn new(config: &Config, welcome: &Welcome, dataplane: Arc<dyn DataPlane>) -> Self {
         let now = Instant::now();
+        let ipv6_port = dataplane.ipv6_port();
         let mut node = Self {
             secret: config.secret.clone(),
             coord: config.coord,
@@ -706,6 +711,8 @@ impl Node {
             reflexive: None,
             local: None,
             lan: Vec::new(),
+            ipv6: Vec::new(),
+            ipv6_port,
             last_local_ip: None,
             network_changed: false,
             reported: None,
@@ -1060,6 +1067,7 @@ impl Node {
     fn check_network(&mut self, now: Instant) {
         self.local = local_endpoint(self.coord, self.local_port);
         self.lan = lan_endpoints(self.local_port);
+        self.ipv6 = self.ipv6_port.map(ipv6_endpoints).unwrap_or_default();
         let Some(new) = self.local.map(|local| local.ip()) else {
             return;
         };
@@ -1150,6 +1158,12 @@ impl Node {
         for lan in &self.lan {
             if !endpoints.contains(lan) {
                 endpoints.push(*lan);
+            }
+        }
+        // 公网 IPv6：不用问 STUN，地址本身就是公网的
+        for v6 in &self.ipv6 {
+            if !endpoints.contains(v6) {
+                endpoints.push(*v6);
             }
         }
         if let Some(reflexive) = self.reflexive
@@ -1303,6 +1317,39 @@ fn lan_endpoints(port: u16) -> Vec<SocketAddr> {
     out
 }
 
+/// 最多带几个 IPv6 地址：系统常常同时有一个固定的和几个临时的，带两个够了
+const MAX_IPV6: usize = 2;
+
+/// 本机每块网卡上的公网 IPv6 地址（全球单播 2000::/3），配上数据面 IPv6 socket 的端口
+fn ipv6_endpoints(port: u16) -> Vec<SocketAddr> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for interface in interfaces {
+        let if_addrs::IfAddr::V6(v6) = interface.addr else {
+            continue;
+        };
+        let addr = SocketAddr::new(IpAddr::V6(v6.ip), port);
+        if global_ipv6(v6.ip) && !out.contains(&addr) {
+            out.push(addr);
+        }
+        if out.len() == MAX_IPV6 {
+            break;
+        }
+    }
+    out
+}
+
+/// 公网 IPv6：全球单播（2000::/3），去掉文档用的 2001:db8::/32 和 Teredo（2001::/32，经 IPv4 隧道，打洞不靠谱）
+fn global_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let s = ip.segments();
+    let global = (s[0] & 0xe000) == 0x2000;
+    let documentation = s[0] == 0x2001 && s[1] == 0x0db8;
+    let teredo = s[0] == 0x2001 && s[1] == 0;
+    global && !documentation && !teredo
+}
+
 /// 一个本机地址能不能当局域网候选：
 ///
 /// - 只要私网地址（10/8、172.16/12、192.168/16）。公网地址由 STUN 问
@@ -1413,6 +1460,18 @@ mod lan_tests {
         assert!(!usable_lan(ip("127.0.0.1"), Some(8)));
         assert!(!usable_lan(ip("169.254.3.4"), Some(16)));
         assert!(!usable_lan(ip("fd00::1"), None));
+    }
+
+    #[test]
+    fn only_global_ipv6_counts() {
+        let v6 = |s: &str| s.parse::<std::net::Ipv6Addr>().unwrap();
+        assert!(global_ipv6(v6("240e:3b7:1234::5")));
+        assert!(global_ipv6(v6("2408:8207:1::1")));
+        assert!(!global_ipv6(v6("fe80::1")), "链路本地");
+        assert!(!global_ipv6(v6("fd12:3456::1")), "唯一本地");
+        assert!(!global_ipv6(v6("::1")));
+        assert!(!global_ipv6(v6("2001:db8::1")), "文档用");
+        assert!(!global_ipv6(v6("2001:0:4136:e378::1")), "Teredo");
     }
 
     #[test]

@@ -2373,6 +2373,7 @@ dependencies = [
  "meshora-tun",
  "meshora-types",
  "meshora-wg",
+ "socket2",
  "tokio",
  "tracing",
  "tracing-subscriber",

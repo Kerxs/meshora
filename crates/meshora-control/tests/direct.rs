@@ -66,6 +66,18 @@ async fn start(
     peers: Vec<DirectPeer>,
     stun: SocketAddr,
 ) -> Node {
+    start_with(secret, ip, role, peers, stun, None).await
+}
+
+/// `v6` 是只收发 IPv6 的第二个 socket（数据面按地址类型选用）
+async fn start_with(
+    secret: NodeSecret,
+    ip: Ipv4Addr,
+    role: Role,
+    peers: Vec<DirectPeer>,
+    stun: SocketAddr,
+    v6: Option<std::net::UdpSocket>,
+) -> Node {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let local_port = socket.local_addr().unwrap().port();
     let session = DirectSession::new(DirectConfig {
@@ -86,9 +98,10 @@ async fn start(
         let _ = events_tx.send(event);
     };
     let dataplane = Arc::new(
-        UserspaceDataPlane::start(
+        UserspaceDataPlane::start_dual(
             &secret,
             socket,
+            v6,
             TunChannels { from_tun, to_tun },
             Arc::new(sink),
         )
@@ -314,5 +327,59 @@ async fn diagnostics_say_nothing_arrived_when_both_codes_are_wrong() {
         peer.candidates.contains(&wrong),
         "诊断里列出试过的地址：{:?}",
         peer.candidates
+    );
+}
+
+#[tokio::test]
+async fn friends_connect_over_ipv6_alone() {
+    // 码里只有 IPv6 地址：数据面的 IPv6 socket 收发，探测、握手、数据都走它
+    let Ok(host6) = std::net::UdpSocket::bind("[::1]:0") else {
+        eprintln!("本机没有 IPv6 回环，跳过");
+        return;
+    };
+    let guest6 = std::net::UdpSocket::bind("[::1]:0").unwrap();
+    let (host_at, guest_at) = (host6.local_addr().unwrap(), guest6.local_addr().unwrap());
+    let stun = fake_stun().await;
+    let host_secret = NodeSecret::generate();
+    let guest_secret = NodeSecret::generate();
+    let guest_ip = Ipv4Addr::new(100, 96, 0, 2);
+    let mut host = start_with(
+        host_secret.clone(),
+        HOST_IP,
+        Role::Host,
+        vec![],
+        stun,
+        Some(host6),
+    )
+    .await;
+    let guest = start_with(
+        guest_secret.clone(),
+        guest_ip,
+        Role::Guest,
+        vec![DirectPeer {
+            key: host_secret.public_key(),
+            ip: HOST_IP,
+            name: String::new(),
+            endpoints: vec![host_at],
+        }],
+        stun,
+        Some(guest6),
+    )
+    .await;
+    host.handle.set_peers(vec![DirectPeer {
+        key: guest_secret.public_key(),
+        ip: guest_ip,
+        name: String::new(),
+        endpoints: vec![guest_at],
+    }]);
+    assert_eq!(
+        deliver(&guest, HOST_IP, &mut host, b"over v6").await[20..],
+        *b"over v6"
+    );
+    let status = host.status.borrow().clone();
+    assert!(
+        matches!(status.peers[0].path, Some(meshora_types::Path::Direct(addr)) if addr.is_ipv6()),
+        "走的是 IPv6 直连：{:?}",
+        status.peers[0].path
     );
 }

@@ -46,6 +46,10 @@ type RelayOutbox = mpsc::Sender<(NodeKey, Vec<u8>)>;
 struct Shared {
     engine: Mutex<Engine>,
     socket: UdpSocket,
+    /// 同一个端口上的 IPv6 socket（只收发 IPv6），没有 IPv6 时是 None。
+    /// IPv6 大多没有 NAT，只有路由器的防火墙：两边同时发包就打通了
+    socket6: Option<UdpSocket>,
+    sync_socket6: Option<std::net::UdpSocket>,
     /// 同一个 socket 的另一个句柄，给同步方法用。tokio 的 try_send_to 要等 reactor
     /// 先报告过可写才能发，刚绑定的 socket 第一次调用必然 WouldBlock
     sync_socket: std::net::UdpSocket,
@@ -69,7 +73,11 @@ impl Shared {
     async fn transmit(self: &Arc<Self>, t: Transmit) {
         match t.link {
             Link::Direct(addr) => {
-                if let Err(err) = self.socket.send_to(&t.datagram, addr).await {
+                let socket = match (addr, &self.socket6) {
+                    (SocketAddr::V6(_), Some(v6)) => v6,
+                    _ => &self.socket,
+                };
+                if let Err(err) = socket.send_to(&t.datagram, addr).await {
                     debug!(%addr, %err, "发往直连地址失败");
                 }
             }
@@ -81,11 +89,19 @@ impl Shared {
     fn try_transmit(self: &Arc<Self>, t: Transmit) {
         match t.link {
             Link::Direct(addr) => {
-                if let Err(err) = self.sync_socket.send_to(&t.datagram, addr) {
+                if let Err(err) = self.sync_send(&t.datagram, addr) {
                     debug!(%addr, %err, "发往直连地址失败");
                 }
             }
             Link::Relay { relay, addr, peer } => self.relay_send(relay, addr, peer, t.datagram),
+        }
+    }
+
+    /// 在同步方法里直接发：按地址的类型选 IPv4 或 IPv6 的 socket
+    fn sync_send(&self, datagram: &[u8], to: SocketAddr) -> io::Result<usize> {
+        match (to, &self.sync_socket6) {
+            (SocketAddr::V6(_), Some(v6)) => v6.send_to(datagram, to),
+            _ => self.sync_socket.send_to(datagram, to),
         }
     }
 
@@ -150,13 +166,37 @@ impl UserspaceDataPlane {
         tun: TunChannels,
         events: Arc<dyn EventSink>,
     ) -> io::Result<Self> {
+        Self::start_dual(secret, socket, None, tun, events)
+    }
+
+    /// 和 [`start`](Self::start) 一样，再加一个只收发 IPv6 的 socket（最好和 `socket` 同一个端口号）。
+    /// 发往 IPv6 地址的报文从它走，从它收到的照常交给引擎。
+    pub fn start_dual(
+        secret: &NodeSecret,
+        socket: std::net::UdpSocket,
+        socket6: Option<std::net::UdpSocket>,
+        tun: TunChannels,
+        events: Arc<dyn EventSink>,
+    ) -> io::Result<Self> {
         socket.set_nonblocking(true)?;
         let sync_socket = socket.try_clone()?;
         // 句柄各自设一遍：Windows 上复制出来的句柄不保证继承非阻塞模式
         sync_socket.set_nonblocking(true)?;
+        let (socket6, sync_socket6) = match socket6 {
+            Some(v6) => {
+                v6.set_nonblocking(true)?;
+                let sync = v6.try_clone()?;
+                sync.set_nonblocking(true)?;
+                (Some(UdpSocket::from_std(v6)?), Some(sync))
+            }
+            None => (None, None),
+        };
+        let has_v6 = socket6.is_some();
         let shared = Arc::new(Shared {
             engine: Mutex::new(Engine::new(secret)),
             socket: UdpSocket::from_std(socket)?,
+            socket6,
+            sync_socket6,
             sync_socket,
             to_tun: tun.to_tun,
             events,
@@ -165,11 +205,14 @@ impl UserspaceDataPlane {
             relays: Mutex::new(HashMap::new()),
             background: Mutex::new(Vec::new()),
         });
-        let tasks = vec![
-            tokio::spawn(receive_loop(Arc::clone(&shared))),
+        let mut tasks = vec![
+            tokio::spawn(receive_loop(Arc::clone(&shared), false)),
             tokio::spawn(tun_loop(Arc::clone(&shared), tun.from_tun)),
             tokio::spawn(timer_loop(Arc::clone(&shared))),
         ];
+        if has_v6 {
+            tasks.push(tokio::spawn(receive_loop(Arc::clone(&shared), true)));
+        }
         Ok(Self { shared, tasks })
     }
 
@@ -181,6 +224,11 @@ impl UserspaceDataPlane {
     /// 共享 socket 绑定的本地地址。
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.shared.socket.local_addr()
+    }
+
+    /// 有没有 IPv6 的 socket。
+    pub fn has_ipv6(&self) -> bool {
+        self.shared.socket6.is_some()
     }
 
     /// 本机所在的 overlay 网段，见 [`Engine::set_lan`]。
@@ -226,7 +274,7 @@ impl DataPlane for UserspaceDataPlane {
         if classify(datagram) != DatagramKind::Control {
             return Err(DataPlaneError::NotControlDatagram);
         }
-        self.shared.sync_socket.send_to(datagram, to)?;
+        self.shared.sync_send(datagram, to)?;
         Ok(())
     }
 
@@ -253,19 +301,31 @@ impl DataPlane for UserspaceDataPlane {
         if !is_stun_binding_request(datagram) {
             return Err(DataPlaneError::NotControlDatagram);
         }
-        self.shared.sync_socket.send_to(datagram, to)?;
+        self.shared.sync_send(datagram, to)?;
         Ok(())
     }
 
     fn status(&self) -> Vec<PeerStatus> {
         self.shared.engine().status()
     }
+
+    fn ipv6_port(&self) -> Option<u16> {
+        self.shared
+            .socket6
+            .as_ref()
+            .and_then(|socket| socket.local_addr().ok())
+            .map(|addr| addr.port())
+    }
 }
 
-async fn receive_loop(shared: Arc<Shared>) {
+async fn receive_loop(shared: Arc<Shared>, v6: bool) {
     let mut buf = vec![0u8; u16::MAX as usize];
+    let socket = match (&shared.socket6, v6) {
+        (Some(socket6), true) => socket6,
+        _ => &shared.socket,
+    };
     loop {
-        let (len, from) = match shared.socket.recv_from(&mut buf).await {
+        let (len, from) = match socket.recv_from(&mut buf).await {
             Ok(received) => received,
             // Windows 上发往已关闭端口的报文会让下一次 recv 报 ConnectionReset，
             // 那只是对端的 ICMP 回音，不是这个 socket 坏了

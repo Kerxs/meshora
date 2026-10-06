@@ -184,9 +184,10 @@ pub async fn start_direct(options: DirectOptions) -> Result<Node, StartError> {
         let _ = events_tx.send(event);
     };
     let dataplane = Arc::new(
-        UserspaceDataPlane::start(
+        UserspaceDataPlane::start_dual(
             &options.secret,
             socket,
+            bind_ipv6(local_port),
             TunChannels { from_tun, to_tun },
             Arc::new(sink),
         )
@@ -210,6 +211,20 @@ pub async fn start_direct(options: DirectOptions) -> Result<Node, StartError> {
         direct: Some(direct),
         control,
     })
+}
+
+/// 在同一个端口号上绑一个只收发 IPv6 的 socket（IPV6_V6ONLY）。本机没有 IPv6、端口被占了，就是 `None`：
+/// 只是少了 IPv6 这条路，IPv4 照常
+fn bind_ipv6(port: u16) -> Option<UdpSocket> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).ok()?;
+    socket.set_only_v6(true).ok()?;
+    let addr = SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port));
+    if let Err(err) = socket.bind(&addr.into()) {
+        info!(port, %err, "绑不上 IPv6 的端口，只走 IPv4");
+        return None;
+    }
+    Some(socket.into())
 }
 
 /// 启动一个节点。
@@ -266,9 +281,10 @@ pub async fn start(options: Options) -> Result<Node, StartError> {
         let _ = events_tx.send(event);
     };
     let dataplane = Arc::new(
-        UserspaceDataPlane::start(
+        UserspaceDataPlane::start_dual(
             &options.secret,
             socket,
+            bind_ipv6(local_port),
             TunChannels { from_tun, to_tun },
             Arc::new(sink),
         )
