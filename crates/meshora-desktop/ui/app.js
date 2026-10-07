@@ -990,7 +990,7 @@ views.settings = {
       stackRow("添加一台", "自己架的 meshora-coord（--hub）：公钥@地址:端口。建网络时可以选它", newServer, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: addServer }, "添加")),
     );
 
-    this.logs = h("pre", { class: "logs" }, "…");
+    this.logs = h("pre", { class: "logs", glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.22)" }, "…");
     this.logs.hidden = true;
     let timer = 0;
     const loadLogs = async () => {
@@ -1726,7 +1726,7 @@ views.failed = {
   mount(ov) {
     this.title = h("h2", { class: "err" });
     this.hint = h("p");
-    this.detail = h("div", { class: "detail" });
+    this.detail = h("div", { class: "detail", glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.22)" });
     this.copyId = h("button", { class: "link", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制你的 ID");
     const el = h(
       "div",

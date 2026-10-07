@@ -169,9 +169,7 @@
   max-width: 460px;
   margin-top: var(--sp-2);
   padding: 0 var(--sp-4);
-  border: 1px solid var(--line);
   border-radius: var(--r-card);
-  background: var(--well);
   text-align: left;
 }
 

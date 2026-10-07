@@ -362,7 +362,7 @@ function options(info) {
       h("h1", {}, "安装选项"),
       h(
         "div",
-        { class: "opts" },
+        { class: "opts", glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.22)" },
         h("div", { class: "opt where" }, h("span", { class: "t" }, h("b", {}, "装到"), dir, note), change, error),
         option("桌面快捷方式", "开始菜单里总会有一个", desktop),
         option("装完打开", null, open),
@@ -419,7 +419,7 @@ function uninstallPage(info) {
       { class: "options" },
       h("h1", {}, "卸载 Meshora"),
       h("p", { class: "sub" }, "会关掉正在运行的 Meshora，删掉快捷方式和安装目录：", h("span", { class: "mono dir" }, info.dir)),
-      h("div", { class: "opts" }, option("同时删除我的私钥和设置", "默认留着：以后装回来还是同一台电脑", purge)),
+      h("div", { class: "opts", glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.22)" }, option("同时删除我的私钥和设置", "默认留着：以后装回来还是同一台电脑", purge)),
       warn,
       h(
         "div",

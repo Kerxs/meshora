@@ -816,7 +816,6 @@ td.spark-cell .spark {
   overflow: auto;
   padding: var(--sp-3);
   border-radius: var(--r-field);
-  background: var(--well);
   font: 11px / 1.5 var(--mono);
   color: var(--dim);
   white-space: pre-wrap;
@@ -886,7 +885,6 @@ td.spark-cell .spark {
   margin-bottom: var(--sp-2);
   padding: var(--sp-3);
   border-radius: var(--r-field);
-  background: var(--well);
   font: var(--fs-cap) / 1.5 var(--mono);
   color: var(--dim);
   word-break: break-word;
