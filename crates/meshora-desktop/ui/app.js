@@ -66,8 +66,6 @@ function s(tag, props, ...children) {
 function setProps(el, props) {
   for (const [key, value] of Object.entries(props || {})) {
     if (value === undefined || value === null || value === false) continue;
-    // 手机上不要 GPU 上的飞行：导航那块由 app.css 的 transition 飞过去，两套叠在一起会打架
-    if (PHONE && key === "glass-glide") continue;
     if (key === "class") el.setAttribute("class", value);
     else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else el.setAttribute(key, value === true ? "" : value);
@@ -88,7 +86,8 @@ function toast(text) {
     old.classList.add("out");
     setTimeout(() => old.remove(), 240);
   }
-  const el = h("div", { class: "toast", role: "status" }, text);
+  // Glassium 的磨砂玻璃；浮在正文上，标 overlay（Glassium 用 CSS 画，盖得住下面的字）
+  const el = h("div", { class: "toast", role: "status", glass: "frosted", overlay: "" }, text);
   document.body.append(el);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.remove(), 2700);
@@ -278,11 +277,15 @@ const STATES = {
 // 你的地址、网络这些放在网络页顶上那张卡片里（views.overview）
 const pass = {
   build() {
-    this.state = h("span", { class: "state" }, h("i"), h("span"));
-    this.glide = h("span", { class: "nav-glide", glass: "clear", "glass-glide": "", "aria-hidden": "true" });
-    this.nav = h("nav", { class: "nav", "aria-label": "页面" }, this.glide);
+    this.state = h("span", { class: "state", glass: "clear" }, h("i"), h("span"));
+    // 电脑上：竖着的导航，选中项下面垫一块会飞过去的玻璃（glass-glide）。
+    // 手机上：Glassium 的标签栏（底部一条玻璃胶囊，选中的气泡飞过去，按住变透镜）
+    this.glide = PHONE ? null : h("span", { class: "nav-glide", glass: "clear", "glass-glide": "", "aria-hidden": "true" });
+    this.nav = PHONE
+      ? h("glass-tab-bar", { class: "nav", "aria-label": "页面", onchange: (event) => go(event.currentTarget.value) })
+      : h("nav", { class: "nav", "aria-label": "页面" }, this.glide);
     this.navKey = "";
-    this.updateChip = h("button", { class: "update-chip", type: "button", hidden: true, onclick: () => applyUpdate(state.overview.update.version) });
+    this.updateChip = h("button", { class: "update-chip", glass: "tinted", "glass-tint": "rgba(79, 240, 166, 0.3)", type: "button", hidden: true, onclick: () => applyUpdate(state.overview.update.version) });
     this.version = h("div", { class: "ver" });
     this.el = h(
       "aside",
@@ -334,10 +337,10 @@ const pass = {
       this.navKey = key;
       this.buttons = new Map();
       this.nav.replaceChildren(
-        this.glide,
+        ...(this.glide ? [this.glide] : []),
         ...items.map(([page, label]) => {
           const count = h("span", { class: "n" });
-          const button = h("button", { type: "button", onclick: () => go(page) }, label, count);
+          const button = h("button", { type: "button", value: page, onclick: () => go(page) }, label, count);
           this.buttons.set(page, { button, count });
           return button;
         }),
@@ -349,17 +352,16 @@ const pass = {
       button.classList.toggle("on", page === state.page);
       button.setAttribute("aria-current", page === state.page ? "page" : "false");
     }
+    // 手机上的标签栏自己管选中的气泡：跟上现在这一页（程序改 value 不派发 change）
+    if (PHONE) {
+      if (this.nav.value !== state.page) this.nav.value = state.page;
+      return;
+    }
     // 垫在选中项下面的玻璃挪过去：位置走 CSSOM，不算内联样式。
     // 放进微任务：第一次渲染时通行证刚建好、还没进文档，量不出位置
     const selected = this.buttons.get(state.page).button;
     queueMicrotask(() => {
-      // 手机上导航横着排在底部：横着挪，宽度跟着按钮
-      if (PHONE) {
-        this.glide.style.width = `${selected.offsetWidth}px`;
-        this.glide.style.transform = `translateX(${selected.offsetLeft}px)`;
-      } else {
-        this.glide.style.transform = `translateY(${selected.offsetTop}px)`;
-      }
+      this.glide.style.transform = `translateY(${selected.offsetTop}px)`;
     });
   },
 };
@@ -688,7 +690,7 @@ views.overview = {
     this.empty = h("div", { class: "empty-map" }, "还没有别人。朋友凭网络码加入后，就会出现在这里。");
     this.grid = h("div", { class: "friends" });
     this.cards = new Map();
-    this.hostChip = h("span", { class: "chip" });
+    this.hostChip = h("span", { class: "chip", glass: "clear" });
     this.invite = h(
       "button",
       { class: "btn sm", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => state.overview.roster?.code && copy(state.overview.roster.code, "网络码") },
@@ -1266,7 +1268,8 @@ function choices(options, selected, onPick) {
       h("span", {}, option.hint),
     ),
   );
-  const glide = h("span", { class: "choice-glide", "aria-hidden": "true" });
+  // 选中的那一项下面垫一块 Glassium 的玻璃，换选中时滑过去（app.css 的 transition；玻璃每帧跟着元素走）
+  const glide = h("span", { class: "choice-glide", glass: "tinted", "glass-tint": "rgba(122, 156, 255, 0.22)", "aria-hidden": "true" });
   const place = () => {
     const on = buttons.find((button) => button.getAttribute("aria-checked") === "true");
     glide.hidden = !on;

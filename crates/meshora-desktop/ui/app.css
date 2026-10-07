@@ -148,7 +148,7 @@ textarea {
 
 /* 按钮去掉浏览器默认的底色（GPU 玻璃要它透明）。用 :where 降到零优先级：玻璃标了 overlay、由 Glassium 用 CSS 画的时候，
  * 它的着色（--glassium-tint）要能盖过这一条 —— 写成普通的 .btn 会把弹窗里蓝色的主按钮刷成透明 */
-:where(.btn, .path) {
+:where(.btn, .path, .update-chip, .choice) {
   background: transparent;
 }
 
@@ -325,8 +325,6 @@ glass-switch {
   margin-left: var(--sp-2);
   padding: 0 10px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: var(--fs-cap);
   font-weight: 600;
   color: var(--dim);
@@ -935,8 +933,6 @@ td.spark-cell .spark {
   transform: translateX(-50%);
   padding: var(--sp-2) var(--sp-4);
   border-radius: 999px;
-  background: rgba(10, 16, 48, 0.88);
-  border: 1px solid var(--line);
   font-size: var(--fs-sec);
   font-weight: 600;
   pointer-events: none;
@@ -1131,7 +1127,6 @@ td.spark-cell .spark {
   padding: var(--sp-3) var(--sp-4);
   border: 1px solid var(--line);
   border-radius: var(--r-field);
-  background: rgba(255, 255, 255, 0.03);
   text-align: left;
   cursor: pointer;
   transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
@@ -1144,7 +1139,6 @@ td.spark-cell .spark {
 
 .choice[aria-checked="true"] {
   border-color: var(--brand);
-  background: rgba(122, 156, 255, 0.16);
 }
 
 .choice:disabled {
@@ -1179,7 +1173,6 @@ td.spark-cell .spark {
   height: var(--h-ctl-sm);
   padding: 0 var(--sp-3);
   border-radius: calc(var(--h-ctl-sm) / 2);
-  background: rgba(255, 255, 255, 0.08);
   font-size: var(--fs-cap);
   font-weight: 600;
   color: var(--dim);
@@ -1311,16 +1304,11 @@ td.spark-cell .spark {
   padding: 0 10px;
   border: 0;
   border-radius: 12px;
-  background: rgba(79, 240, 166, 0.18);
   color: var(--good);
   font-size: var(--fs-cap);
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
-}
-
-.update-chip:hover {
-  background: rgba(79, 240, 166, 0.28);
 }
 
 .update-chip:disabled {
@@ -1536,9 +1524,7 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
   top: 0;
   height: var(--h, 0);
   transform: translateY(var(--y, 0));
-  border: 1px solid var(--brand);
   border-radius: var(--r-field);
-  background: rgba(122, 156, 255, 0.16);
   pointer-events: none;
   transition: transform var(--t-mid) var(--ease), height var(--t-mid) var(--ease);
 }
@@ -1643,11 +1629,7 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
 }
 
 /* ---------- 手机上的玻璃 ----------
- * 手机上 Glassium 用 CSS 画玻璃（app.js：backend: 'css'），没有 GPU 上的飞行：导航里垫在选中项下面的那块靠 transition 飞过去 */
-
-.phone .nav-glide {
-  transition: transform var(--t-mid) var(--ease), width var(--t-mid) var(--ease);
-}
+ * 手机上 Glassium 用 CSS 画玻璃（app.js：backend: 'css'）。底部导航是 Glassium 的标签栏（<glass-tab-bar>） */
 
 /* ---------- 手机（安卓客户端，html.phone） ----------
  * 一栏：导航栏缩成顶上一行（Logo、状态、可更新），内容在下面滚，页面切换是底部一条胶囊。
@@ -1728,6 +1710,8 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
 }
 
 .phone .nav {
+  display: flex;
+  --glass-tab-bar-selected: #7a9cff;
   position: fixed;
   z-index: 10;
   left: var(--sp-3);
@@ -1738,8 +1722,6 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
   height: 52px;
   padding: 8px;
   border-radius: 26px;
-  border: 1px solid var(--line);
-  background: rgba(14, 20, 56, 0.86);
 }
 
 .phone .nav button {
@@ -1751,12 +1733,6 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
 
 .phone .nav .n {
   display: none;
-}
-
-.phone .nav-glide {
-  top: 8px;
-  left: 0;
-  right: auto;
 }
 
 .phone .dialog {
