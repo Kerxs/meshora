@@ -555,9 +555,41 @@ function friendCard(peer) {
 }
 
 /** 直连打洞没通时，卡在哪一边 */
+/** 直连没通的朋友卡片上那句：最可能的原因 */
 function punchHint(peer) {
-  if (peer.heard) return "收到过对方的报文，我们的还没到对方：多半是对方那边的防火墙或路由器挡了";
-  return "对方的报文一次都没到：可能是你这边的路由器挡了，或者有一边是对称型 NAT。点地址卡片上的\"诊断\"把信息发给帮你看的人";
+  return punchReasons(peer, state.overview?.direct || {})[0];
+}
+
+/**
+ * 直连为什么还没通：按可能性从大到小排。看的是每个地址试得怎么样（probes）和本机的情况（STUN、NAT 类型、
+ * 路由器开没开端口、有没有公网 IPv6、是不是开着代理）。卡片上写第一条，诊断里全写上
+ */
+function punchReasons(peer, d) {
+  const probes = peer.probes || [];
+  const reasons = [];
+  if (!probes.length) return ["码里没有能试的地址：重新交换一次连接码"];
+  const v6 = probes.filter((x) => x.family === "ipv6");
+  const myV6 = (d.endpoints || []).some((e) => e.startsWith("["));
+  const heardFrom = probes.filter((x) => x.heard);
+  const answered = probes.some((x) => x.answered);
+  if (heardFrom.length && !answered) {
+    reasons.push(`对方的报文到得了这里（从 ${heardFrom[0].addr} 来），我们的回不过去：对方那边的路由器或防火墙挡了入站`);
+  }
+  if (myV6 && v6.length && !v6.some((x) => x.answered)) {
+    reasons.push(
+      v6.some((x) => x.heard)
+        ? "IPv6：对方的到了这里，我们的到不了对方 —— 对方光猫（或路由器）的 IPv6 防火墙挡了入站，可以在那里放行 UDP 41641"
+        : "两边都有公网 IPv6 却不通：多半是光猫（或路由器）的 IPv6 防火墙挡了入站。在光猫里放行 UDP 41641，或者关掉 IPv6 防火墙",
+    );
+  }
+  if (!myV6 && v6.length) reasons.push("对方有公网 IPv6、这边没有：这边的路由器打开 IPv6 的话，多一条好打通的路");
+  if (d.proxied) reasons.push("这边像是开着代理（Clash 之类）：公网 IPv4 用不了。关掉代理的 TUN 模式，或者让 Meshora 不走代理");
+  if (d.symmetric && !d.mapped) reasons.push("这边是对称型 NAT（每个目的地换一个端口）：公网 IPv4 很难打通。在路由器里打开 UPnP，或者用 IPv6");
+  if (d.checked && !d.publicEndpoint) reasons.push("没问到这边的公网地址（STUN 服务器连不上）：只有同一个局域网里的人连得上");
+  if (d.upnpTried && !d.mapped) reasons.push("这边的路由器没开端口（UPnP / PCP / NAT-PMP 都没成）：在路由器里打开 UPnP 会好打很多");
+  if (!heardFrom.length) reasons.push("对方的报文一次都没到：可能是你这边的路由器挡了，或者两边都是难打通的 NAT");
+  reasons.push("点地址卡片上的\"诊断\"，把信息发给帮你看的人");
+  return reasons;
 }
 
 /**
@@ -598,6 +630,7 @@ async function directDiagnostics() {
     ...ov.peers.flatMap((p) => [
       `${nameOf(p)} ${p.ip} · ${p.route}${p.online ? " · 在线" : ""} · ${p.heard ? "收到过对方报文" : "没收到过对方报文"}`,
       ...probeLines(p),
+      ...(p.route === "pending" ? ["  可能的原因：", ...punchReasons(p, d).slice(0, -1).map((r) => `  - ${r}`)] : []),
     ]),
   ];
   let logs = [];

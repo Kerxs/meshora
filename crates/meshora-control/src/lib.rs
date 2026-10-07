@@ -618,6 +618,8 @@ struct PeerState {
     /// 上次告诉它的本机端点，和还要再发几拍
     told: Option<Vec<SocketAddr>>,
     tell_left: u8,
+    /// 直连模式：正在用的直连断了之后，已经重新密集打过一轮洞（见 [`Node::update_paths`]）。又通了就清掉
+    repunched: bool,
 }
 
 /// 令牌桶：每秒补满
@@ -828,6 +830,7 @@ impl Node {
                     announced: Vec::new(),
                     told: None,
                     tell_left: 0,
+                    repunched: false,
                 }
             });
             state.overlay_ip = peer.overlay_ip;
@@ -1197,8 +1200,14 @@ impl Node {
             self.next_probe = now;
             // 直连是在旧网络上打通的：一律当作不通，先走中继，重新探测。
             // 不这样的话要等它们一个个超时，这几秒里游戏的报文都发进了黑洞
+            let v6_first = !self.ipv6.is_empty();
             for state in self.peers.values_mut() {
                 state.paths.network_changed();
+                // 直连模式没有中继兜底：换了网络就像刚加进来一样，密集打一轮洞
+                if self.eager {
+                    state.paths.punch_eagerly(now, now + EAGER_PUNCH, v6_first);
+                    state.repunched = true;
+                }
             }
         }
         self.last_local_ip = Some(new);
@@ -1380,7 +1389,21 @@ impl Node {
 
     /// 按选路规则算出每个 peer 该走的路，变了就告诉数据面
     fn update_paths(&mut self, now: Instant) {
+        let eager = self.eager;
+        let v6_first = !self.ipv6.is_empty();
         for (key, state) in &mut self.peers {
+            // 直连模式：正在用的直连断了（对方换了网络、路由器的映射过期……），没有中继可退，
+            // 重新密集打一轮洞 —— 不然没回应的地址按退避越探越慢，最慢 30 秒一次。每断一次只打一轮
+            if eager {
+                let alive = state.paths.has_fresh(now);
+                if alive {
+                    state.repunched = false;
+                } else if state.current.is_some() && !state.repunched {
+                    info!(peer = %key, "直连断了，重新密集打洞");
+                    state.paths.punch_eagerly(now, now + EAGER_PUNCH, v6_first);
+                    state.repunched = true;
+                }
+            }
             // 只走中继的节点从不探测直连，直连永远不"通"，选出来的只会是中继
             let Some(desired) = state.paths.choose(state.current, &self.relays, now) else {
                 continue;
