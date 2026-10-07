@@ -1737,6 +1737,73 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
   padding: var(--sp-5);
 }
 
+/* 朋友页的表格：手机上八列放不下，每人排成一张小卡片 ——
+ * 名字、延迟 / 地址、路径 / 延迟曲线 / 抖动、丢包、收发（带小标签，表头藏起来了） */
+.phone table,
+.phone tbody {
+  display: block;
+}
+
+.phone thead {
+  display: none;
+}
+
+.phone tbody tr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "who who ms"
+    "ip route route"
+    "spark spark spark"
+    "jitter loss traffic";
+  column-gap: var(--sp-3);
+  row-gap: 4px;
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.phone tbody tr:last-child {
+  border-bottom: 0;
+}
+
+.phone tbody td {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  white-space: normal;
+}
+
+.phone tbody td:nth-child(5) .spark {
+  width: 100%;
+}
+
+.phone tbody td:nth-child(1) { grid-area: who; }
+.phone tbody td:nth-child(2) { grid-area: ip; font-size: var(--fs-cap); color: var(--dim); }
+.phone tbody td:nth-child(3) { grid-area: route; justify-self: end; }
+.phone tbody td:nth-child(4) { grid-area: ms; justify-self: end; font-weight: 700; }
+.phone tbody td:nth-child(5) { grid-area: spark; width: auto; }
+.phone tbody td:nth-child(6) { grid-area: jitter; }
+.phone tbody td:nth-child(7) { grid-area: loss; }
+.phone tbody td:nth-child(8) { grid-area: traffic; justify-self: end; }
+
+.phone tbody td:nth-child(n + 6) {
+  font-size: var(--fs-cap);
+  color: var(--dim);
+}
+
+.phone tbody td:nth-child(6)::before { content: "抖动 "; }
+.phone tbody td:nth-child(7)::before { content: "丢包 "; }
+.phone tbody td:nth-child(8)::before { content: "收 / 发 "; }
+
+/* 管理页"只想邀请一个人？"那一行：说明一整行，按钮换到下一行 */
+.phone .row:has(> .hint) {
+  flex-wrap: wrap;
+}
+
+.phone .row > .hint {
+  flex: 1 1 100%;
+}
+
 .phone .paths {
   grid-template-columns: 1fr;
 }
@@ -1771,15 +1838,6 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-}
-
-/* 朋友表格列多，手机上放不下：在卡片里左右滑，不撑破页面 */
-.phone .card:has(> table) {
-  overflow-x: auto;
-}
-
-.phone .card > table {
-  min-width: 560px;
 }
 
 .phone main {
