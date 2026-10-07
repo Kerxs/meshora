@@ -16,6 +16,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "glassium": "1.0.0"
+    "glassium": "1.1.0"
   }
 }

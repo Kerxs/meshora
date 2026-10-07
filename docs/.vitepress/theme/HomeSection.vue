@@ -21,10 +21,12 @@ defineProps<{
   /** 常见问题：段落开头加粗的那句当问题排 */
   faq?: boolean
 }>()
+// 玻璃由 glass.ts 标上（.home-section 在它的选择器表里），别在模板里写 glass：Glassium 一 import 就接管页面上已有的
+// [glass]，那时 glass.ts 还没来得及 configure（触屏上要 backend: 'css'）
 </script>
 
 <template>
-  <section :class="['home-section', { faq }]" glass="">
+  <section :class="['home-section', { faq }]">
     <p v-if="eyebrow" class="m-eyebrow">{{ eyebrow }}</p>
     <h2 class="home-section__title">{{ title }}</h2>
 

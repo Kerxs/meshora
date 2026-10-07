@@ -21,16 +21,19 @@ const WIDE = '(min-width: 960px)'
 const STEPS_GRID = '(min-width: 901px)'
 
 /**
- * 触屏设备上一律不用 Glassium：它的玻璃画在页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、
- * 比主线程快一两帧，玻璃就落在文字后面。这些设备上由 custom.css 的 CSS 毛玻璃（backdrop-filter）顶上，和滚动同步
+ * 触屏设备（手机、平板）上 Glassium 用 CSS 画玻璃（`backend: 'css'`，和 Meshora 的安卓客户端一样）：GPU 玻璃画在
+ * 页面底下的画布上、每帧按元素位置重画，手机的滚动由合成线程直接做、比主线程快一两帧，玻璃就落在文字后面；
+ * CSS 画的（backdrop-filter）和滚动一起走。材质还是 Glassium 的，只是没有折射。
+ * CSS 玻璃盖得住正文，所以触屏上侧边栏的抽屉也用玻璃（不看 WIDE）
  */
 export const TOUCH = '(hover: none) and (pointer: coarse)'
 
-/** 选择器 → 材质；第三项是只在什么屏宽下才用玻璃 */
-const RULES: [string, Record<string, string>, string?][] = [
+/** 选择器 → 材质；第三项是只在什么屏宽下才用玻璃（触屏上不看）；第四项 false 是触屏上不用玻璃 */
+const RULES: [string, Record<string, string>, string?, boolean?][] = [
   ['.VPSidebar', { glass: 'frosted' }, WIDE],
-  // 文档正文：一整块偏暗的磨砂玻璃，字要有一块稳的底
-  ['.VPDoc .content-container', { glass: 'frosted', 'glass-tint': 'rgba(10, 12, 18, 0.72)', 'glass-blur': '40' }],
+  // 文档正文：一整块偏暗的磨砂玻璃，字要有一块稳的底。触屏上不用：面板比一屏高得多，backdrop-filter 铺这么大一块
+  // 又费电、又可能超出 GPU 纹理上限只画出一截 —— custom.css 给它一层够实的底
+  ['.VPDoc .content-container', { glass: 'frosted', 'glass-tint': 'rgba(10, 12, 18, 0.72)', 'glass-blur': '40' }, undefined, false],
   ['.VPButton.brand', { glass: 'tinted', 'glass-tint': '#3d6bff' }],
   ['.VPButton.alt', { glass: 'clear' }],
   ['.vp-doc div[class*="language-"]', { glass: 'clear' }],
@@ -41,8 +44,10 @@ const RULES: [string, Record<string, string>, string?][] = [
 ]
 
 function mark(root: ParentNode) {
-  for (const [selector, attrs, media] of RULES) {
-    const wanted = !media || window.matchMedia(media).matches
+  const touch = window.matchMedia(TOUCH).matches
+  for (const [selector, attrs, media, onTouch = true] of RULES) {
+    // 三步联机在窄屏上变成横向滑动的卡片：触屏上也照样交给 HomeSteps.vue（它自己的样式管滑动）
+    const wanted = touch ? onTouch && (media !== STEPS_GRID || window.matchMedia(media).matches) : !media || window.matchMedia(media).matches
     root.querySelectorAll<HTMLElement>(selector).forEach((el) => {
       if (!wanted) {
         // 屏宽变窄了：摘掉玻璃，交给 CSS
@@ -59,10 +64,9 @@ let observer: MutationObserver | null = null
 
 export async function startGlass() {
   if (typeof window === 'undefined' || observer) return
-  if (window.matchMedia(TOUCH).matches) return
   const { default: glassium } = await import('glassium')
-  // 玻璃后面那些写了背景的祖先（VitePress 的容器），也收进场景
-  glassium.configure({ absorbForComponents: true })
+  // 玻璃后面那些写了背景的祖先（VitePress 的容器），也收进场景。触屏上不建 GPU 画布，玻璃用 CSS 画
+  glassium.configure(window.matchMedia(TOUCH).matches ? { backend: 'css' } : { absorbForComponents: true })
   mark(document)
   let queued = false
   observer = new MutationObserver(() => {
