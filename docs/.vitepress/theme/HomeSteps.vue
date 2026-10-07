@@ -223,19 +223,7 @@ h3 {
     flex: 0 0 min(82%, 420px);
     scroll-snap-align: start;
     padding: 20px 18px 0;
-    /* 触屏上没有 Glassium，卡片自己画一层 CSS 毛玻璃 */
-    background: linear-gradient(180deg, rgba(40, 46, 64, 0.62), rgba(22, 26, 36, 0.62));
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
-  }
-
-  /* 宽屏下 Glassium 管的卡片，窄屏下别和上面的底叠两层 */
-  .step[glass] {
-    background: transparent;
-    border-color: transparent;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    /* 卡片是 Glassium 的玻璃（glass.ts）：这个宽度下横着滑，GPU 玻璃跟不上容器里的横滑，标了 overlay 用 CSS 画 */
   }
 
   .shot {

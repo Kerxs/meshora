@@ -214,22 +214,19 @@ body,
 }
 
 /*
-  顶部导航、手机上的局部导航浮在滚动的正文上面：Glassium 的玻璃画在页面底下，盖不住它们下面的字，
-  所以这两个用 CSS 毛玻璃，底色够深，压得住正文
+  用 CSS 画的 Glassium 玻璃（浮在正文上的 overlay，触屏设备上的全部玻璃）：Glassium 那条规则的优先级是 0（:where），
+  VitePress 给导航、代码块、按钮、搜索框这些写的底色会盖过它的着色 —— 这里让 Glassium 的着色赢
 */
-.VPNavBar,
-.VPLocalNav {
-  background-color: rgba(12, 14, 20, 0.72) !important;
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+[glass][data-glassium-overlay] {
+  background-color: var(--glassium-tint) !important;
 }
 
-.VPNavBar.top.home {
+/* 首页顶上的导航栏是透明的（大标题在它下面），滚下去才是玻璃 */
+.VPNavBar.top.home[glass] {
   background-color: transparent !important;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border-bottom-color: transparent;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /*
@@ -358,18 +355,6 @@ html.site-booted .VPContent {
 /* 侧边栏、大纲：和卡片一样的圆角，离边缘留点空 */
 .VPSidebar {
   border-radius: 0 22px 22px 0;
-}
-
-/*
-  窄屏上侧边栏是盖在正文上的抽屉（glass.ts 这时不给它玻璃）：CSS 毛玻璃，底色够深，压得住正文
-*/
-@media (max-width: 959px) {
-  .VPSidebar {
-    background-color: rgba(12, 14, 20, 0.94) !important;
-    backdrop-filter: blur(24px) saturate(140%);
-    -webkit-backdrop-filter: blur(24px) saturate(140%);
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
-  }
 }
 
 .VPDocAsideOutline {
@@ -601,7 +586,6 @@ html.site-booted .VPContent {
 
 .vp-doc table {
   margin: 28px 0;
-  background: var(--meshora-glass-bg-soft);
   border-radius: 10px;
   /*
     这里刻意不写 overflow —— 它对 display: table 的盒子不生效（写 auto 会被
@@ -650,19 +634,8 @@ html.site-booted .VPContent {
    所以这里用 @keyframes：动画在元素挂载时自动播放，正好绕开这个问题，
    而且不需要覆写 VitePress 内部组件。
 
-   注意搜索框被 teleport 到 body，不在 .VPHome 子树内，所以它跟随明暗主题
-   而不是首页的深色 —— 这是对的。但根级的玻璃令牌（0.6）是给页面面板调的，
-   对压在内容之上的模态框太透，这里单独给一组更实的令牌。
+   搜索框本身是 Glassium 的玻璃（glass.ts，overlay），底色够深、压得住下面的正文。
    ------------------------------------------------------------------ */
-
-:root {
-  --meshora-modal-bg: rgba(255, 255, 255, 0.92);
-  --meshora-modal-blur: 20px;
-}
-
-.dark {
-  --meshora-modal-bg: rgba(20, 27, 31, 0.92);
-}
 
 /*
   滚动条补偿 —— 修「点一下搜索，页面抽搐一下」。
@@ -709,10 +682,6 @@ html:has(.VPLocalSearchBox) .VPNav {
   重复类名能压过它，且不必动用 !important。
 */
 .VPLocalSearchBox.VPLocalSearchBox .shell {
-  background: var(--meshora-modal-bg);
-  backdrop-filter: blur(var(--meshora-modal-blur)) saturate(150%);
-  -webkit-backdrop-filter: blur(var(--meshora-modal-blur)) saturate(150%);
-  border: 1px solid var(--meshora-glass-border);
   animation: meshora-modal-shell-in 300ms var(--meshora-ease) both;
 }
 
@@ -727,11 +696,6 @@ html:has(.VPLocalSearchBox) .VPNav {
   }
 }
 
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .VPLocalSearchBox.VPLocalSearchBox .shell {
-    background: var(--vp-c-bg);
-  }
-}
 
 /* ------------------------------------------------------------------
    减少动态效果
@@ -1012,14 +976,20 @@ html:has(.VPLocalSearchBox) .VPNav {
   }
 }
 
-/* 手机顶部"本页目录"的下拉：默认底色是半透明的，正文会透上来，改成够实的毛玻璃 */
+/* 手机顶部"本页目录"的下拉：Glassium 的玻璃（glass.ts，overlay），底色够深、压得住正文 */
+
+/*
+  下拉写在局部导航里面，两个都是 CSS 画的玻璃。外层有 backdrop-filter 时，里层伸到外层外面的部分
+  会透出下面的正文（Chromium：外层成了里层的 backdrop 的根）—— 实测关掉外层的模糊，下拉就是实的。
+  所以展开时局部导航不模糊，只留着色
+*/
+.VPLocalNav[glass]:has(.VPLocalNavOutlineDropdown .items) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
 .VPLocalNavOutlineDropdown .items {
+  border: 0;
   border-radius: 16px;
-  border-color: rgba(255, 255, 255, 0.12);
-  background-color: rgba(16, 18, 26, 0.96);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.8);
 }
 
 .VPLocalNavOutlineDropdown .items .header,
@@ -1032,30 +1002,20 @@ html:has(.VPLocalSearchBox) .VPNav {
 }
 
 /* 上一页 / 下一页：玻璃卡片 */
+/* 上一页 / 下一页：Glassium 的玻璃（glass.ts） */
 .VPDocFooter .pager-link {
+  border: 0;
   border-radius: 16px;
-  border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  transition:
-    border-color 200ms,
-    background-color 200ms,
-    transform 260ms var(--meshora-ease-out);
+  transition: transform 260ms var(--meshora-ease-out);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .VPDocFooter .pager-link:hover {
-    border-color: rgba(156, 182, 255, 0.5);
-    background: rgba(122, 156, 255, 0.08);
     transform: translateY(-2px);
   }
 }
 
-/* 手机：汉堡菜单展开的整屏导航 */
-.VPNavScreen {
-  background-color: rgba(7, 8, 12, 0.94) !important;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-}
+/* 手机：汉堡菜单展开的整屏导航是 Glassium 的玻璃（glass.ts，overlay），底色很深 */
 
 .VPNavScreenMenuLink {
   font-size: 17px !important;

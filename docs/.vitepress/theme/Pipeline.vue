@@ -121,35 +121,24 @@ const current = computed(() => (pinned.value !== null ? pinned.value : active.va
   align-items: center;
   gap: 5px;
   padding: 6px 10px;
-  border: 1px solid var(--meshora-glass-border);
+  /* 胶囊是 Glassium 的玻璃（glass.ts） */
   border-radius: 999px;
-  background: var(--meshora-glass-bg-soft);
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
   color: var(--meshora-on-glass-dim);
   font-size: 13px;
   font-weight: 500;
   line-height: 1.4;
   text-decoration: none;
   white-space: nowrap;
-  transition: border-color 0.24s, background-color 0.24s, color 0.24s, transform 0.24s;
+  transition: color 0.24s, transform 0.24s;
 }
 
-.chip:hover {
-  border-color: var(--vp-c-brand-1);
+.chip:hover,
+.chip.on {
+  color: var(--vp-c-brand-1);
 }
 
 .chip.on {
-  border-color: var(--vp-c-brand-1);
-  background: var(--vp-c-brand-soft);
-  color: var(--vp-c-brand-1);
   transform: translateY(-2px);
-}
-
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .chip {
-    background: var(--meshora-glass-bg-solid);
-  }
 }
 
 .idx {

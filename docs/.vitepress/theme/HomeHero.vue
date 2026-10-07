@@ -119,14 +119,11 @@ onUnmounted(() => cleanup?.())
   row-gap: 2px;
   margin: 0 0 22px;
   padding: 6px 14px 6px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  /* 胶囊是 Glassium 的玻璃（glass.ts） */
   border-radius: 999px;
   font-size: 12.5px;
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.86);
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .status b {

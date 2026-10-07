@@ -61,13 +61,11 @@ const SCENARIOS = [
   display: flex;
   flex-direction: column;
   padding: 20px;
+  /* 卡片是 Glassium 的玻璃（glass.ts） */
   border-radius: 12px;
-  border: 1px solid var(--meshora-glass-border);
-  background: var(--meshora-glass-bg-soft);
-  transition: border-color 0.18s, transform 0.18s;
+  transition: transform 0.18s;
 }
 .scenario:hover {
-  border-color: var(--vp-c-brand-1);
   transform: translateY(-2px);
 }
 
@@ -102,9 +100,8 @@ const SCENARIOS = [
 */
 .cap {
   padding: 2px 9px;
+  /* 标签是 Glassium 的玻璃（glass.ts） */
   border-radius: 999px;
-  border: 1px solid var(--meshora-glass-border);
-  background: var(--meshora-glass-bg-soft);
   font-size: 11.5px;
   font-weight: 500;
   line-height: 1.7;
