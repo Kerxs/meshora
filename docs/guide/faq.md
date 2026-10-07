@@ -2,8 +2,9 @@
 
 ## 现在能用吗
 
-1.0.0 已经发布，[Windows 客户端](/guide/desktop)和[安卓客户端](/guide/android)可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载。
-但它还没在两台真的 Windows 机器之间试过，没在真手机上试过，没在真实网络里测过打洞，也没经过安全审查，Windows 安装程序没有代码签名 ——
+[Windows 客户端](/guide/desktop)和[安卓客户端](/guide/android)可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载，
+已经装在真的电脑和手机上用过。但还没在两台真的电脑之间拿真的游戏联机过，直连模式在真实网络里还没打通过，
+也没经过安全审查，Windows 安装程序没有代码签名 ——
 可以试，别指望它一定行。试了的话，把结果告诉我们。
 详见[路线图](/guide/roadmap)。
 
@@ -95,11 +96,11 @@
 
 ## 支持我的系统吗
 
-**1.0.0 的客户端有 Windows 和[安卓](/guide/android)**（安卓还没在真手机上试过）。
+**客户端有 Windows 和[安卓](/guide/android)**。
 macOS、Linux、iOS 的客户端不打算做。官方服务器跑在 Linux 上，但服务端不发布，想自己架要从源码编译。
 
-两个都还在"刚发布、没在真实环境里验证过"的阶段：Windows 客户端在一台 Windows 11 上实测连通过，
-安卓客户端每次打包都在 CI 的模拟器里真的连一次网，都还没在真的朋友之间拿真的游戏试过。
+两个都装在真机上用过：Windows 客户端在一台 Windows 11 上实测连通过，安卓客户端在真手机上跑过、
+每次打包也都在 CI 的模拟器里真的连一次网。都还没在真的朋友之间拿真的游戏试过。
 
 ## 我能帮上什么忙
 
