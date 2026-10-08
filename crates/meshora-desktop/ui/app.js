@@ -4,7 +4,7 @@
 // - 数据一律用 textContent 放进页面（朋友的名字是别人随便填的），不拼 HTML
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
-import { LIQUID_EDGE, LIQUID_GLASS, WELL_GLASS, liquidBubble, useSkyAsGlassScene } from "./sky.js";
+import { LIQUID_EDGE, LIQUID_GLASS, WELL_GLASS, liquidBubble, liquidPill, useSkyAsGlassScene } from "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
 
@@ -394,6 +394,13 @@ function meshGraph() {
     if (from) el.style.setProperty("--from", from);
     return el;
   };
+  /** 延迟胶囊的玻璃：中心 (x, y)，和 SVG 里的胶囊一样大。`relay` 是中继那个方块（26×26，紫色） */
+  const pill = (x, y, relay = false) => {
+    const el = h("span", relay ? { class: "relay-glass", ...liquidPill("rgba(183, 155, 255, 0.35)", "8") } : { class: "pill-glass", ...liquidPill() });
+    el.style.setProperty("--x", `${x.toFixed(1)}px`);
+    el.style.setProperty("--y", `${y.toFixed(1)}px`);
+    return el;
+  };
   let signature = "";
   let labels = new Map();
   // 上一次画的时候每个人走哪条路：新来的从"我"那里飞出来，换了路的连线重新浮现，打洞打通的那条亮一下
@@ -424,6 +431,22 @@ function meshGraph() {
       const len = Math.hypot(x2 - x1, y2 - y1) || 1;
       return `${(x1 + ((x2 - x1) * r) / len).toFixed(1)} ${(y1 + ((y2 - y1) * r) / len).toFixed(1)}`;
     };
+    /**
+     * 从 (x1, y1) 到 (x2, y2) 的一段线，在中点的延迟胶囊（48×20）那里断开：胶囊是玻璃（透明的），线穿进去就看得见。
+     * `gap` 为假时不断开（手机上胶囊是 SVG 画的实底，盖得住线）
+     */
+    const segment = (x1, y1, x2, y2, gap) => {
+      if (!gap) return `M${x1} ${y1}L${x2} ${y2}`;
+      const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+      const ux = (x2 - x1) / len;
+      const uy = (y2 - y1) / len;
+      // 沿着线走多远出胶囊：先碰到左右边还是上下边
+      const out = Math.min(Math.abs(ux) > 1e-6 ? 24 / Math.abs(ux) : Infinity, Math.abs(uy) > 1e-6 ? 10 / Math.abs(uy) : Infinity) + 2;
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      const f = (v) => v.toFixed(1);
+      return `M${x1} ${y1}L${f(mx - ux * out)} ${f(my - uy * out)}M${f(mx + ux * out)} ${f(my + uy * out)}L${x2} ${y2}`;
+    };
     const nodes = [
       s("defs", {}, s("radialGradient", { id: "me-glow" }, s("stop", { offset: 0, "stop-color": "#7a9cff", "stop-opacity": 0.55 }), s("stop", { offset: 1, "stop-color": "#7a9cff", "stop-opacity": 0 }))),
       s("ellipse", { cx, cy, rx: RX, ry: R, fill: "none", stroke: "rgba(255,255,255,.12)", "stroke-dasharray": "2 6" }),
@@ -431,10 +454,11 @@ function meshGraph() {
     ];
     if (peers.some((p) => p.online && p.route === "relay")) {
       nodes.push(
-        s("rect", { x: relay[0] - 13, y: relay[1] - 13, width: 26, height: 26, rx: 8, fill: "rgba(183,155,255,.18)", stroke: RELAY_HEX, "stroke-width": 1.6 }),
+        s("rect", { class: "ms-body", x: relay[0] - 13, y: relay[1] - 13, width: 26, height: 26, rx: 8, fill: "rgba(183,155,255,.18)", stroke: RELAY_HEX, "stroke-width": 1.6 }),
         s("path", { d: `M${relay[0] - 6} ${relay[1] - 3}h12M${relay[0] - 6} ${relay[1] + 3}h12`, stroke: RELAY_HEX, "stroke-width": 1.6, "stroke-linecap": "round" }),
         s("text", { class: "node-sub", x: relay[0], y: relay[1] - 20, "text-anchor": "middle" }, "中继"),
       );
+      if (!PHONE) glass.push(pill(relay[0], relay[1], true));
     }
     const before = drawn;
     drawn = new Map(peers.map((peer) => [peer.id, `${peer.online}|${peer.route}`]));
@@ -443,9 +467,17 @@ function meshGraph() {
       const viaRelay = peer.online && peer.route === "relay";
       const stroke = !peer.online ? "rgba(255,255,255,.3)" : viaRelay ? RELAY_HEX : TONE_HEX[tone(peer)];
       // 连线在两头的圆边上停住：节点是玻璃（透明的），线穿进去就看得见
+      // 在线的连线中间有延迟胶囊（经中继的在中继到对方那一段）：电脑上胶囊是玻璃，线在那里断开
+      const gap = peer.online && !PHONE;
+      const xy = (text) => text.split(" ").map(Number);
+      const [ax, ay] = xy(edge(cx, cy, viaRelay ? relay[0] : x, viaRelay ? relay[1] : y, 27));
+      const [bx, by] = xy(edge(x, y, viaRelay ? relay[0] : cx, viaRelay ? relay[1] : cy, 21));
+      // 经中继的：电脑上中继方块也是玻璃，线在方块边上断开（离中心 15）
+      const [r1x, r1y] = !PHONE ? xy(edge(relay[0], relay[1], ax, ay, 15)) : relay;
+      const [r2x, r2y] = !PHONE ? xy(edge(relay[0], relay[1], bx, by, 15)) : relay;
       const d = viaRelay
-        ? `M${edge(cx, cy, relay[0], relay[1], 27)}L${relay[0]} ${relay[1]}L${edge(x, y, relay[0], relay[1], 21)}`
-        : `M${edge(cx, cy, x, y, 27)}L${edge(x, y, cx, cy, 21)}`;
+        ? `M${ax} ${ay}L${r1x} ${r1y}${segment(r2x, r2y, bx, by, gap)}`
+        : segment(ax, ay, bx, by, gap);
       const id = `link-${i}`;
       const was = before?.get(peer.id);
       const now = `${peer.online}|${peer.route}`;
@@ -483,9 +515,11 @@ function meshGraph() {
             ),
           );
         }
-        const [mx, my] = viaRelay ? [(relay[0] + x) / 2, (relay[1] + y) / 2] : [(cx + x) / 2, (cy + y) / 2];
+        // 胶囊在连线（圆边到圆边那一段）的正中
+        const [mx, my] = viaRelay ? [(r2x + bx) / 2, (r2y + by) / 2] : [(ax + bx) / 2, (ay + by) / 2];
         const text = s("text", { class: "link-ms", x: mx, y: my + 4, "text-anchor": "middle", fill: TONE_HEX[tone(peer)] });
-        nodes.push(s("rect", { x: mx - 24, y: my - 10, width: 48, height: 20, rx: 10, fill: "rgba(10,16,48,.6)", stroke }), text);
+        nodes.push(s("rect", { class: "ms-body", x: mx - 24, y: my - 10, width: 48, height: 20, rx: 10, fill: "rgba(10,16,48,.6)", stroke }), text);
+        glass.push(pill(mx, my));
         labels.set(peer.id, text);
       }
       const label = s("text", { class: "node-label", x, y: y + 38, "text-anchor": "middle" }, nameOf(peer));

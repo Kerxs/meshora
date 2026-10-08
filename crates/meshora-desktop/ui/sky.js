@@ -66,6 +66,23 @@ export const LIQUID_EDGE = PHONE_UA
 export const WELL_GLASS = { glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.2)", ...LIQUID_EDGE };
 
 /**
+ * 网状图连线上的延迟胶囊：深色的玻璃，边上折射、色散、一圈亮边。手机上返回空的，照旧是 SVG 画的深色胶囊
+ */
+export function liquidPill(tint = "rgba(10, 16, 48, 0.5)", radius = "1frac") {
+  if (PHONE_UA) return {};
+  return {
+    glass: "regular",
+    "glass-blur": "0",
+    "glass-refraction": "0.5",
+    "glass-distortion": "1",
+    "glass-dispersion": "0.45",
+    "glass-highlight": "1.2",
+    "glass-tint": tint,
+    "glass-corner-radius": radius,
+  };
+}
+
+/**
  * 头像、网状图节点的彩色玻璃泡：颜色是着色，边上折射、色散、一圈亮边。`dim` 是不在线的（颜色淡一些）。
  * 手机上不用（列表里一堆 CSS 玻璃拖慢滚动），返回空的，照旧是纯色圆
  */

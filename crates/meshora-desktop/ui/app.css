@@ -619,8 +619,35 @@ main:hover {
   border-radius: 50%;
 }
 
+/* 连线上的延迟胶囊：和 SVG 里的一样大（48×20） */
+.pill-glass {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  width: 48px;
+  height: 20px;
+  margin: -10px 0 0 -24px;
+  border-radius: 10px;
+}
+
+/* 中继方块：和 SVG 里的一样大（26×26） */
+.relay-glass {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 8px;
+}
+
 .node-glass.born {
   animation: node-in 820ms var(--spring) both;
+}
+
+.graph-bubbles:has(> [data-glassium-active]:not([data-glassium-overlay])) ~ .graph .ms-body {
+  fill-opacity: 0;
+  stroke-opacity: 0.6;
 }
 
 .graph-bubbles:has(> [data-glassium-active]:not([data-glassium-overlay])) ~ .graph .node-body {
