@@ -585,11 +585,23 @@ function punchReasons(peer, d) {
     );
   }
   if (!myV6 && v6.length) reasons.push("对方有公网 IPv6、这边没有：这边的路由器打开 IPv6 的话，多一条好打通的路");
+  if (myV6 && !v6.length) {
+    reasons.push(
+      d.symmetric
+        ? "这边有公网 IPv6、对方没有（码里没有对方的 IPv6 地址）：这边又是对称型 NAT，IPv6 几乎是唯一能打通的路。让对方在光猫（或路由器）里打开 IPv6，再重新交换连接码"
+        : "这边有公网 IPv6、对方没有（码里没有对方的 IPv6 地址）：对方在光猫（或路由器）里打开 IPv6 的话，多一条好打通的路",
+    );
+  }
   if (d.proxied) reasons.push("这边像是开着代理（Clash 之类）：公网 IPv4 用不了。关掉代理的 TUN 模式，或者让 Meshora 不走代理");
-  if (d.symmetric && !d.mapped) reasons.push("这边是对称型 NAT（每个目的地换一个端口）：公网 IPv4 很难打通。在路由器里打开 UPnP，或者用 IPv6");
+  if (d.symmetric && !d.mapped) {
+    reasons.push(
+      "这边是对称型 NAT（每个目的地换一个端口）：公网 IPv4 很难打通。用手机热点、移动流量时多半是这样，换家里的宽带试试；家里的路由器可以打开 UPnP，或者用 IPv6",
+    );
+  }
   if (d.checked && !d.publicEndpoint) reasons.push("没问到这边的公网地址（STUN 服务器连不上）：只有同一个局域网里的人连得上");
   if (d.upnpTried && !d.mapped) reasons.push("这边的路由器没开端口（UPnP / PCP / NAT-PMP 都没成）：在路由器里打开 UPnP 会好打很多");
   if (!heardFrom.length) reasons.push("对方的报文一次都没到：可能是你这边的路由器挡了，或者两边都是难打通的 NAT");
+  reasons.push("实在打不通：换官方服务器建网络，打不通时有中继兜底");
   reasons.push("点地址卡片上的\"诊断\"，把信息发给帮你看的人");
   return reasons;
 }
@@ -625,7 +637,7 @@ async function directDiagnostics() {
     `本机地址 ${ov.me?.ip || "—"}`,
     `公网端点（STUN）${d.publicEndpoint || "没问到"}${d.symmetric ? " · 两个 STUN 看到的不一样：像是对称型 NAT" : ""}`,
     `路由器开端口（UPnP / NAT-PMP）${d.mapped ? `开了 ${d.mapped}` : d.upnpTried ? "没开成" : "还在试"}`,
-    `端口预测 ${d.portHint || "没有（不是对称型 NAT，或者端口是随机分配的）"}`,
+    `端口预测 ${d.portHint || (d.symmetric ? "没有：端口像是随机分配的，猜不出来" : "不需要（不是对称型 NAT）")}`,
     `代理 ${d.proxied ? "像是开着（STUN 域名被解析成 198.18.x.x，或者出口不止一个）：公网 IPv4 多半用不了" : "没看出来"}`,
     `本机候选 ${(d.endpoints || []).join(", ") || "（没有）"}`,
     "",
