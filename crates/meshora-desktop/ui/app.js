@@ -145,7 +145,7 @@ const nameOf = (peer) => peer.name || "没起名字";
 function paintAvatar(el, peer, size = "") {
   const color = colorClass(peer.id);
   setClass(el, `ava${size} ${color}`);
-  for (const [k, v] of Object.entries(liquidBubble(COLOR_HEX[Number(color.slice(1))]))) {
+  for (const [k, v] of Object.entries(liquidBubble(COLOR_HEX[Number(color.slice(1))], false, true))) {
     if (el.getAttribute(k) !== v) el.setAttribute(k, v);
   }
   setText(el, initialOf(peer));
@@ -527,7 +527,8 @@ function meshGraph() {
         "g",
         { class: born ? "peer-node born" : "peer-node", opacity: peer.online ? 1 : 0.5, onclick: () => copy(peer.ip, "地址") },
         s("title", {}, `${nameOf(peer)} · ${peer.ip}（点一下复制地址）`),
-        s("circle", { class: "node-body", cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: "rgba(255,255,255,.85)", "stroke-width": 2.5 }),
+        // 电脑上节点是无色的玻璃：这个人的颜色留在描边上（手机上照旧是色块加白圈）
+        s("circle", { class: "node-body", cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: PHONE ? "rgba(255,255,255,.85)" : COLOR_HEX[Number(colorClass(peer.id).slice(1))], "stroke-width": 2.5 }),
         s("text", { x, y: y + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, initialOf(peer)),
         label,
         s("text", { class: "node-sub", x, y: y + 53, "text-anchor": "middle" }, peer.ip),
@@ -538,7 +539,7 @@ function meshGraph() {
         node.style.setProperty("--from", from);
       }
       nodes.push(node);
-      glass.push(bubble(x, y, 21, COLOR_HEX[Number(colorClass(peer.id).slice(1))], !peer.online, from));
+      glass.push(bubble(x, y, 21, COLOR_HEX[Number(colorClass(peer.id).slice(1))], !peer.online, from, true));
     });
     nodes.push(
       // "我"身后的光晕只在手机上画：电脑上"我"是无色的玻璃，光晕画在 SVG 里会压在玻璃上面、把它染成一片蓝

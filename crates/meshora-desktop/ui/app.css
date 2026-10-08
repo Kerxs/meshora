@@ -255,14 +255,20 @@ glass-switch {
 /* 电脑上头像是带颜色的玻璃泡（liquidBubble）：玻璃生效了，纯色底就去掉，颜色由玻璃的着色给 */
 .ava[data-glassium-active]:not([data-glassium-overlay]) {
   background: none;
+  /* 无色的玻璃：这个人的颜色留在一圈内描边上 */
+  box-shadow: inset 0 0 0 2px var(--ava);
 }
 
-.c0 { background: #3d6bff; }
-.c1 { background: #12b886; }
-.c2 { background: #f59f00; }
-.c3 { background: #e64980; }
-.c4 { background: #7950f2; }
-.c5 { background: #1c9fd6; }
+.c0 { --ava: #3d6bff; }
+.c1 { --ava: #12b886; }
+.c2 { --ava: #f59f00; }
+.c3 { --ava: #e64980; }
+.c4 { --ava: #7950f2; }
+.c5 { --ava: #1c9fd6; }
+
+.ava {
+  background: var(--ava);
+}
 
 .t-good { color: var(--good); }
 .t-mid { color: var(--mid); }
