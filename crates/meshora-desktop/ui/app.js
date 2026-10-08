@@ -4,7 +4,7 @@
 // - 数据一律用 textContent 放进页面（朋友的名字是别人随便填的），不拼 HTML
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
-import "./sky.js";
+import { useSkyAsGlassScene } from "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
 
@@ -18,6 +18,8 @@ document.documentElement.classList.toggle("phone", PHONE);
 // 会慢一两帧、落在文字后面；CSS 画的和滚动一起走。材质还是 Glassium 的，模糊、着色、亮边、投影照搬，只是没有折射。
 // 要在 runtime 启动之前设（import 之后的同一个任务里）
 glassium.configure(PHONE ? { backend: "css" } : { absorbForComponents: true });
+// 电脑上背景画布交给 Glassium 当场景：玻璃后面真的是那片光和点（见 sky.js）
+if (!PHONE) useSkyAsGlassScene(glassium);
 
 const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 const DEVICE = PHONE ? "这台手机" : "这台电脑";
@@ -516,7 +518,7 @@ function friendCard(peer) {
   const why = h("div", { class: "fwhy", hidden: true });
   const el = h(
     "div",
-    { class: "fcard", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22", "glass-jelly": "", role: "button", tabindex: "0", title: "点一下复制地址" },
+    { class: "fcard", glass: "frosted", "glass-corner-radius": "22", "glass-jelly": "", role: "button", tabindex: "0", title: "点一下复制地址" },
     h("div", { class: "ftop" }, avatar, h("div", { class: "who" }, name, ip), barsSlot),
     h("div", { class: "fmid" }, ms, routeSlot),
     sparkSlot,
@@ -672,7 +674,7 @@ function meCard() {
   });
   const el = h(
     "section",
-    { class: "card me-card", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22" },
+    { class: "card me-card", glass: "frosted", "glass-corner-radius": "22" },
     h(
       "div",
       { class: "me-main" },
@@ -741,7 +743,7 @@ views.overview = {
       this.me.el,
       h(
         "section",
-        { class: "map", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
+        { class: "map", glass: "frosted", "glass-corner-radius": "26" },
         h(
           "div",
           { class: "map-head" },
@@ -868,7 +870,7 @@ views.friends = {
     const el = h(
       "div",
       { class: "view" },
-      h("section", { class: "card", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22" }, h("div", { class: "card-head" }, h("b", {}, "朋友"), this.count), this.table, this.empty),
+      h("section", { class: "card", glass: "frosted", "glass-corner-radius": "22" }, h("div", { class: "card-head" }, h("b", {}, "朋友"), this.count), this.table, this.empty),
     );
     this.update(ov);
     return el;
@@ -930,7 +932,7 @@ function pageHead(title, sub) {
 
 /** 一张卡片：一组设置。title 可以是文字，也可以是节点（比如带人数） */
 function panel(title, ...rows) {
-  return h("section", { class: "card panel", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22" }, title ? h("h2", { class: "panel-title" }, title) : null, ...rows);
+  return h("section", { class: "card panel", glass: "frosted", "glass-corner-radius": "22" }, title ? h("h2", { class: "panel-title" }, title) : null, ...rows);
 }
 
 /** Glassium 的开关。用户切换时调后端，失败就拨回去 */
@@ -1230,7 +1232,7 @@ views.onboarding = {
   mount(ov) {
     this.step = 0;
     this.body = h("div", { class: "welcome" });
-    const el = h("div", { class: "view center" }, h("section", { class: "dialog welcome-card", glass: "regular", "glass-blur": "4", "glass-corner-radius": "28" }, this.body));
+    const el = h("div", { class: "view center" }, h("section", { class: "dialog welcome-card", glass: "frosted", "glass-corner-radius": "28" }, this.body));
     this.draw(ov);
     return el;
   },
@@ -1388,7 +1390,7 @@ views.start = {
     });
     this.create = h(
       "section",
-      { class: "dialog", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
+      { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
       h("h2", {}, "建一个网络"),
       h("p", {}, "你当网主，把网络码发给朋友。"),
       h("label", { class: "label" }, "网络名"),
@@ -1452,7 +1454,7 @@ views.start = {
     );
     this.join = h(
       "section",
-      { class: "dialog", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
+      { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
       h("h2", {}, "加入朋友的网络"),
       h("p", {}, "把朋友发给你的网络码（或者直连的房主码）贴进来。"),
       area,
@@ -1645,7 +1647,7 @@ views.connecting = {
       { class: "view center" },
       h(
         "section",
-        { class: "dialog narrow", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
+        { class: "dialog narrow", glass: "frosted", "glass-corner-radius": "26" },
         h("div", { class: "pulse", role: "progressbar", "aria-label": "正在连接" }, h("i"), h("i"), h("b")),
         h("h2", {}, "正在连接"),
         this.host,
@@ -1766,7 +1768,7 @@ views.failed = {
       { class: "view center" },
       h(
         "section",
-        { class: "dialog", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
+        { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
         this.title,
         this.hint,
         this.detail,

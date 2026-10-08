@@ -95,9 +95,10 @@ textarea {
   flex: 1;
 }
 
-/* ---------- 背景：点阵 ----------
- * 深色底一层细点（"网"），左上一团极淡的品牌蓝。点画在 sky.js 建的画布上，指针附近的点聚拢、变亮。
- * 玻璃（frosted）把它们虚化成一片柔和的灰蓝 */
+/* ---------- 背景：光晕和点阵 ----------
+ * 深色底上几团品牌色的光，上面一层细点（"网"），都画在 sky.js 建的画布上，指针附近的点聚拢、变亮。
+ * 磨砂玻璃把光晕化成带颜色的面板。电脑上画布交给 Glassium 当场景（html.sky-in-scene）：
+ * 页面自己的底色换成透明、画布藏起来，玻璃后面、玻璃之间看到的都是场景里的那一份 */
 
 .sky {
   position: fixed;
@@ -106,13 +107,13 @@ textarea {
   pointer-events: none;
 }
 
-.sky-glow {
-  position: absolute;
-  left: -25vmax;
-  top: -30vmax;
-  width: 80vmax;
-  height: 80vmax;
-  background: radial-gradient(circle, rgba(61, 107, 255, 0.3), rgba(61, 107, 255, 0) 66%);
+html.sky-in-scene,
+html.sky-in-scene body {
+  background: transparent;
+}
+
+html.sky-in-scene .sky {
+  visibility: hidden;
 }
 
 .dots {

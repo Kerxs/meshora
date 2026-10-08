@@ -1,8 +1,10 @@
-// 背景：深色底上一层细点阵（"网"），左上一团极淡的品牌蓝。指针附近的点朝指针微微聚拢、变亮，
-// 指针走了慢慢散回原位。样式在 app.css（"背景：点阵"）。
+// 背景：深色底上几团柔和的品牌色光（蓝、紫，角落一点暖色和青色），上面一层细点阵（"网"）。
+// 指针附近的点朝指针微微聚拢、变亮，指针走了慢慢散回原位。样式在 app.css（"背景：点阵"）。
 //
 // 客户端（index.html）、安卓（同一份）、安装程序（setup.html）都用它：页面里放一个空的 <div class="sky">，
-// 在 Glassium 之前引入这个模块。点画在一张画布上：Glassium 发现画布内容变了会重新收进场景，玻璃后面的点也跟着动。
+// 在 Glassium 之前引入这个模块。光和点都画在同一张画布上。
+// 电脑上这张画布交给 Glassium 当场景（useSkyAsGlassScene）：玻璃把后面的光晕模糊、折射成带颜色的面板；
+// 手机上玻璃用 CSS 画，backdrop-filter 直接透过页面上的这张画布，一样带颜色。
 // 规矩和别处一样：不写内联样式，尺寸走 CSSOM。
 
 /** 点的间距（CSS 像素） */
@@ -20,15 +22,47 @@ const RIPPLE_MS_PER_PX = 1;
 /** 每个点从暗到亮用多久 */
 const RIPPLE_FADE = 520;
 
-const sky = document.querySelector(".sky");
-if (sky && !sky.firstElementChild) start(sky);
+
+/**
+ * 背景上的几团光：位置是相对窗口的比例，半径是窗口长边的比例。
+ * 玻璃（磨砂）把它们化成一片片带颜色的面板 —— 光就是材质的颜色来源，没有它玻璃只是一片灰
+ */
+const GLOWS = [
+  { x: 0.08, y: 0.02, r: 0.78, rgb: "61, 107, 255", a: 0.46 },
+  { x: 0.82, y: 0.5, r: 0.6, rgb: "124, 77, 255", a: 0.34 },
+  { x: 0.02, y: 1.02, r: 0.38, rgb: "230, 73, 128", a: 0.24 },
+  { x: 1.0, y: 1.04, r: 0.34, rgb: "18, 184, 134", a: 0.18 },
+];
+
+/** 画布每重画一次派发它：交给 Glassium 当场景时，靠它通知重新上传（不每帧都传） */
+const DRAW_EVENT = "sky:draw";
+
+/**
+ * 电脑上把背景画布交给 Glassium 当场景：玻璃后面真的是这片光和点，模糊、折射、带颜色都对。
+ * 页面自己的背景换成透明、画布藏起来（不然点会出现两遍），底色交给场景。
+ * 没有 GPU、Glassium 用 CSS 画的时候不用（backdrop-filter 本来就透过页面上的画布）
+ */
+export function useSkyAsGlassScene(glassium) {
+  const canvas = document.querySelector(".sky canvas.dots");
+  if (!canvas) return;
+  glassium.ready
+    .then(() => {
+      const stage = glassium.stage;
+      if (!stage || !stage.active) return;
+      return stage.setScene(canvas, { fit: "fill", background: "#07080c" }).then(() => {
+        canvas.addEventListener(DRAW_EVENT, () => stage.refreshScene());
+        document.documentElement.classList.add("sky-in-scene");
+      });
+    })
+    .catch(() => {});
+}
 
 function start(sky) {
-  const glow = document.createElement("i");
-  glow.className = "sky-glow";
   const canvas = document.createElement("canvas");
   canvas.className = "dots";
-  sky.append(glow, canvas);
+  sky.append(canvas);
+  // 光晕预先画在一张离屏画布上（改尺寸时重画）：每帧画点之前贴一下，不必每帧算渐变
+  const glow = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -50,7 +84,26 @@ function start(sky) {
     canvas.height = Math.round(height * ratio);
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
+    paintGlow();
     draw();
+  }
+
+  function paintGlow() {
+    glow.width = canvas.width;
+    glow.height = canvas.height;
+    const g = glow.getContext("2d");
+    const long = Math.max(glow.width, glow.height);
+    for (const { x, y, r, rgb, a } of GLOWS) {
+      const cx = x * glow.width;
+      const cy = y * glow.height;
+      const radius = r * long;
+      const gradient = g.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      gradient.addColorStop(0, `rgba(${rgb}, ${a})`);
+      gradient.addColorStop(0.45, `rgba(${rgb}, ${a * 0.45})`);
+      gradient.addColorStop(1, `rgba(${rgb}, 0)`);
+      g.fillStyle = gradient;
+      g.fillRect(0, 0, glow.width, glow.height);
+    }
   }
 
   /** 扩散还没走到的点有多亮（0 到 1）；扩散完了是 null */
@@ -68,8 +121,15 @@ function start(sky) {
   }
 
   function draw() {
+    paintDots();
+    canvas.dispatchEvent(new Event(DRAW_EVENT));
+  }
+
+  function paintDots() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(glow, 0, 0);
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, width, height);
     const reveal = rippleAt(performance.now());
     if (reveal) {
       // 扩散中：每个点按它离中心多远亮起来，正在亮的那一圈稍大一点
@@ -193,3 +253,7 @@ function start(sky) {
     }, 2500);
   }
 }
+
+// 放在最后：上面的常量（GLOWS 之类）都定义好了再开始画
+const sky = document.querySelector(".sky");
+if (sky && !sky.firstElementChild) start(sky);
