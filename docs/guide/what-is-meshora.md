@@ -1,7 +1,7 @@
 # 它解决什么问题
 
 ::: warning 当前状态
-1.1.0 已发布，有 [Windows](/guide/desktop) 和[安卓](/guide/android)客户端，装在真的电脑和手机上用过，但还没拿真的游戏在两台电脑之间联机过。
+1.1.1 已发布，有 [Windows](/guide/desktop) 和[安卓](/guide/android)客户端，装在真的电脑和手机上用过，但还没拿真的游戏在两台电脑之间联机过。
 本页讲的是底层要解决的问题；做到哪了见[路线图](/guide/roadmap)。
 :::
 
