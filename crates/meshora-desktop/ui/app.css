@@ -187,7 +187,6 @@ html.sky-in-scene .sky {
 textarea {
   border: 1px solid var(--line);
   border-radius: var(--r-field);
-  background: var(--well);
   color: var(--text);
   outline: none;
   user-select: text;
@@ -207,6 +206,17 @@ textarea {
   padding: var(--sp-3);
   font: var(--fs-sec) / 1.5 var(--mono);
   word-break: break-all;
+}
+
+/* 没写 glass 的才画实底；写了的（WELL_GLASS）底色是玻璃的着色，边框平时透明、靠玻璃自己的亮边 */
+.field:not([glass]),
+textarea:not([glass]) {
+  background: var(--well);
+}
+
+.field[glass],
+textarea[glass] {
+  border-color: transparent;
 }
 
 .field:focus,

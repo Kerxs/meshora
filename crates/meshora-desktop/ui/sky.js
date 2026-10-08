@@ -61,6 +61,11 @@ export const LIQUID_EDGE = PHONE_UA
   : { "glass-refraction": "0.5", "glass-distortion": "1", "glass-dispersion": "0.45" };
 
 /**
+ * 输入框、文本框：深色玻璃（颜色和原来的实底 --well 一样），电脑上边缘也有折射、色散
+ */
+export const WELL_GLASS = { glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.2)", ...LIQUID_EDGE };
+
+/**
  * 头像、网状图节点的彩色玻璃泡：颜色是着色，边上折射、色散、一圈亮边。`dim` 是不在线的（颜色淡一些）。
  * 手机上不用（列表里一堆 CSS 玻璃拖慢滚动），返回空的，照旧是纯色圆
  */

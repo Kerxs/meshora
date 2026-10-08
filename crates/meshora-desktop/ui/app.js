@@ -4,7 +4,7 @@
 // - 数据一律用 textContent 放进页面（朋友的名字是别人随便填的），不拼 HTML
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
-import { LIQUID_EDGE, LIQUID_GLASS, liquidBubble, useSkyAsGlassScene } from "./sky.js";
+import { LIQUID_EDGE, LIQUID_GLASS, WELL_GLASS, liquidBubble, useSkyAsGlassScene } from "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
 
@@ -1001,7 +1001,7 @@ function toggle(command, checked) {
 
 views.settings = {
   mount(ov) {
-    this.name = h("input", { class: "field", maxlength: "32", spellcheck: "false", "aria-label": "你的名字" });
+    this.name = h("input", { ...WELL_GLASS, class: "field", maxlength: "32", spellcheck: "false", "aria-label": "你的名字" });
     this.name.value = ov.name;
     const saveName = async () => {
       const wanted = this.name.value;
@@ -1055,7 +1055,7 @@ views.settings = {
     this.network = panel("网络", codeRow);
 
     this.serverList = h("div");
-    const newServer = h("input", { class: "field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
+    const newServer = h("input", { ...WELL_GLASS, class: "field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
     const addServer = async () => {
       try {
         await invoke("add_server", { code: newServer.value });
@@ -1197,7 +1197,7 @@ function sheet(title, text) {
 
 /** 只读的连接码和"复制"按钮 */
 function codeField(code, what) {
-  const area = h("textarea", { class: "code-area mono", readonly: "", spellcheck: "false", "aria-label": what }, code);
+  const area = h("textarea", { ...WELL_GLASS, class: "code-area mono", readonly: "", spellcheck: "false", "aria-label": what }, code);
   area.addEventListener("focus", () => area.select());
   return h("div", { class: "code-box" }, area, h("button", { class: "btn", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(code, what) }, `复制${what}`));
 }
@@ -1219,7 +1219,7 @@ async function inviteDirect() {
     body.replaceChildren(h("p", { class: "field-error" }, String(err)), h("div", { class: "row end-row" }, h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: close }, "关闭")));
     return;
   }
-  const reply = h("textarea", { class: "code-area mono", spellcheck: "false", placeholder: "meshora-reply: 开头的回执码", "aria-label": "回执码" });
+  const reply = h("textarea", { ...WELL_GLASS, class: "code-area mono", spellcheck: "false", placeholder: "meshora-reply: 开头的回执码", "aria-label": "回执码" });
   const error = h("div", { class: "field-error", role: "alert" });
   const accept = h("button", { class: "btn", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加进来");
   accept.addEventListener("click", async () => {
@@ -1287,7 +1287,7 @@ views.onboarding = {
   },
   draw(ov) {
     if (this.step === 0) {
-      const name = h("input", { class: "field wide-field", maxlength: "32", spellcheck: "false", "aria-label": "你的名字" });
+      const name = h("input", { ...WELL_GLASS, class: "field wide-field", maxlength: "32", spellcheck: "false", "aria-label": "你的名字" });
       name.value = ov.name;
       const next = async () => {
         const wanted = name.value.trim();
@@ -1375,10 +1375,10 @@ function choices(options, selected, onPick) {
 views.start = {
   mount(ov) {
     // ---- 建网络 ----
-    this.netName = h("input", { class: "field wide-field", maxlength: "32", spellcheck: "false", "aria-label": "网络名" });
+    this.netName = h("input", { ...WELL_GLASS, class: "field wide-field", maxlength: "32", spellcheck: "false", "aria-label": "网络名" });
     this.netName.value = `${ov.name || "我"}的网络`;
     this.where = ov.officialServer ? "official" : PHONE ? "server" : "thisPc";
-    this.server = h("input", { class: "field wide-field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
+    this.server = h("input", { ...WELL_GLASS, class: "field wide-field mono-field", spellcheck: "false", placeholder: "公钥@地址:端口", "aria-label": "服务器地址" });
     this.server.value = ov.servers[0] || "";
     const serverRow = h("div", { class: "server-row" }, this.server);
     serverRow.hidden = this.where !== "server";
@@ -1452,7 +1452,7 @@ views.start = {
     );
 
     // ---- 加入网络 ----
-    const area = h("textarea", { placeholder: "网络码，或者房主发来的房主码（meshora-offer: 开头）", spellcheck: "false", "aria-label": "网络码" });
+    const area = h("textarea", { ...WELL_GLASS, placeholder: "网络码，或者房主发来的房主码（meshora-offer: 开头）", spellcheck: "false", "aria-label": "网络码" });
     const error = h("div", { class: "field-error", role: "alert" });
     const button = h("button", { class: "btn wide", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加入");
     const submit = async () => {
@@ -1560,7 +1560,7 @@ async function admin(action, done) {
 
 views.admin = {
   mount(ov) {
-    this.title = h("input", { class: "field", maxlength: "32", spellcheck: "false", "aria-label": "网络名" });
+    this.title = h("input", { ...WELL_GLASS, class: "field", maxlength: "32", spellcheck: "false", "aria-label": "网络名" });
     this.title.addEventListener("change", () => {
       const name = this.title.value.trim();
       if (name && name !== state.overview.roster?.name) admin({ kind: "rename", name }, () => toast("网络名已保存"));
