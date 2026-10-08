@@ -440,7 +440,7 @@ function uninstalled() {
 
 async function start() {
   stage = h("div", { class: "stage" });
-  document.getElementById("setup").replaceChildren(titlebar(), h("main", {}, h("section", { class: "setup-panel", glass: "frosted", "glass-corner-radius": "26" }, stage)));
+  document.getElementById("setup").replaceChildren(titlebar(), h("main", {}, h("section", { class: "setup-panel", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" }, stage)));
   await tauri().event.listen("progress", (event) => progress.set(event.payload));
   const info = await invoke("info");
   if (info.mode === "uninstall") uninstallPage(info);

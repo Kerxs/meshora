@@ -516,7 +516,7 @@ function friendCard(peer) {
   const why = h("div", { class: "fwhy", hidden: true });
   const el = h(
     "div",
-    { class: "fcard", glass: "frosted", "glass-corner-radius": "22", "glass-jelly": "", role: "button", tabindex: "0", title: "点一下复制地址" },
+    { class: "fcard", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22", "glass-jelly": "", role: "button", tabindex: "0", title: "点一下复制地址" },
     h("div", { class: "ftop" }, avatar, h("div", { class: "who" }, name, ip), barsSlot),
     h("div", { class: "fmid" }, ms, routeSlot),
     sparkSlot,
@@ -672,7 +672,7 @@ function meCard() {
   });
   const el = h(
     "section",
-    { class: "card me-card", glass: "frosted", "glass-corner-radius": "22" },
+    { class: "card me-card", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22" },
     h(
       "div",
       { class: "me-main" },
@@ -741,7 +741,7 @@ views.overview = {
       this.me.el,
       h(
         "section",
-        { class: "map", glass: "frosted", "glass-corner-radius": "26" },
+        { class: "map", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
         h(
           "div",
           { class: "map-head" },
@@ -868,7 +868,7 @@ views.friends = {
     const el = h(
       "div",
       { class: "view" },
-      h("section", { class: "card", glass: "frosted", "glass-corner-radius": "22" }, h("div", { class: "card-head" }, h("b", {}, "朋友"), this.count), this.table, this.empty),
+      h("section", { class: "card", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22" }, h("div", { class: "card-head" }, h("b", {}, "朋友"), this.count), this.table, this.empty),
     );
     this.update(ov);
     return el;
@@ -930,7 +930,7 @@ function pageHead(title, sub) {
 
 /** 一张卡片：一组设置。title 可以是文字，也可以是节点（比如带人数） */
 function panel(title, ...rows) {
-  return h("section", { class: "card panel", glass: "frosted", "glass-corner-radius": "22" }, title ? h("h2", { class: "panel-title" }, title) : null, ...rows);
+  return h("section", { class: "card panel", glass: "regular", "glass-blur": "4", "glass-corner-radius": "22" }, title ? h("h2", { class: "panel-title" }, title) : null, ...rows);
 }
 
 /** Glassium 的开关。用户切换时调后端，失败就拨回去 */
@@ -1230,7 +1230,7 @@ views.onboarding = {
   mount(ov) {
     this.step = 0;
     this.body = h("div", { class: "welcome" });
-    const el = h("div", { class: "view center" }, h("section", { class: "dialog welcome-card", glass: "frosted", "glass-corner-radius": "28" }, this.body));
+    const el = h("div", { class: "view center" }, h("section", { class: "dialog welcome-card", glass: "regular", "glass-blur": "4", "glass-corner-radius": "28" }, this.body));
     this.draw(ov);
     return el;
   },
@@ -1388,7 +1388,7 @@ views.start = {
     });
     this.create = h(
       "section",
-      { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
+      { class: "dialog", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
       h("h2", {}, "建一个网络"),
       h("p", {}, "你当网主，把网络码发给朋友。"),
       h("label", { class: "label" }, "网络名"),
@@ -1452,7 +1452,7 @@ views.start = {
     );
     this.join = h(
       "section",
-      { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
+      { class: "dialog", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
       h("h2", {}, "加入朋友的网络"),
       h("p", {}, "把朋友发给你的网络码（或者直连的房主码）贴进来。"),
       area,
@@ -1645,7 +1645,7 @@ views.connecting = {
       { class: "view center" },
       h(
         "section",
-        { class: "dialog narrow", glass: "frosted", "glass-corner-radius": "26" },
+        { class: "dialog narrow", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
         h("div", { class: "pulse", role: "progressbar", "aria-label": "正在连接" }, h("i"), h("i"), h("b")),
         h("h2", {}, "正在连接"),
         this.host,
@@ -1766,7 +1766,7 @@ views.failed = {
       { class: "view center" },
       h(
         "section",
-        { class: "dialog", glass: "frosted", "glass-corner-radius": "26" },
+        { class: "dialog", glass: "regular", "glass-blur": "4", "glass-corner-radius": "26" },
         this.title,
         this.hint,
         this.detail,
