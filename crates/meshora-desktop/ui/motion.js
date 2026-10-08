@@ -143,32 +143,6 @@ export function flip(container) {
   };
 }
 
-/**
- * 数字从旧值滚到新值（网速、延迟），约 0.6 秒。`format` 把数字变成文字。
- * 看不见时、要求减少动画时直接写最终值
- */
-export function tweenText(el, value, format) {
-  const from = el._tweenValue;
-  el._tweenValue = value;
-  cancelAnimationFrame(el._tweenFrame || 0);
-  if (from === undefined || from === null || value === null || document.hidden || still() || from === value) {
-    el.textContent = format(value);
-    return;
-  }
-  const start = performance.now();
-  const step = (now) => {
-    const t = Math.min(1, (now - start) / 600);
-    const eased = 1 - (1 - t) ** 4;
-    el.textContent = format(from + (value - from) * eased);
-    if (t < 1) el._tweenFrame = requestAnimationFrame(step);
-  };
-  el._tweenFrame = requestAnimationFrame(step);
-  // rAF 万一不来（窗口刚被藏起来），也要落到最终值
-  setTimeout(() => {
-    if (el._tweenValue === value) el.textContent = format(value);
-  }, 650);
-}
-
 /** 按钮上闪一下"✓ 已复制"，1.4 秒后变回原来的字 */
 export function flashCopied(button) {
   if (!button || button._flashing) return;

@@ -20,6 +20,10 @@ const PULL = 0.22;
 const BASE_ALPHA = 0.14;
 /** 指针跟前的点再亮多少 */
 const LIT_ALPHA = 0.7;
+/** 指针附近亮起来的点按亮度分几档画（每档一次填充） */
+const LIT_LEVELS = 12;
+/** 打开时的扩散按亮度分几档画 */
+const RIPPLE_LEVELS = 16;
 /** 打开时点阵从中心一圈圈亮起：离中心每多一像素晚这么多毫秒 */
 const RIPPLE_MS_PER_PX = 1;
 /** 每个点从暗到亮用多久 */
@@ -146,6 +150,9 @@ function start(sky) {
   sky.append(canvas);
   // 光晕预先画在一张离屏画布上（改尺寸时重画）：每帧画点之前贴一下，不必每帧算渐变
   const glow = document.createElement("canvas");
+  // 底图：光晕加上静止的点阵（改尺寸时画一次）。平时每帧只贴它，再重画指针附近那一块 ——
+  // 以前每帧把一千多个点全画一遍，鼠标一动主线程就忙不过来（CPU 慢四倍时帧率减半）
+  const base = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -168,7 +175,23 @@ function start(sky) {
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     paintGlow();
+    paintBase();
     draw();
+  }
+
+  /** 底图：光晕 + 所有点按静止的样子（一条路径、一次填充） */
+  function paintBase() {
+    base.width = canvas.width;
+    base.height = canvas.height;
+    const b = base.getContext("2d");
+    b.drawImage(glow, 0, 0);
+    b.setTransform(ratio, 0, 0, ratio, 0, 0);
+    b.fillStyle = `rgba(255, 255, 255, ${BASE_ALPHA})`;
+    b.beginPath();
+    for (let y = GAP / 2; y < height; y += GAP) {
+      for (let x = GAP / 2; x < width; x += GAP) b.rect(x - 0.75, y - 0.75, 1.5, 1.5);
+    }
+    b.fill();
   }
 
   function paintGlow() {
@@ -209,52 +232,97 @@ function start(sky) {
   }
 
   function paintDots() {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(glow, 0, 0);
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     const reveal = rippleAt(performance.now());
     if (reveal) {
-      // 扩散中：每个点按它离中心多远亮起来，正在亮的那一圈稍大一点
-      for (let y = GAP / 2; y < height; y += GAP) {
-        for (let x = GAP / 2; x < width; x += GAP) {
-          const r = reveal(x, y);
-          if (r <= 0) continue;
-          const crest = r < 1 ? Math.sin(r * Math.PI) : 0;
-          ctx.fillStyle = `rgba(${Math.round(255 - 80 * crest)}, ${Math.round(255 - 50 * crest)}, 255, ${BASE_ALPHA * r + 0.5 * crest})`;
-          const size = 1.5 + 1.6 * crest;
-          ctx.fillRect(x - size / 2, y - size / 2, size, size);
-        }
-      }
+      paintRipple(reveal);
       return;
     }
+    // 先整张贴底图（copy：连同透明的地方一起换掉上一帧）
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = "copy";
+    ctx.drawImage(base, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
     const strength = still.matches ? 0 : at.on;
+    if (strength <= 0.01) return;
+    // 指针附近那一块：擦掉，补上光晕，再把这一块里的点重画（挪过去一点、大一点、亮一点，带一点品牌蓝）
     const reach = SIGMA * 3;
-    // 离指针远的点都一样：一次画完，不逐个算
-    ctx.fillStyle = `rgba(255, 255, 255, ${BASE_ALPHA})`;
-    const lit = [];
-    for (let y = GAP / 2; y < height; y += GAP) {
-      for (let x = GAP / 2; x < width; x += GAP) {
+    const x0 = Math.max(0, at.x - reach);
+    const y0 = Math.max(0, at.y - reach);
+    const x1 = Math.min(width, at.x + reach);
+    const y1 = Math.min(height, at.y + reach);
+    if (x1 <= x0 || y1 <= y0) return;
+    const px = Math.floor(x0 * ratio);
+    const py = Math.floor(y0 * ratio);
+    const pw = Math.ceil(x1 * ratio) - px;
+    const ph = Math.ceil(y1 * ratio) - py;
+    ctx.clearRect(px, py, pw, ph);
+    ctx.drawImage(glow, px, py, pw, ph, px, py, pw, ph);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    // 这一块里的点：不亮的合成一条路径；亮的按亮度分 LIT_LEVELS 档，每档一条路径、一次填充
+    const levels = Array.from({ length: LIT_LEVELS }, () => []);
+    const plain = new Path2D();
+    const first = (v) => GAP / 2 + Math.ceil((v - GAP / 2) / GAP) * GAP;
+    // 只算落在这块里的点（格点从 GAP/2 起，每 GAP 一个）；这块是按像素对齐取整过的，往外放半个点
+    for (let y = first(y0 - 1); y < y1 + 1; y += GAP) {
+      for (let x = first(x0 - 1); x < x1 + 1; x += GAP) {
         const dx = at.x - x;
         const dy = at.y - y;
-        if (strength > 0.01 && Math.abs(dx) < reach && Math.abs(dy) < reach) {
-          const w = Math.exp(-(dx * dx + dy * dy) / (2 * SIGMA * SIGMA)) * strength;
-          if (w > 0.02) {
-            lit.push([x + dx * PULL * w, y + dy * PULL * w, w]);
-            continue;
-          }
-        }
-        ctx.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
+        const w = Math.exp(-(dx * dx + dy * dy) / (2 * SIGMA * SIGMA)) * strength;
+        if (w > 0.02) levels[Math.min(LIT_LEVELS - 1, Math.floor(w * LIT_LEVELS))].push(x + dx * PULL * w, y + dy * PULL * w);
+        else plain.rect(x - 0.75, y - 0.75, 1.5, 1.5);
       }
     }
-    // 指针跟前的点：挪过去一点、大一点、亮一点，带一点品牌蓝
-    for (const [x, y, w] of lit) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${BASE_ALPHA})`;
+    ctx.fill(plain);
+    levels.forEach((points, i) => {
+      if (!points.length) return;
+      const w = (i + 0.5) / LIT_LEVELS;
       const r = 0.9 + 1.1 * w;
+      const path = new Path2D();
+      // 小的（半径 1.2 以下，占大多数）画方块：这么小看不出是方是圆，比画圆便宜得多
+      const round = r > 1.2;
+      for (let k = 0; k < points.length; k += 2) {
+        if (round) {
+          path.moveTo(points[k] + r, points[k + 1]);
+          path.arc(points[k], points[k + 1], r, 0, Math.PI * 2);
+        } else {
+          path.rect(points[k] - r, points[k + 1] - r, r * 2, r * 2);
+        }
+      }
       ctx.fillStyle = `rgba(${Math.round(255 - 85 * w)}, ${Math.round(255 - 60 * w)}, 255, ${BASE_ALPHA + LIT_ALPHA * w})`;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fill(path);
+    });
+  }
+
+  /** 打开时的扩散：每个点按它离中心多远亮起来，正在亮的那一圈稍大一点。按亮度分 RIPPLE_LEVELS 档，每档一次填充 */
+  function paintRipple(reveal) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = "copy";
+    ctx.drawImage(glow, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const levels = Array.from({ length: RIPPLE_LEVELS + 1 }, () => new Path2D());
+    const used = new Array(RIPPLE_LEVELS + 1).fill(false);
+    for (let y = GAP / 2; y < height; y += GAP) {
+      for (let x = GAP / 2; x < width; x += GAP) {
+        const r = reveal(x, y);
+        if (r <= 0) continue;
+        // 亮全了的（r = 1）单独一档，就是静止的样子
+        const i = r >= 1 ? RIPPLE_LEVELS : Math.min(RIPPLE_LEVELS - 1, Math.floor(r * RIPPLE_LEVELS));
+        const level = i === RIPPLE_LEVELS ? 1 : (i + 0.5) / RIPPLE_LEVELS;
+        const crest = level < 1 ? Math.sin(level * Math.PI) : 0;
+        const size = 1.5 + 1.6 * crest;
+        levels[i].rect(x - size / 2, y - size / 2, size, size);
+        used[i] = true;
+      }
     }
+    levels.forEach((path, i) => {
+      if (!used[i]) return;
+      const r = i === RIPPLE_LEVELS ? 1 : (i + 0.5) / RIPPLE_LEVELS;
+      const crest = r < 1 ? Math.sin(r * Math.PI) : 0;
+      ctx.fillStyle = `rgba(${Math.round(255 - 80 * crest)}, ${Math.round(255 - 50 * crest)}, 255, ${BASE_ALPHA * r + 0.5 * crest})`;
+      ctx.fill(path);
+    });
   }
 
   // 缓动到目标位置；到了就停，不空转

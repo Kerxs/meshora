@@ -6,7 +6,7 @@
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
 import { LIQUID_EDGE, LIQUID_GLASS, WELL_GLASS, liquidBubble, liquidPill, useSkyAsGlassScene } from "./sky.js";
 import glassium from "./vendor/glassium/index.js";
-import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
+import { closeLayer, flashCopied, flip, intro, swapView } from "./motion.js";
 
 // 安卓客户端（crates/meshora-android）用的也是这份界面：手机上没有标题栏、本机当主机、Windows 的网络设置，
 // 导航挪到屏幕底部。一打开就要知道（标题栏在拿到第一份状态之前就画了），所以看 User-Agent
@@ -191,14 +191,10 @@ function frag(...children) {
   return out;
 }
 
-/** 一条延迟曲线 */
-function spark(points, width, height) {
-  const svg = s("svg", { class: "spark", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none" });
+/** 延迟曲线的路径和颜色；不到两个点时是 null（画一条虚线） */
+function sparkPath(points, width, height) {
   const values = points.filter((v) => v !== null);
-  if (values.length < 2) {
-    svg.append(s("line", { x1: 0, x2: width, y1: height / 2, y2: height / 2, stroke: "rgba(255,255,255,.18)", "stroke-dasharray": "3 4" }));
-    return svg;
-  }
+  if (values.length < 2) return null;
   const max = Math.max(...values) * 1.15 + 1;
   const min = Math.max(0, Math.min(...values) * 0.8);
   const step = width / (HISTORY - 1);
@@ -211,9 +207,30 @@ function spark(points, width, height) {
     d += `${d && points[i - 1] !== null ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
   });
   const last = values[values.length - 1];
-  const hex = TONE_HEX[last < 40 ? "good" : last < 100 ? "mid" : "bad"];
-  svg.append(s("path", { d, fill: "none", stroke: hex, "stroke-width": 1.6, "vector-effect": "non-scaling-stroke", "stroke-linejoin": "round" }));
-  return svg;
+  return { d, hex: TONE_HEX[last < 40 ? "good" : last < 100 ? "mid" : "bad"] };
+}
+
+/**
+ * 把延迟曲线画进 `slot`。第一次建 SVG，之后每秒只改路径的 d 和颜色：
+ * 以前每秒整个重建，增删元素会让 Glassium 把所有玻璃后面重新扫一遍（几十次命中测试），每秒卡一下
+ */
+function drawSpark(slot, points, width, height) {
+  const path = sparkPath(points, width, height);
+  let svg = slot.firstElementChild;
+  const line = svg?.querySelector("path");
+  if (!svg || !svg.classList.contains("spark") || Boolean(line) !== Boolean(path)) {
+    svg = s("svg", { class: "spark", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none" });
+    svg.append(
+      path
+        ? s("path", { d: path.d, fill: "none", stroke: path.hex, "stroke-width": 1.6, "vector-effect": "non-scaling-stroke", "stroke-linejoin": "round" })
+        : s("line", { x1: 0, x2: width, y1: height / 2, y2: height / 2, stroke: "rgba(255,255,255,.18)", "stroke-dasharray": "3 4" }),
+    );
+    slot.replaceChildren(svg);
+    return;
+  }
+  if (!path) return;
+  if (line.getAttribute("d") !== path.d) line.setAttribute("d", path.d);
+  if (line.getAttribute("stroke") !== path.hex) line.setAttribute("stroke", path.hex);
 }
 
 // ---------- 状态 ----------
@@ -584,7 +601,11 @@ function friendCard(peer) {
   const name = h("div", { class: "fname" });
   const ip = h("div", { class: "fip" });
   const barsSlot = h("span");
-  const ms = h("span", { class: "fms" });
+  // 延迟：数字是一个文字节点、单位是一个元素，都只建一次，之后只改文字（每秒整个换掉子元素的话，
+  // 增删元素会让 Glassium 把所有玻璃后面重新扫一遍，每秒卡一下）
+  const msValue = document.createTextNode("—");
+  const msUnit = h("small", { hidden: true }, "ms");
+  const ms = h("span", { class: "fms" }, msValue, msUnit);
   const routeSlot = h("span");
   const sparkSlot = h("div");
   const why = h("div", { class: "fwhy", hidden: true });
@@ -616,10 +637,12 @@ function friendCard(peer) {
       fill(barsSlot, barsKey(next), () => bars(next));
       setClass(ms, `fms t-${tone(next)}`);
       const shown = next.online && next.rttMs != null;
-      fill(ms, shown ? String(next.rttMs) : "", () => (shown ? frag(msText(next.rttMs), h("small", {}, "ms")) : frag("—")));
+      const value = shown ? msText(next.rttMs) : "—";
+      if (msValue.data !== value) msValue.data = value;
+      if (msUnit.hidden === shown) msUnit.hidden = !shown;
       fill(routeSlot, routeKey(next), () => route(next));
       const points = state.history.get(next.id) || [];
-      fill(sparkSlot, points.join(), () => spark(points, 200, 30));
+      drawSpark(sparkSlot, points, 200, 30);
       const stuck = state.overview?.direct && next.route === "pending";
       why.hidden = !stuck;
       if (stuck) setText(why, punchHint(next));
@@ -849,8 +872,10 @@ views.overview = {
   update(ov) {
     this.me.update(ov);
     const online = ov.peers.filter((p) => p.online);
-    tweenText(this.down, state.speed.rx, (v) => `${formatBytes(v)}/s`);
-    tweenText(this.up, state.speed.tx, (v) => `${formatBytes(v)}/s`);
+    // 直接换，不做逐帧滚动：这两个数字在玻璃卡片里，文字每变一次 Glassium 就要重画、把所有玻璃的层叠关系重查一遍
+    //（以前滚动 600 毫秒，有流量时每秒六成的时间每帧都在改字，CPU 慢的电脑上一直卡）
+    setText(this.down, `${formatBytes(state.speed.rx)}/s`);
+    setText(this.up, `${formatBytes(state.speed.tx)}/s`);
     setText(this.paths, `${online.filter((p) => p.route === "direct").length} / ${online.filter((p) => p.route === "relay").length}`);
     this.empty.hidden = ov.peers.length > 0;
     this.invite.hidden = !ov.roster?.code;
@@ -928,7 +953,7 @@ function friendRow(peer) {
       setClass(cells[2], `t-${tone(next)}`);
       setText(cells[2], next.online && next.rttMs != null ? `${msText(next.rttMs)} ms` : "—");
       const points = state.history.get(next.id) || [];
-      fill(cells[3], points.join(), () => spark(points, 140, 24));
+      drawSpark(cells[3], points, 140, 24);
       setText(cells[4], next.online && next.jitterMs != null ? `${next.jitterMs} ms` : "—");
       setText(cells[5], next.online && next.lossPercent != null ? `${next.lossPercent}%` : "—");
       setClass(cells[6], "t-none");
