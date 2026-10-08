@@ -7,6 +7,9 @@
 // 手机上玻璃用 CSS 画，backdrop-filter 直接透过页面上的这张画布，一样带颜色。
 // 规矩和别处一样：不写内联样式，尺寸走 CSSOM。
 
+/** 安卓客户端：玻璃用 CSS 画（和 app.js 的 PHONE 同一个判断） */
+const PHONE_UA = /Android/i.test(navigator.userAgent);
+
 /** 点的间距（CSS 像素） */
 const GAP = 24;
 /** 指针影响的范围：高斯分布的标准差 */
@@ -40,7 +43,7 @@ const GLOWS = [
  * 只在电脑上（GPU 画）有折射和色散；手机上玻璃用 CSS 画，没有折射，还是用磨砂。
  * 弹窗、提示条（overlay）不用它：它们压在别的内容上，要磨砂才看得清字
  */
-export const LIQUID_GLASS = /Android/i.test(navigator.userAgent) ? { glass: "frosted" } : {
+export const LIQUID_GLASS = PHONE_UA ? { glass: "frosted" } : {
   glass: "regular",
   "glass-blur": "0",
   "glass-refraction": "0.22",
@@ -48,6 +51,34 @@ export const LIQUID_GLASS = /Android/i.test(navigator.userAgent) ? { glass: "fro
   "glass-dispersion": "0.6",
   "glass-tint": "rgba(255,255,255,0.08)",
 };
+
+/**
+ * 按钮的液态玻璃边：卡片上的按钮也把后面的点阵在边上拉弯、带色散（材质照旧是 clear / tinted，只加强边缘）。
+ * 手机上玻璃用 CSS 画，没有折射，给空的
+ */
+export const LIQUID_EDGE = PHONE_UA
+  ? {}
+  : { "glass-refraction": "0.5", "glass-distortion": "1", "glass-dispersion": "0.45" };
+
+/**
+ * 头像、网状图节点的彩色玻璃泡：颜色是着色，边上折射、色散、一圈亮边。`dim` 是不在线的（颜色淡一些）。
+ * 手机上不用（列表里一堆 CSS 玻璃拖慢滚动），返回空的，照旧是纯色圆
+ */
+export function liquidBubble(hex, dim = false) {
+  if (PHONE_UA) return {};
+  const n = Number.parseInt(hex.slice(1), 16);
+  const rgb = `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+  return {
+    glass: "regular",
+    "glass-blur": "0",
+    "glass-refraction": "0.6",
+    "glass-distortion": "1",
+    "glass-dispersion": "0.4",
+    "glass-highlight": "1.2",
+    "glass-tint": `rgba(${rgb}, ${dim ? 0.4 : 0.78})`,
+    "glass-corner-radius": "1frac",
+  };
+}
 
 /** 画布每重画一次派发它：交给 Glassium 当场景时，靠它通知重新上传（不每帧都传） */
 const DRAW_EVENT = "sky:draw";

@@ -4,7 +4,7 @@
 // - 数据一律用 textContent 放进页面（朋友的名字是别人随便填的），不拼 HTML
 // - CSP 不许内联样式：不写 style= 属性，要动的位置走 CSSOM（el.style.xxx）
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
-import { LIQUID_GLASS, useSkyAsGlassScene } from "./sky.js";
+import { LIQUID_EDGE, LIQUID_GLASS, liquidBubble, useSkyAsGlassScene } from "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 import { closeLayer, flashCopied, flip, intro, swapView, tweenText } from "./motion.js";
 
@@ -140,6 +140,16 @@ function colorClass(id) {
 const COLOR_HEX = ["#3d6bff", "#12b886", "#f59f00", "#e64980", "#7950f2", "#1c9fd6"];
 
 const nameOf = (peer) => peer.name || "没起名字";
+
+/** 头像：颜色、首字，电脑上是带颜色的玻璃泡（liquidBubble） */
+function paintAvatar(el, peer, size = "") {
+  const color = colorClass(peer.id);
+  setClass(el, `ava${size} ${color}`);
+  for (const [k, v] of Object.entries(liquidBubble(COLOR_HEX[Number(color.slice(1))]))) {
+    if (el.getAttribute(k) !== v) el.setAttribute(k, v);
+  }
+  setText(el, initialOf(peer));
+}
 const initialOf = (peer) => (peer.name ? [...peer.name][0] : peer.ip.split(".").pop());
 
 /** 延迟分档：好、一般、卡；没有数是 none */
@@ -373,6 +383,17 @@ const pass = {
 /** 网状图：你在中间，朋友沿椭圆排开；经中继的线绕过中继节点。连线结构变了才重画，延迟数字就地改 */
 function meshGraph() {
   const svg = s("svg", { class: "graph first", role: "img", "aria-label": "网状图：你和网里的每个人怎么连着" });
+  // 节点的玻璃泡（电脑上）：和 SVG 同一个盒子，泡的位置按 SVG 里的坐标摆
+  const bubbles = h("div", { class: "graph-bubbles", "aria-hidden": "true" });
+  /** 一个玻璃泡：圆心 (x, y)、半径 r，`from` 是飞出来的起点（新来的人） */
+  const bubble = (x, y, r, hex, dim, from) => {
+    const el = h("span", { class: from ? "node-glass born" : "node-glass", ...liquidBubble(hex, dim) });
+    el.style.setProperty("--x", `${x.toFixed(1)}px`);
+    el.style.setProperty("--y", `${y.toFixed(1)}px`);
+    el.style.setProperty("--d", `${r * 2}px`);
+    if (from) el.style.setProperty("--from", from);
+    return el;
+  };
   let signature = "";
   let labels = new Map();
   // 上一次画的时候每个人走哪条路：新来的从"我"那里飞出来，换了路的连线重新浮现，打洞打通的那条亮一下
@@ -397,6 +418,12 @@ function meshGraph() {
       return [cx + RX * Math.cos(a), cy + R * Math.sin(a)];
     };
     labels = new Map();
+    const glass = [];
+    /** 从圆心 (x1, y1) 朝 (x2, y2) 走 r，落在圆边上的那一点 */
+    const edge = (x1, y1, x2, y2, r) => {
+      const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+      return `${(x1 + ((x2 - x1) * r) / len).toFixed(1)} ${(y1 + ((y2 - y1) * r) / len).toFixed(1)}`;
+    };
     const nodes = [
       s("defs", {}, s("radialGradient", { id: "me-glow" }, s("stop", { offset: 0, "stop-color": "#7a9cff", "stop-opacity": 0.55 }), s("stop", { offset: 1, "stop-color": "#7a9cff", "stop-opacity": 0 }))),
       s("ellipse", { cx, cy, rx: RX, ry: R, fill: "none", stroke: "rgba(255,255,255,.12)", "stroke-dasharray": "2 6" }),
@@ -415,7 +442,10 @@ function meshGraph() {
       const [x, y] = pos(i);
       const viaRelay = peer.online && peer.route === "relay";
       const stroke = !peer.online ? "rgba(255,255,255,.3)" : viaRelay ? RELAY_HEX : TONE_HEX[tone(peer)];
-      const d = viaRelay ? `M${cx} ${cy}L${relay[0]} ${relay[1]}L${x} ${y}` : `M${cx} ${cy}L${x} ${y}`;
+      // 连线在两头的圆边上停住：节点是玻璃（透明的），线穿进去就看得见
+      const d = viaRelay
+        ? `M${edge(cx, cy, relay[0], relay[1], 27)}L${relay[0]} ${relay[1]}L${edge(x, y, relay[0], relay[1], 21)}`
+        : `M${edge(cx, cy, x, y, 27)}L${edge(x, y, cx, cy, 21)}`;
       const id = `link-${i}`;
       const was = before?.get(peer.id);
       const now = `${peer.online}|${peer.route}`;
@@ -463,31 +493,37 @@ function meshGraph() {
         "g",
         { class: born ? "peer-node born" : "peer-node", opacity: peer.online ? 1 : 0.5, onclick: () => copy(peer.ip, "地址") },
         s("title", {}, `${nameOf(peer)} · ${peer.ip}（点一下复制地址）`),
-        s("circle", { cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: "rgba(255,255,255,.85)", "stroke-width": 2.5 }),
+        s("circle", { class: "node-body", cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: "rgba(255,255,255,.85)", "stroke-width": 2.5 }),
         s("text", { x, y: y + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, initialOf(peer)),
         label,
         s("text", { class: "node-sub", x, y: y + 53, "text-anchor": "middle" }, peer.ip),
       );
-      if (born) {
+      const from = born ? `translate(${(cx - x).toFixed(1)}px, ${(cy - y).toFixed(1)}px) scale(0.3)` : null;
+      if (from) {
         // 从"我"的位置飞出来
-        node.style.setProperty("--from", `translate(${(cx - x).toFixed(1)}px, ${(cy - y).toFixed(1)}px) scale(0.3)`);
+        node.style.setProperty("--from", from);
       }
       nodes.push(node);
+      glass.push(bubble(x, y, 21, COLOR_HEX[Number(colorClass(peer.id).slice(1))], !peer.online, from));
     });
     nodes.push(
       s("circle", { cx, cy, r: 64, fill: "url(#me-glow)" }),
-      s("circle", { cx, cy, r: 27, fill: "#3d6bff", stroke: "#fff", "stroke-width": 3 }),
+      s("circle", { class: "node-body", cx, cy, r: 27, fill: "#3d6bff", stroke: "#fff", "stroke-width": 3 }),
       s("text", { x: cx, y: cy + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, "我"),
       s("text", { class: "node-label", x: cx, y: cy + 46, "text-anchor": "middle" }, ov.name || DEVICE),
       s("text", { class: "node-sub", x: cx, y: cy + 61, "text-anchor": "middle" }, ov.me.ip),
     );
+    glass.push(bubble(cx, cy, 27, "#3d6bff", false, null));
     svg.replaceChildren(...nodes);
+    // 电脑上才有玻璃泡（liquidBubble 在手机上是空的）：没有 glass 属性的不放
+    bubbles.replaceChildren(...glass.filter((el) => el.hasAttribute("glass")));
     // 第一次画完：之后的重画不再整张淡入，只动变了的
     if (before === null) setTimeout(() => svg.classList.remove("first"), 600);
   }
 
   return {
     el: svg,
+    bubbles,
     update(ov) {
       const box = svg.getBoundingClientRect();
       const size = `${Math.round(box.width)}x${Math.round(box.height)}`;
@@ -538,8 +574,7 @@ function friendCard(peer) {
     update(next) {
       current = next;
       el.classList.toggle("off", !next.online);
-      setClass(avatar, `ava ${colorClass(next.id)}`);
-      setText(avatar, initialOf(next));
+      paintAvatar(avatar, next);
       setText(name, nameOf(next));
       setText(ip, next.ip);
       fill(barsSlot, barsKey(next), () => bars(next));
@@ -674,8 +709,8 @@ function meCard() {
   const host = h("span", { class: "mono" });
   const coord = h("span");
   // 直连模式：房主邀请朋友，朋友再要一次回执码
-  const directButton = h("button", { class: "btn", glass: "clear", type: "button", hidden: true });
-  const diagButton = h("button", { class: "btn", glass: "clear", type: "button", hidden: true, onclick: async () => copy(await directDiagnostics(), "诊断信息") }, "诊断");
+  const directButton = h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", hidden: true });
+  const diagButton = h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", hidden: true, onclick: async () => copy(await directDiagnostics(), "诊断信息") }, "诊断");
   directButton.addEventListener("click", async () => {
     if (state.overview.direct?.host) return inviteDirect();
     try {
@@ -697,10 +732,10 @@ function meCard() {
     h(
       "div",
       { class: "me-actions" },
-      h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(state.overview.me.ip, "地址") }, "复制地址"),
+      h("button", { class: "btn", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(state.overview.me.ip, "地址") }, "复制地址"),
       directButton,
       diagButton,
-      h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("disconnect") }, "断开"),
+      h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => act("disconnect") }, "断开"),
     ),
   );
   return {
@@ -740,7 +775,7 @@ views.overview = {
     this.hostChip = h("span", { class: "chip", glass: "clear" });
     this.invite = h(
       "button",
-      { class: "btn sm", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => state.overview.roster?.code && copy(state.overview.roster.code, "网络码") },
+      { class: "btn sm", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => state.overview.roster?.code && copy(state.overview.roster.code, "网络码") },
       "邀请朋友",
     );
     this.extras = h("div", { class: "map-extras" }, this.invite, this.hostChip);
@@ -762,6 +797,7 @@ views.overview = {
           h("div", {}, h("b", {}, "你的网"), h("span", {}, "点一个人复制他的地址"), this.extras),
           h("div", { class: "stats" }, h("div", {}, h("span", {}, "下行"), this.down), h("div", {}, h("span", {}, "上行"), this.up), h("div", {}, h("span", {}, "直连 / 中继"), this.paths)),
         ),
+        this.graph.bubbles,
         this.graph.el,
         this.empty,
         h("div", { class: "legend" }, h("span", { class: "l-direct" }, "直连"), h("span", { class: "l-relay" }, "经中继"), h("span", { class: "l-off" }, "不在线")),
@@ -848,8 +884,7 @@ function friendRow(peer) {
     el,
     update(next) {
       current = next;
-      setClass(avatar, `ava sm ${colorClass(next.id)}`);
-      setText(avatar, initialOf(next));
+      paintAvatar(avatar, next, " sm");
       setText(name, nameOf(next));
       setText(cells[0], next.ip);
       setClass(cells[0], "mono");
@@ -989,6 +1024,7 @@ views.settings = {
     this.updateStatus = h("span");
     this.updateButton = h("button", {
       class: "btn sm",
+      ...LIQUID_EDGE,
       glass: "clear",
       type: "button",
       onclick: async () => {
@@ -1012,8 +1048,8 @@ views.settings = {
       "网络码",
       null,
       h("span", { class: "grow" }),
-      h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.network, "网络码") }, "复制"),
-      h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => act("forget") }, "离开这个网络"),
+      h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => copy(state.overview.network, "网络码") }, "复制"),
+      h("button", { class: "btn sm danger", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => act("forget") }, "离开这个网络"),
     );
     codeRow.querySelector(".t").append(this.code, this.codeNote);
     this.network = panel("网络", codeRow);
@@ -1034,7 +1070,7 @@ views.settings = {
     this.serverGroup = panel(
       "我的服务器",
       this.serverList,
-      stackRow("添加一台", "自己架的 meshora-coord（--hub）：公钥@地址:端口。建网络时可以选它", newServer, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: addServer }, "添加")),
+      stackRow("添加一台", "自己架的 meshora-coord（--hub）：公钥@地址:端口。建网络时可以选它", newServer, h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: addServer }, "添加")),
     );
 
     this.logs = h("pre", { class: "logs", glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.22)" }, "…");
@@ -1050,6 +1086,7 @@ views.settings = {
       "button",
       {
         class: "btn sm",
+        ...LIQUID_EDGE,
         glass: "clear",
         type: "button",
         onclick: () => {
@@ -1067,7 +1104,7 @@ views.settings = {
     );
     this.stopLogs = () => clearInterval(timer);
 
-    const idRow = settingRow("你的 ID", "建网络的人要把它加进名单时用。只代表这台设备，不是密码", h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制"));
+    const idRow = settingRow("你的 ID", "建网络的人要把它加进名单时用。只代表这台设备，不是密码", h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => copy(state.overview.id, "ID") }, "复制"));
     idRow.querySelector(".t").append(h("span", { class: "code" }, ov.id));
     const el = h(
       "div",
@@ -1086,7 +1123,7 @@ views.settings = {
       panel("更新", settingRow("自动检查更新", "每次打开时问一次 GitHub 有没有新版本。新版本有签名，核对过才装", this.checkUpdates), this.versionRow),
       panel(
         "排查",
-        settingRow("日志", "出问题时复制下来，发给帮你排查的人。里面有 IP 地址，没有密钥", showLogs, h("button", { class: "btn sm", glass: "clear", type: "button", onclick: async () => copy((await invoke("logs")).join("\n"), "日志") }, "复制")),
+        settingRow("日志", "出问题时复制下来，发给帮你排查的人。里面有 IP 地址，没有密钥", showLogs, h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: async () => copy((await invoke("logs")).join("\n"), "日志") }, "复制")),
         this.logs,
       ),
     );
@@ -1107,7 +1144,7 @@ views.settings = {
       this.serverKey = serverKey;
       this.serverList.replaceChildren(
         ...ov.servers.map((server) =>
-          settingRow(hostOf(server), null, h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: async () => { await invoke("remove_server", { code: server }); refresh(); } }, "忘掉")),
+          settingRow(hostOf(server), null, h("button", { class: "btn sm danger", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: async () => { await invoke("remove_server", { code: server }); refresh(); } }, "忘掉")),
         ),
       );
     }
@@ -1162,13 +1199,13 @@ function sheet(title, text) {
 function codeField(code, what) {
   const area = h("textarea", { class: "code-area mono", readonly: "", spellcheck: "false", "aria-label": what }, code);
   area.addEventListener("focus", () => area.select());
-  return h("div", { class: "code-box" }, area, h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(code, what) }, `复制${what}`));
+  return h("div", { class: "code-box" }, area, h("button", { class: "btn", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => copy(code, what) }, `复制${what}`));
 }
 
 /** 朋友：把回执码发给房主 */
 function showReply(result) {
   const { body, close } = sheet("把回执码发给房主", "房主贴进去之后，两边同时开始打洞，通了就在网络页上看得到房主。");
-  body.append(codeField(result.code, "回执码"), ...natWarnings(result), h("div", { class: "row end-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: close }, "完成")));
+  body.append(codeField(result.code, "回执码"), ...natWarnings(result), h("div", { class: "row end-row" }, h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: close }, "完成")));
 }
 
 /** 房主：给一位朋友生成房主码，再收他的回执码 */
@@ -1179,12 +1216,12 @@ async function inviteDirect() {
   try {
     result = await invoke("direct_offer");
   } catch (err) {
-    body.replaceChildren(h("p", { class: "field-error" }, String(err)), h("div", { class: "row end-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: close }, "关闭")));
+    body.replaceChildren(h("p", { class: "field-error" }, String(err)), h("div", { class: "row end-row" }, h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: close }, "关闭")));
     return;
   }
   const reply = h("textarea", { class: "code-area mono", spellcheck: "false", placeholder: "meshora-reply: 开头的回执码", "aria-label": "回执码" });
   const error = h("div", { class: "field-error", role: "alert" });
-  const accept = h("button", { class: "btn", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加进来");
+  const accept = h("button", { class: "btn", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加进来");
   accept.addEventListener("click", async () => {
     setText(error, "");
     accept.disabled = true;
@@ -1205,7 +1242,7 @@ async function inviteDirect() {
     ...natWarnings(result),
     h("div", { class: "step" }, h("b", {}, "2. 贴上他发回来的回执码"), reply),
     error,
-    h("div", { class: "row end-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: close }, "以后再说"), accept),
+    h("div", { class: "row end-row" }, h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: close }, "以后再说"), accept),
   );
 }
 
@@ -1220,7 +1257,7 @@ function confirmBox(title, text, okLabel, { cancelLabel = "取消", danger = tru
       resolve(answer);
     };
     const onKey = (event) => event.key === "Escape" && close(false);
-    const ok = h("button", { class: `btn wide${danger ? " danger" : ""}`, glass: danger ? "clear" : "tinted", "glass-tint": danger ? null : "#3d6bff", type: "button", onclick: () => close(true) }, okLabel);
+    const ok = h("button", { class: `btn wide${danger ? " danger" : ""}`, ...LIQUID_EDGE, glass: danger ? "clear" : "tinted", "glass-tint": danger ? null : "#3d6bff", type: "button", onclick: () => close(true) }, okLabel);
     const scrim = h(
       "div",
       { class: "modal-scrim", onclick: (event) => event.target === scrim && close(false) },
@@ -1229,7 +1266,7 @@ function confirmBox(title, text, okLabel, { cancelLabel = "取消", danger = tru
         { class: "dialog narrow", glass: "frosted", overlay: "", "glass-corner-radius": "26", role: "alertdialog", "aria-modal": "true" },
         h("h2", {}, title),
         h("p", {}, text),
-        h("div", { class: "row center-row" }, h("button", { class: "btn", glass: "clear", type: "button", onclick: () => close(false) }, cancelLabel), ok),
+        h("div", { class: "row center-row" }, h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => close(false) }, cancelLabel), ok),
       ),
     );
     document.addEventListener("keydown", onKey);
@@ -1275,7 +1312,7 @@ views.onboarding = {
         h("p", {}, "和朋友组成一个虚拟局域网：不管在哪，打局域网游戏就像坐在一起。"),
         h("label", { class: "label" }, "朋友会看到你叫"),
         name,
-        h("div", { class: "row center-row" }, h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: next }, "下一步")),
+        h("div", { class: "row center-row" }, h("button", { class: "btn wide", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: next }, "下一步")),
       );
       setTimeout(() => name.focus(), 50);
       return;
@@ -1346,7 +1383,7 @@ views.start = {
     const serverRow = h("div", { class: "server-row" }, this.server);
     serverRow.hidden = this.where !== "server";
     const createError = h("div", { class: "field-error", role: "alert" });
-    const createButton = h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "建网络");
+    const createButton = h("button", { class: "btn wide", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "建网络");
     const options = [
       { value: "official", label: "官方服务器", hint: ov.officialServer ? "最省事：朋友在哪都能连进来" : "还没上线", disabled: !ov.officialServer },
       // 手机多半在运营商级 NAT 后面，换个网络地址就变，当不了主机
@@ -1417,7 +1454,7 @@ views.start = {
     // ---- 加入网络 ----
     const area = h("textarea", { placeholder: "网络码，或者房主发来的房主码（meshora-offer: 开头）", spellcheck: "false", "aria-label": "网络码" });
     const error = h("div", { class: "field-error", role: "alert" });
-    const button = h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加入");
+    const button = h("button", { class: "btn wide", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button" }, "加入");
     const submit = async () => {
       const code = area.value.trim();
       if (!code) {
@@ -1461,8 +1498,8 @@ views.start = {
       "div",
       { class: "row split" },
       h("span", { class: "hint" }, "上次的网络 ", this.savedHost),
-      h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => act("connect", {}) }, "重新连接"),
-      h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => act("forget") }, "忘掉"),
+      h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => act("connect", {}) }, "重新连接"),
+      h("button", { class: "btn sm danger", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => act("forget") }, "忘掉"),
     );
     this.join = h(
       "section",
@@ -1545,11 +1582,12 @@ views.admin = {
           "网络码",
           "发给谁，谁就能加入。泄露了就换一个：旧的立刻作废，已经在网里的人不受影响",
           h("span", { class: "grow" }),
-          h("button", { class: "btn sm", glass: "clear", type: "button", onclick: copyCode }, "复制"),
+          h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: copyCode }, "复制"),
           h(
             "button",
             {
               class: "btn sm",
+              ...LIQUID_EDGE,
               glass: "clear",
               type: "button",
               onclick: async () => {
@@ -1565,8 +1603,8 @@ views.admin = {
           "div",
           { class: "row" },
           h("span", { class: "hint" }, "只想邀请一个人？发一个用一次就作废、或者到时候就过期的："),
-          h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: 1, hours: null }, (code) => code && copy(code, "一次性网络码")) }, "一次性"),
-          h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: null, hours: 24 }, (code) => code && copy(code, "24 小时网络码")) }, "24 小时"),
+          h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: 1, hours: null }, (code) => code && copy(code, "一次性网络码")) }, "一次性"),
+          h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => admin({ kind: "newInvite", uses: null, hours: 24 }, (code) => code && copy(code, "24 小时网络码")) }, "24 小时"),
         ),
       ),
       panel(h("span", {}, "成员 ", this.memberCount), this.members),
@@ -1579,6 +1617,7 @@ views.admin = {
             "button",
             {
               class: "btn sm danger",
+              ...LIQUID_EDGE,
               glass: "clear",
               type: "button",
               onclick: async () => {
@@ -1611,8 +1650,8 @@ views.admin = {
             "div",
             { class: "set" },
             h("div", { class: "t" }, h("b", {}, inviteText(invite)), h("span", { class: "code" }, `#${invite.invite.slice(0, 6)}…`)),
-            h("button", { class: "btn sm", glass: "clear", type: "button", onclick: () => copy(invite.code, "网络码") }, "复制"),
-            h("button", { class: "btn sm danger", glass: "clear", type: "button", onclick: () => admin({ kind: "revokeInvite", invite: invite.invite }, () => toast("作废了")) }, "作废"),
+            h("button", { class: "btn sm", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => copy(invite.code, "网络码") }, "复制"),
+            h("button", { class: "btn sm danger", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => admin({ kind: "revokeInvite", invite: invite.invite }, () => toast("作废了")) }, "作废"),
           ),
         ),
       );
@@ -1635,6 +1674,7 @@ views.admin = {
                   "button",
                   {
                     class: "btn sm danger",
+                    ...LIQUID_EDGE,
                     glass: "clear",
                     type: "button",
                     onclick: async () => {
@@ -1663,7 +1703,7 @@ views.connecting = {
         h("div", { class: "pulse", role: "progressbar", "aria-label": "正在连接" }, h("i"), h("i"), h("b")),
         h("h2", {}, "正在连接"),
         this.host,
-        h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("disconnect") }, "取消"),
+        h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => act("disconnect") }, "取消"),
       ),
     );
     this.update(ov);
@@ -1787,8 +1827,8 @@ views.failed = {
         h(
           "div",
           { class: "row" },
-          h("button", { class: "btn wide", glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => act("connect", {}) }, "重试"),
-          h("button", { class: "btn", glass: "clear", type: "button", onclick: () => act("forget") }, "换一个网络"),
+          h("button", { class: "btn wide", ...LIQUID_EDGE, glass: "tinted", "glass-tint": "#3d6bff", type: "button", onclick: () => act("connect", {}) }, "重试"),
+          h("button", { class: "btn", ...LIQUID_EDGE, glass: "clear", type: "button", onclick: () => act("forget") }, "换一个网络"),
           h("span", { class: "grow" }),
           this.copyId,
         ),

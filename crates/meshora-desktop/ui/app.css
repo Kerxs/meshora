@@ -242,6 +242,11 @@ glass-switch {
   font-size: var(--fs-cap);
 }
 
+/* 电脑上头像是带颜色的玻璃泡（liquidBubble）：玻璃生效了，纯色底就去掉，颜色由玻璃的着色给 */
+.ava[data-glassium-active]:not([data-glassium-overlay]) {
+  background: none;
+}
+
 .c0 { background: #3d6bff; }
 .c1 { background: #12b886; }
 .c2 { background: #f59f00; }
@@ -585,6 +590,34 @@ main:hover {
 
 .graph .peer-node {
   cursor: pointer;
+}
+
+/* 网状图节点的玻璃泡：垫在 SVG 下面，圆心和半径与 SVG 里的圆一样。玻璃生效了，SVG 的圆只留白圈 */
+.graph-bubbles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.node-glass {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  width: var(--d);
+  height: var(--d);
+  margin: calc(var(--d) / -2) 0 0 calc(var(--d) / -2);
+  border-radius: 50%;
+}
+
+.node-glass.born {
+  animation: node-in 820ms var(--spring) both;
+}
+
+.graph-bubbles:has(> [data-glassium-active]:not([data-glassium-overlay])) ~ .graph .node-body {
+  fill-opacity: 0;
+  /* 白圈细一点：玻璃自己有一圈亮边 */
+  stroke-width: 1.4;
+  stroke-opacity: 0.7;
 }
 
 .legend {
