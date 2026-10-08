@@ -278,9 +278,19 @@ impl PeerPaths {
     /// 返回它是不是第一次出现 —— 第一次出现的应当马上探测，不必等下一轮。
     pub fn learn(&mut self, addr: SocketAddr, now: Instant) -> bool {
         let candidate = self.candidates.entry(addr).or_default();
-        let new = candidate.last_ping.is_none();
         candidate.learned = Some(now);
-        new
+        if candidate.last_ping.is_none() {
+            return true;
+        }
+        // 认得的地址、却还没通：对方此刻正从这里打过来，两边的洞都开着 —— 马上回探，不等退避
+        // （退避到后面要 30 秒才探一次；真机上撞过：对方的报文到了，过了 29 秒才通）。
+        // 正在等回应的不重发：一个 Ping 最多换来一个
+        if !candidate.fresh(now) && candidate.awaiting.is_none() {
+            candidate.last_ping = None;
+            candidate.misses = candidate.misses.min(MAX_MISSES);
+            return true;
+        }
+        false
     }
 
     /// 让这个候选在下一次 [`due_pings`](Self::due_pings) 时立刻被探测（打洞对时要的就是"现在"）。
@@ -666,6 +676,29 @@ mod tests {
         assert_eq!(paths.due_pings(now, None), [addr(1)]);
         assert!(paths.learn(addr(9), now + MS), "第一次见到");
         assert_eq!(paths.due_pings(now + MS, None), [addr(9)]);
+    }
+
+    #[test]
+    fn a_ping_on_a_silent_known_address_is_probed_back_at_once() {
+        // 真机上撞过：这边早就在探对方、退避到很慢了，对方开始打过来时要马上回探
+        let now = Instant::now();
+        let mut paths = PeerPaths::default();
+        paths.set_advertised(&[addr(1)]);
+        let mut t = now;
+        for _ in 0..6 {
+            t += 30 * SEC;
+            paths.due_pings(t, None);
+        }
+        // 一秒之后（上一个 Ping 已经判丢）对方从这个地址打过来了
+        let t = t + SEC;
+        paths.due_pings(t, None);
+        assert!(paths.learn(addr(1), t), "认得但没通：要马上回探");
+        assert_eq!(paths.due_pings(t, None), [addr(1)]);
+        // 正在等回应的时候又来一个：不重发
+        assert!(!paths.learn(addr(1), t + 100 * MS));
+        // 通了之后再来不必回探
+        paths.on_pong(addr(1), 20 * MS, t + 20 * MS);
+        assert!(!paths.learn(addr(1), t + 200 * MS));
     }
 
     #[test]

@@ -677,6 +677,8 @@ struct Node {
     pending: HashMap<TxId, Pending>,
     disco_budget: TokenBucket,
     reflexive: Option<SocketAddr>,
+    /// 上一次写进日志的公网端点：一轮 STUN 问完、和上次不一样才写
+    reflexive_logged: Option<SocketAddr>,
     /// 本机的局域网端点，每个节拍重新看一次。没有网络时是 None
     local: Option<SocketAddr>,
     /// 本机所有能用的局域网地址（见 [`lan_endpoints`]），每个节拍重新看一次
@@ -724,6 +726,7 @@ impl Node {
             pending: HashMap::new(),
             disco_budget: TokenBucket::new(DISCO_RATE, now),
             reflexive: None,
+            reflexive_logged: None,
             local: None,
             lan: Vec::new(),
             ipv6: Vec::new(),
@@ -814,7 +817,9 @@ impl Node {
         for peer in &peers {
             let eager = self.eager;
             let state = self.peers.entry(peer.key).or_insert_with(|| {
-                info!(peer = %peer.key, ip = %peer.overlay_ip, endpoints = ?peer.endpoints, "新的 peer，开始探测");
+                // 对方是对称型 NAT 时连接码里带着几十个预测的端口：日志只列前几个，免得把诊断刷满
+                let shown = &peer.endpoints[..peer.endpoints.len().min(8)];
+                info!(peer = %peer.key, ip = %peer.overlay_ip, endpoints = ?shown, total = peer.endpoints.len(), "新的 peer，开始探测");
                 let mut paths = PeerPaths::default();
                 if eager {
                     paths.punch_eagerly(now, now + EAGER_PUNCH, v6_first);
@@ -885,8 +890,22 @@ impl Node {
             .iter()
             .find_map(|server| self.stun_seen.get(server).copied());
         if first != self.reflexive {
-            info!(observed = ?first, "STUN 问到本机的公网端点");
+            // 一轮里每个服务器的回应都会到这里，对称型 NAT 上每个看到的端口还不一样：
+            // 日志等这一轮问完再写（on_tick 的 log_reflexive），免得一轮写三遍
+            debug!(observed = ?first, %server, "STUN 回应");
             self.reflexive = first;
+        }
+    }
+
+    /// 一轮 STUN 问完了（都回了，或者等够了），公网端点和上次写进日志的不一样就写一行
+    fn log_reflexive(&mut self, now: Instant) {
+        let settled = self.stun_pending.is_empty()
+            || self
+                .stun_round
+                .is_some_and(|round| now.duration_since(round) >= STUN_WAIT);
+        if settled && self.reflexive != self.reflexive_logged {
+            info!(observed = ?self.reflexive, "STUN 问到本机的公网端点");
+            self.reflexive_logged = self.reflexive;
         }
     }
 
@@ -1141,6 +1160,7 @@ impl Node {
         self.stun_pending
             .retain(|_, (_, sent)| now.duration_since(*sent) < PING_TIMEOUT);
 
+        self.log_reflexive(now);
         if !self.stun_servers.is_empty() && now >= self.next_probe {
             self.stun_round(now);
             self.next_probe = now + PROBE_INTERVAL;
