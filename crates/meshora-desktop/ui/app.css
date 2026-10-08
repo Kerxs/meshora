@@ -619,6 +619,18 @@ main:hover {
   border-radius: 50%;
 }
 
+/* "我"身后的光晕：画进玻璃后面的场景（<glass-fill>），"我"这颗玻璃泡把它放大、在边上折射 */
+.me-glow {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  width: 128px;
+  height: 128px;
+  margin: -64px 0 0 -64px;
+  border-radius: 50%;
+  --glass-fill: radial-gradient(circle closest-side, rgba(122, 156, 255, 0.55), rgba(122, 156, 255, 0));
+}
+
 /* 连线上的延迟胶囊：和 SVG 里的一样大（48×20） */
 .pill-glass {
   position: absolute;

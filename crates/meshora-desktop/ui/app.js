@@ -386,8 +386,8 @@ function meshGraph() {
   // 节点的玻璃泡（电脑上）：和 SVG 同一个盒子，泡的位置按 SVG 里的坐标摆
   const bubbles = h("div", { class: "graph-bubbles", "aria-hidden": "true" });
   /** 一个玻璃泡：圆心 (x, y)、半径 r，`from` 是飞出来的起点（新来的人） */
-  const bubble = (x, y, r, hex, dim, from) => {
-    const el = h("span", { class: from ? "node-glass born" : "node-glass", ...liquidBubble(hex, dim) });
+  const bubble = (x, y, r, hex, dim, from, lens = false) => {
+    const el = h("span", { class: from ? "node-glass born" : "node-glass", ...liquidBubble(hex, dim, lens) });
     el.style.setProperty("--x", `${x.toFixed(1)}px`);
     el.style.setProperty("--y", `${y.toFixed(1)}px`);
     el.style.setProperty("--d", `${r * 2}px`);
@@ -541,16 +541,25 @@ function meshGraph() {
       glass.push(bubble(x, y, 21, COLOR_HEX[Number(colorClass(peer.id).slice(1))], !peer.online, from));
     });
     nodes.push(
-      s("circle", { cx, cy, r: 64, fill: "url(#me-glow)" }),
+      // "我"身后的光晕：电脑上画进玻璃后面的场景（<glass-fill>，见下面），"我"这颗玻璃泡把它放大、在边上折射；
+      // 画在 SVG 里的话压在玻璃上面，把泡染成一片蓝。手机上没有 GPU 玻璃，照旧画在 SVG 里
+      PHONE ? s("circle", { cx, cy, r: 64, fill: "url(#me-glow)" }) : null,
       s("circle", { class: "node-body", cx, cy, r: 27, fill: "#3d6bff", stroke: "#fff", "stroke-width": 3 }),
       s("text", { x: cx, y: cy + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, "我"),
       s("text", { class: "node-label", x: cx, y: cy + 46, "text-anchor": "middle" }, ov.name || DEVICE),
       s("text", { class: "node-sub", x: cx, y: cy + 61, "text-anchor": "middle" }, ov.me.ip),
     );
-    glass.push(bubble(cx, cy, 27, "#3d6bff", false, null));
-    svg.replaceChildren(...nodes);
+    if (!PHONE) {
+      const glow = h("glass-fill", { class: "me-glow" });
+      glow.style.setProperty("--x", `${cx.toFixed(1)}px`);
+      glow.style.setProperty("--y", `${cy.toFixed(1)}px`);
+      // 先放：场景里先画光晕，玻璃泡在它上面一层
+      glass.unshift(glow);
+    }
+    glass.push(bubble(cx, cy, 27, "#3d6bff", false, null, true));
+    svg.replaceChildren(...nodes.filter(Boolean));
     // 电脑上才有玻璃泡（liquidBubble 在手机上是空的）：没有 glass 属性的不放
-    bubbles.replaceChildren(...glass.filter((el) => el.hasAttribute("glass")));
+    bubbles.replaceChildren(...glass.filter((el) => el.hasAttribute("glass") || el.localName === "glass-fill"));
     // 第一次画完：之后的重画不再整张淡入，只动变了的
     if (before === null) setTimeout(() => svg.classList.remove("first"), 600);
   }

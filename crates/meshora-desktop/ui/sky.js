@@ -84,12 +84,26 @@ export function liquidPill(tint = "rgba(10, 16, 48, 0.5)", radius = "1frac") {
 
 /**
  * 头像、网状图节点的彩色玻璃泡：颜色是着色，边上折射、色散、一圈亮边。`dim` 是不在线的（颜色淡一些）。
+ * `lens`：网状图里的"我" —— 身后有一团光（画进场景的），着色很淡、折射深、放大，像一枚透镜压在光上。
  * 手机上不用（列表里一堆 CSS 玻璃拖慢滚动），返回空的，照旧是纯色圆
  */
-export function liquidBubble(hex, dim = false) {
+export function liquidBubble(hex, dim = false, lens = false) {
   if (PHONE_UA) return {};
   const n = Number.parseInt(hex.slice(1), 16);
   const rgb = `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+  if (lens) {
+    return {
+      glass: "regular",
+      "glass-blur": "0",
+      "glass-refraction": "1",
+      "glass-distortion": "1.2",
+      "glass-dispersion": "0.6",
+      "glass-magnify": "0.3",
+      "glass-highlight": "1.2",
+      "glass-tint": `rgba(${rgb}, 0.18)`,
+      "glass-corner-radius": "1frac",
+    };
+  }
   return {
     glass: "regular",
     "glass-blur": "0",
