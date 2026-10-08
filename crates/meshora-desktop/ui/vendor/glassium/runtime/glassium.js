@@ -17,10 +17,11 @@ import { currentStage, onStageChange, stageOrPending } from "../renderer/stage.j
 import { absorbedElements } from "./absorb.js";
 import { startRuntime, whenScanned } from "./auto.js";
 import { contentBlocks, contentStats } from "./content.js";
-import { detectSync, detectWebGpu, tierOf } from "./capabilities.js";
+import { detectSync, detectWebGl2, detectWebGpu, tierOf } from "./capabilities.js";
 import { configure, getConfig } from "./config.js";
 import { glass, glassOf } from "./glass.js";
 let syncCaps = null;
+let glCaps = null;
 let webgpu = null;
 let webgpuProbe = null;
 function rendererOf(stage) {
@@ -30,11 +31,29 @@ function rendererOf(stage) {
         return 'css';
     return stage.backend === 'webgpu' ? 'webgpu' : stage.backend === 'webgl2' ? 'webgl2' : 'css';
 }
+/**
+ * webgl2、maxTextureSize 与 tier 是 getter：读到才查 WebGL2（建上下文很贵，见 capabilities.ts）。
+ * 后端已经是 WebGPU 时 tier 不看 webgl2，读 tier 也不会建上下文
+ */
 function capabilities() {
     syncCaps ??= detectSync();
+    const gl = () => (glCaps ??= detectWebGl2());
     const renderer = rendererOf(currentStage());
-    const base = { ...syncCaps, webgpu, renderer };
-    return { ...base, tier: tierOf(base) };
+    const caps = {
+        ...syncCaps,
+        webgpu,
+        renderer,
+        get webgl2() {
+            return gl().webgl2;
+        },
+        get maxTextureSize() {
+            return gl().maxTextureSize;
+        },
+        get tier() {
+            return tierOf(caps);
+        }
+    };
+    return caps;
 }
 function probeWebGpu() {
     webgpuProbe ??= detectWebGpu().then((ok) => (webgpu = ok));

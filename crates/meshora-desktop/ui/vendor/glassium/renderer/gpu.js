@@ -36,6 +36,12 @@ export class GpuRenderer {
     // 'rgba8unorm-srgb' 第一次用到时再建。bind group 布局是显式的、两套共用 —— 'auto' 布局的
     // bind group 不能拿给别的管线用，那样换一次格式就得把 bind group 全部重建。
     #chainPipelines = new Map();
+    /**
+     * 构造期间要建的管线：用 createRenderPipelineAsync 发出去，在这里等（{@link GpuRenderer.create} 等它们）。
+     * 同步的 createRenderPipeline 会让 GPU 进程在编译着色器时整个停住，页面一帧都出不来 —— 玻璃的着色器大，
+     * 慢的机器上启动时卡半秒。异步编译在后台线程，页面照常出帧。构造完之后是 null：运行时再要的管线（别的格式）照旧同步建
+     */
+    #compiling = [];
     /** 上一帧的场景输入（沿用场景与模糊链时比它，见 idle.ts 的 sceneReusable）。 */
     #lastScene = null;
     /** GPU 计时（设备不支持 timestamp-query 时是 null）。 */
@@ -151,13 +157,13 @@ export class GpuRenderer {
         this.#imageLayout = sampledLayout('glassium:scene-image');
         this.#backdropLayout = sampledLayout('glassium:backdrop');
         this.#blurLayout = sampledLayout('glassium:blur');
-        this.#backdropPipeline = device.createRenderPipeline({
+        this.#pipeline({
             label: 'glassium:backdrop',
             layout: device.createPipelineLayout({ label: 'glassium:backdrop', bindGroupLayouts: [this.#backdropLayout] }),
             vertex: { module: this.#modules.backdrop, entryPoint: 'vs' },
             fragment: { module: this.#modules.backdrop, entryPoint: 'fs', targets: [{ format }] },
             primitive: { topology: 'triangle-list' }
-        });
+        }, (pipeline) => (this.#backdropPipeline = pipeline));
         // 原样：tint 的 alpha 0、saturation 1、第 0 级；线性光模式下先解码（写在 resize 里，随格式变）
         this.#resampleUniforms = device.createBuffer({
             label: 'glassium:layer-resample-uniforms',
@@ -215,7 +221,7 @@ export class GpuRenderer {
             bindGroupLayouts: [this.#glassLayout]
         });
         const glassModule = device.createShaderModule({ label: 'glassium:glass', code: GLASS_WGSL });
-        this.#glassPipeline = device.createRenderPipeline({
+        this.#pipeline({
             label: 'glassium:glass',
             layout: glassPipelineLayout,
             vertex: { module: glassModule, entryPoint: 'vs' },
@@ -235,15 +241,15 @@ export class GpuRenderer {
                 ]
             },
             primitive: { topology: 'triangle-list' }
-        });
+        }, (pipeline) => (this.#glassPipeline = pipeline));
         // 探针：同一个模块、另一个入口，写 rgba32float，不混合（32 位浮点默认不可混合）。
-        this.#probePipeline = device.createRenderPipeline({
+        this.#pipeline({
             label: 'glassium:glass-probe',
             layout: glassPipelineLayout,
             vertex: { module: glassModule, entryPoint: 'vs' },
             fragment: { module: glassModule, entryPoint: 'fsProbe', targets: [{ format: 'rgba32float' }] },
             primitive: { topology: 'triangle-list' }
-        });
+        }, (pipeline) => (this.#probePipeline = pipeline));
         // 合并组：同一套绑定号，只有 binding 0 的结构体不同（一组 4 块面板，400B）。
         // 单独一条管线而不是在单块面板的着色器里加分支 —— 单块面板的输出因此一个字节都不变。
         this.#groupLayout = device.createBindGroupLayout({
@@ -264,7 +270,7 @@ export class GpuRenderer {
             bindGroupLayouts: [this.#groupLayout]
         });
         const groupModule = device.createShaderModule({ label: 'glassium:glass-group', code: GLASS_GROUP_WGSL });
-        this.#groupPipeline = device.createRenderPipeline({
+        this.#pipeline({
             label: 'glassium:glass-group',
             layout: groupPipelineLayout,
             vertex: { module: groupModule, entryPoint: 'vs' },
@@ -282,14 +288,14 @@ export class GpuRenderer {
                 ]
             },
             primitive: { topology: 'triangle-list' }
-        });
-        this.#groupProbePipeline = device.createRenderPipeline({
+        }, (pipeline) => (this.#groupPipeline = pipeline));
+        this.#pipeline({
             label: 'glassium:glass-group-probe',
             layout: groupPipelineLayout,
             vertex: { module: groupModule, entryPoint: 'vs' },
             fragment: { module: groupModule, entryPoint: 'fsProbe', targets: [{ format: 'rgba32float' }] },
             primitive: { topology: 'triangle-list' }
-        });
+        }, (pipeline) => (this.#groupProbePipeline = pipeline));
         // 填充：Fill 结构体按动态偏移切换，Dest（画到哪里）两份 —— 场景目标一份、画布一份，
         // 同一帧里两个 pass 各用各的，不共用一块 buffer（同一帧两次 writeBuffer 只有后写的生效）
         this.#fillLayout = device.createBindGroupLayout({
@@ -317,7 +323,7 @@ export class GpuRenderer {
             label: 'glassium:fill',
             bindGroupLayouts: [this.#fillLayout]
         });
-        this.#fillCanvasPipeline = this.#fillPipeline('glassium:fill-canvas', format);
+        this.#fillPipeline('glassium:fill-canvas', format, (pipeline) => (this.#fillCanvasPipeline = pipeline));
         this.#fillSceneDest = device.createBuffer({
             label: 'glassium:fill-scene-dest',
             size: FILL_DEST_BYTES,
@@ -345,6 +351,13 @@ export class GpuRenderer {
         this.#ensureFillCapacity(4);
         this.#pipelinesFor(BACKDROP_FORMAT); // 默认格式的那一套一开始就建：第一帧不等编译
     }
+    /** 建一条管线，交给 `set`。构造期间异步（见 #compiling），之后同步。 */
+    #pipeline(descriptor, set) {
+        if (this.#compiling)
+            this.#compiling.push(this.device.createRenderPipelineAsync(descriptor).then(set));
+        else
+            set(this.device.createRenderPipeline(descriptor));
+    }
     /** 画进模糊链的那几条管线（场景、图片、模糊、层的重采样、场景里的填充），按目标格式各一套，建一次。 */
     #pipelinesFor(format) {
         const existing = this.#chainPipelines.get(format);
@@ -352,26 +365,26 @@ export class GpuRenderer {
             return existing;
         const device = this.device;
         const suffix = format === BACKDROP_FORMAT ? '' : `-${format}`;
-        const pipeline = (label, module, layout) => device.createRenderPipeline({
+        // 构造期间是异步建的：五个字段在 GpuRenderer.create 返回之前都会填上
+        const set = {};
+        const pipeline = (key, label, module, layout) => this.#pipeline({
             label: `${label}${suffix}`,
             layout: device.createPipelineLayout({ label, bindGroupLayouts: [layout] }),
             vertex: { module, entryPoint: 'vs' },
             fragment: { module, entryPoint: 'fs', targets: [{ format }] },
             primitive: { topology: 'triangle-list' }
-        });
-        const set = {
-            scene: pipeline('glassium:scene', this.#modules.scene, this.#sceneLayout),
-            image: pipeline('glassium:scene-image', this.#modules.image, this.#imageLayout),
-            blur: pipeline('glassium:blur', this.#modules.blur, this.#blurLayout),
-            resample: pipeline('glassium:layer-resample', this.#modules.backdrop, this.#backdropLayout),
-            fillScene: this.#fillPipeline(`glassium:fill-scene${suffix}`, format)
-        };
+        }, (p) => (set[key] = p));
+        pipeline('scene', 'glassium:scene', this.#modules.scene, this.#sceneLayout);
+        pipeline('image', 'glassium:scene-image', this.#modules.image, this.#imageLayout);
+        pipeline('blur', 'glassium:blur', this.#modules.blur, this.#blurLayout);
+        pipeline('resample', 'glassium:layer-resample', this.#modules.backdrop, this.#backdropLayout);
+        this.#fillPipeline(`glassium:fill-scene${suffix}`, format, (p) => (set.fillScene = p));
         this.#chainPipelines.set(format, set);
         return set;
     }
     /** 填充的管线：预乘色、one / one-minus-src-alpha 混合。场景目标与画布各一条，只有目标格式不同。 */
-    #fillPipeline(label, target) {
-        return this.device.createRenderPipeline({
+    #fillPipeline(label, target, set) {
+        this.#pipeline({
             label,
             layout: this.#fillPipelineLayout,
             vertex: { module: this.#modules.fill, entryPoint: 'vs' },
@@ -389,11 +402,19 @@ export class GpuRenderer {
                 ]
             },
             primitive: { topology: 'triangle-list' }
-        });
+        }, set);
     }
     static async create(device, format, context, alphaMode) {
         const probe = await probeCapabilities(device);
-        return new GpuRenderer(device, format, context, alphaMode, probe);
+        const renderer = new GpuRenderer(device, format, context, alphaMode, probe);
+        await renderer.#compiled();
+        return renderer;
+    }
+    /** 等构造期间发出去的管线都建好；之后再要的管线同步建。 */
+    async #compiled() {
+        const jobs = this.#compiling ?? [];
+        this.#compiling = null;
+        await Promise.all(jobs);
     }
     get report() {
         return this.probe;
