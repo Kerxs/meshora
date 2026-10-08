@@ -2210,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-android"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "meshora-desktop",
  "meshorad",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-control"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
  "if-addrs",
@@ -2242,7 +2242,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-coord"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "ipnet",
  "lexopt",
@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-dataplane"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "ipnet",
  "meshora-types",
@@ -2265,7 +2265,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-desktop"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
  "if-addrs",
@@ -2293,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-proto"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "meshora-types",
  "snow",
@@ -2302,7 +2302,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-relay"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "meshora-proto",
  "meshora-types",
@@ -2312,7 +2312,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-setup"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "flate2",
  "mslnk",
@@ -2327,7 +2327,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-tun"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "libc",
  "tokio",
@@ -2338,7 +2338,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-types"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
  "rand_core 0.6.4",
@@ -2348,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "meshora-wg"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "boringtun",
  "ipnet",
@@ -2364,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "meshorad"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "lexopt",
  "meshora-control",
@@ -4064,7 +4064,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-meshora-vpn"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "serde",
  "serde_json",
