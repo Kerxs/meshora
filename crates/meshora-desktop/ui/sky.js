@@ -34,6 +34,21 @@ const GLOWS = [
   { x: 1.0, y: 1.04, r: 0.34, rgb: "18, 184, 134", a: 0.18 },
 ];
 
+/**
+ * 页面上的卡片、面板用的液态玻璃：不模糊，后面的点阵透过来是清楚的；边缘一圈折射把点阵往里拉弯，
+ * 带一点色散（红蓝分开）—— 玻璃的曲率就是靠拉弯的点阵看出来的，模糊一大点阵就没了、边缘也看不出弯。
+ * 只在电脑上（GPU 画）有折射和色散；手机上玻璃用 CSS 画，没有折射，还是用磨砂。
+ * 弹窗、提示条（overlay）不用它：它们压在别的内容上，要磨砂才看得清字
+ */
+export const LIQUID_GLASS = /Android/i.test(navigator.userAgent) ? { glass: "frosted" } : {
+  glass: "regular",
+  "glass-blur": "0",
+  "glass-refraction": "0.22",
+  "glass-distortion": "1",
+  "glass-dispersion": "0.6",
+  "glass-tint": "rgba(255,255,255,0.08)",
+};
+
 /** 画布每重画一次派发它：交给 Glassium 当场景时，靠它通知重新上传（不每帧都传） */
 const DRAW_EVENT = "sky:draw";
 

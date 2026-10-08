@@ -4,7 +4,7 @@
 //
 // 和客户端同样的规矩：内容一律 textContent，不写内联样式（位置、进度走 CSSOM）。
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
-import { useSkyAsGlassScene } from "./sky.js";
+import { LIQUID_GLASS, useSkyAsGlassScene } from "./sky.js";
 import glassium from "./vendor/glassium/index.js";
 
 glassium.configure({ absorbForComponents: true });
@@ -442,7 +442,7 @@ function uninstalled() {
 
 async function start() {
   stage = h("div", { class: "stage" });
-  document.getElementById("setup").replaceChildren(titlebar(), h("main", {}, h("section", { class: "setup-panel", glass: "frosted", "glass-corner-radius": "26" }, stage)));
+  document.getElementById("setup").replaceChildren(titlebar(), h("main", {}, h("section", { class: "setup-panel", ...LIQUID_GLASS, "glass-corner-radius": "26" }, stage)));
   await tauri().event.listen("progress", (event) => progress.set(event.payload));
   const info = await invoke("info");
   if (info.mode === "uninstall") uninstallPage(info);
