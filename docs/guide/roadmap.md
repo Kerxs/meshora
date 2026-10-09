@@ -1,8 +1,8 @@
 # 路线图
 
-## 当前状态：1.1.2 已发布
+## 当前状态：1.1.3 已发布
 
-**最新是 1.1.2：Windows 客户端的安装程序和安卓客户端的 APK 可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载，
+**最新是 1.1.3：Windows 客户端的安装程序和安卓客户端的 APK 可以从 [Releases](https://github.com/Kerxs/meshora/releases) 下载，
 装着旧版本的客户端打开时会问要不要更新。** 还没经过安全审查，Windows 安装程序没有代码签名。
 
 真实环境里验证到哪一步，如实写在这里：

@@ -98,9 +98,9 @@ MIT 许可，代码都在 [GitHub](https://github.com/Kerxs/meshora)。
 
 </HomeSection>
 
-<HomeSection eyebrow="1.1.2" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
+<HomeSection eyebrow="1.1.3" title="现在到哪一步了" more="/guide/roadmap" moreText="看路线图">
 
-**1.1.2 已发布：Windows 安装程序和安卓 APK 在 [Releases](https://github.com/Kerxs/meshora/releases/latest)。**
+**1.1.3 已发布：Windows 安装程序和安卓 APK 在 [Releases](https://github.com/Kerxs/meshora/releases/latest)。**
 装过的客户端会自动更新。
 
 做到的：在客户端里建网络、凭网络码加入、网主管理；打洞直连、打不通走中继；游戏的广播和组播转发给网里的每个人；

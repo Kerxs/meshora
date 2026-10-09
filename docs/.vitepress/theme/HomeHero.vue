@@ -12,7 +12,7 @@ import DemoFrame from './DemoFrame.vue'
  *
  * 版本号和状态写在这里（发版后跟着改），说法和 README、路线图一致：刚发布，还没在真实环境里验证过。
  */
-const VERSION = '1.1.2'
+const VERSION = '1.1.3'
 
 /** 和下面 CSS 里窄屏的断点一致 */
 const NARROW = '(max-width: 640px)'
