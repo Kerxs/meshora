@@ -1443,17 +1443,6 @@ td.spark-cell .spark {
   animation: view-out 220ms var(--ease-in) forwards;
 }
 
-/* 手机上切页只淡入淡出整页：卡片都是玻璃（backdrop-filter 带位移滤镜），一张张带位移浮上来时每帧每块都要重算背景，
- * 手机 GPU 跟不上 —— 底部导航连点几下，几页的动画叠在一起就卡住了 */
-.phone .view.enter > * {
-  animation: fade 160ms var(--ease) both;
-  animation-delay: 0ms;
-}
-
-.phone .view.leaving {
-  animation: fade-out 120ms var(--ease-in) forwards;
-}
-
 /* ---- 启动：点阵扩散（sky.js）、中间画 Logo，Logo 飞到左上角，界面浮上来（motion.js 的 intro） ---- */
 
 html.booting #app {

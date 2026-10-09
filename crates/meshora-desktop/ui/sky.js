@@ -51,9 +51,7 @@ export const LIQUID_GLASS = {
   "glass-blur": "0",
   "glass-refraction": "0.22",
   "glass-distortion": "1",
-  // 手机上大卡片不做三通道色散（只位移一次）：位移滤镜每块要算三遍，大面积的卡片滚动时手机 GPU 吃不消。
-  // 小块的玻璃（按钮、头像、节点、延迟胶囊）照样分色
-  "glass-dispersion": /Android/i.test(navigator.userAgent) ? "0" : "0.6",
+  "glass-dispersion": "0.6",
   "glass-tint": "rgba(255,255,255,0.08)",
 };
 

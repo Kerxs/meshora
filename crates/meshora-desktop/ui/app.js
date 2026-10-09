@@ -1974,7 +1974,7 @@ function render(ov) {
     const next = state.current.mount(ov);
     // 启动动画还盖着：直接换上，不播换页和卡片浮上来 —— 动画走完时统一浮一次
     if (document.documentElement.classList.contains("booting")) main.replaceChildren(next);
-    else swapView(main, next, dir, enter, PHONE ? 120 : 220);
+    else swapView(main, next, dir, enter);
     main.scrollTop = 0;
   } else {
     state.current.update(ov);

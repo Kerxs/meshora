@@ -85,10 +85,10 @@ export async function intro(ready) {
 
 /**
  * 换页：旧页往一边淡出，新页从另一边滑进来、里面的卡片依次浮上。`dir` 是 1（往后翻）或 -1（往回翻）。
- * 连着换好几次时只认最后一次。`out` 是旧页淡出要多久（毫秒，和 app.css 的 .view.leaving 一致；手机上短）
+ * 连着换好几次时只认最后一次
  */
 let swapping = 0;
-export function swapView(container, next, dir, enter, out = 220) {
+export function swapView(container, next, dir, enter) {
   const old = container.firstElementChild;
   const token = ++swapping;
   next.style.setProperty("--dir", String(dir));
@@ -102,7 +102,7 @@ export function swapView(container, next, dir, enter, out = 220) {
     if (token !== swapping) return;
     container.replaceChildren(enter(next));
     container.scrollTop = 0;
-  }, out);
+  }, 220);
 }
 
 /** 关一个弹层（确认框、连接码弹窗）：缩小、淡出，播完再移除 */
