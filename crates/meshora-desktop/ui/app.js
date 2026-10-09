@@ -6,7 +6,7 @@
 // 背景的点阵要在 Glassium 之前建好：它开场就把玻璃后面的背景收进场景
 import { LIQUID_EDGE, LIQUID_GLASS, WELL_GLASS, liquidBubble, liquidPill, useSkyAsGlassScene } from "./sky.js";
 import glassium from "./vendor/glassium/index.js";
-import { closeLayer, flashCopied, flip, intro, swapView } from "./motion.js";
+import { closeLayer, flashCopied, flip, intro, still, swapView } from "./motion.js";
 
 // 安卓客户端（crates/meshora-android）用的也是这份界面：手机上没有标题栏、本机当主机、Windows 的网络设置，
 // 导航挪到屏幕底部。一打开就要知道（标题栏在拿到第一份状态之前就画了），所以看 User-Agent
@@ -138,6 +138,9 @@ function colorClass(id) {
   return `c${hash % 6}`;
 }
 const COLOR_HEX = ["#3d6bff", "#12b886", "#f59f00", "#e64980", "#7950f2", "#1c9fd6"];
+
+/** 连线上的光点每秒走几步（见 flowDot） */
+const FLOW_FPS = 30;
 
 const nameOf = (peer) => peer.name || "没起名字";
 
@@ -400,8 +403,43 @@ const pass = {
 /** 网状图：你在中间，朋友沿椭圆排开；经中继的线绕过中继节点。连线结构变了才重画，延迟数字就地改 */
 function meshGraph() {
   const svg = s("svg", { class: "graph first", role: "img", "aria-label": "网状图：你和网里的每个人怎么连着" });
-  // 节点的玻璃泡（电脑上）：和 SVG 同一个盒子，泡的位置按 SVG 里的坐标摆
+  // 节点的玻璃泡：和 SVG 同一个盒子，泡的位置按 SVG 里的坐标摆
   const bubbles = h("div", { class: "graph-bubbles", "aria-hidden": "true" });
+  // 连线上跑的光点：HTML 小圆点、transform 动画（合成线程直接跑，不重绘）。以前是 SVG 的 animateMotion ——
+  // 每帧在主线程重绘整个 SVG，下面带背景滤镜的玻璃跟着每帧重新合成，手机上网络页一直被拖在 60 帧以下
+  const dotLayer = h("div", { class: "graph-dots", "aria-hidden": "true" });
+  /**
+   * 一个沿着线段跑的光点：`segs` 是看得见的几段（断开处 —— 延迟胶囊、中继方块底下 —— 藏起来，按距离算时间），
+   * 跑一趟 `duration` 毫秒、`delay` 毫秒后开始（负的没有：反向那个晚一点出发，错开）
+   */
+  const flowDot = (segs, r, color, duration, delay) => {
+    const el = h("span", { class: "flow-dot" });
+    el.style.setProperty("--r", `${r}px`);
+    el.style.setProperty("--c", color);
+    if (!still()) {
+      const lengths = segs.map(([x1, y1, x2, y2]) => Math.hypot(x2 - x1, y2 - y1));
+      const gaps = segs.slice(1).map(([x1, y1], k) => Math.hypot(x1 - segs[k][2], y1 - segs[k][3]));
+      const total = lengths.reduce((a, b) => a + b, 0) + gaps.reduce((a, b) => a + b, 0) || 1;
+      const frames = [];
+      let at = 0;
+      const at2 = (x, y, opacity) => ({ transform: `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`, opacity, offset: Math.min(1, at / total) });
+      segs.forEach(([x1, y1, x2, y2], k) => {
+        if (k > 0) {
+          // 断开处：在上一段的尽头消失，到下一段的起点再出现
+          frames.push(at2(segs[k - 1][2], segs[k - 1][3], 0));
+          at += gaps[k - 1];
+          frames.push(at2(x1, y1, 0));
+        }
+        frames.push(at2(x1, y1, 1));
+        at += lengths[k];
+        frames.push(at2(x2, y2, 1));
+      });
+      // 每秒只走 FLOW_FPS 步：一直在动的东西每一帧都要合成整个画面（下面还有带背景滤镜的玻璃），
+      // 按屏幕刷新率走的话手机上网络页一直被拖慢；每秒 30 步看起来照样是连续地跑
+      el.animate(frames, { duration, delay, iterations: Infinity, easing: `steps(${Math.max(1, Math.round((duration / 1000) * FLOW_FPS))})` });
+    }
+    return el;
+  };
   /** 一个玻璃泡：圆心 (x, y)、半径 r，`from` 是飞出来的起点（新来的人） */
   const bubble = (x, y, r, hex, dim, from, lens = false) => {
     const el = h("span", { class: from ? "node-glass born" : "node-glass", ...liquidBubble(hex, dim, lens) });
@@ -443,6 +481,7 @@ function meshGraph() {
     };
     labels = new Map();
     const glass = [];
+    const dots = [];
     /** 从圆心 (x1, y1) 朝 (x2, y2) 走 r，落在圆边上的那一点 */
     const edge = (x1, y1, x2, y2, r) => {
       const len = Math.hypot(x2 - x1, y2 - y1) || 1;
@@ -453,7 +492,7 @@ function meshGraph() {
      * `gap` 为假时不断开（手机上胶囊是 SVG 画的实底，盖得住线）
      */
     const segment = (x1, y1, x2, y2, gap) => {
-      if (!gap) return `M${x1} ${y1}L${x2} ${y2}`;
+      if (!gap) return [[x1, y1, x2, y2]];
       const len = Math.hypot(x2 - x1, y2 - y1) || 1;
       const ux = (x2 - x1) / len;
       const uy = (y2 - y1) / len;
@@ -461,9 +500,13 @@ function meshGraph() {
       const out = Math.min(Math.abs(ux) > 1e-6 ? 24 / Math.abs(ux) : Infinity, Math.abs(uy) > 1e-6 ? 10 / Math.abs(uy) : Infinity) + 2;
       const mx = (x1 + x2) / 2;
       const my = (y1 + y2) / 2;
-      const f = (v) => v.toFixed(1);
-      return `M${x1} ${y1}L${f(mx - ux * out)} ${f(my - uy * out)}M${f(mx + ux * out)} ${f(my + uy * out)}L${x2} ${y2}`;
+      return [
+        [x1, y1, mx - ux * out, my - uy * out],
+        [mx + ux * out, my + uy * out, x2, y2],
+      ];
     };
+    /** 一串线段 → SVG 的路径 */
+    const pathOf = (segs) => segs.map(([x1, y1, x2, y2]) => `M${x1.toFixed(1)} ${y1.toFixed(1)}L${x2.toFixed(1)} ${y2.toFixed(1)}`).join("");
     const nodes = [
       s("ellipse", { cx, cy, rx: RX, ry: R, fill: "none", stroke: "rgba(255,255,255,.12)", "stroke-dasharray": "2 6" }),
       s("ellipse", { cx, cy, rx: RX * 0.55, ry: R * 0.55, fill: "none", stroke: "rgba(255,255,255,.1)", "stroke-dasharray": "2 6" }),
@@ -491,9 +534,8 @@ function meshGraph() {
       // 经中继的：电脑上中继方块也是玻璃，线在方块边上断开（离中心 15）
       const [r1x, r1y] = xy(edge(relay[0], relay[1], ax, ay, 15));
       const [r2x, r2y] = xy(edge(relay[0], relay[1], bx, by, 15));
-      const d = viaRelay
-        ? `M${ax} ${ay}L${r1x} ${r1y}${segment(r2x, r2y, bx, by, gap)}`
-        : segment(ax, ay, bx, by, gap);
+      const segs = viaRelay ? [[ax, ay, r1x, r1y], ...segment(r2x, r2y, bx, by, gap)] : segment(ax, ay, bx, by, gap);
+      const d = pathOf(segs);
       const id = `link-${i}`;
       const was = before?.get(peer.id);
       const now = `${peer.online}|${peer.route}`;
@@ -505,32 +547,16 @@ function meshGraph() {
       nodes.push(s("path", { id, class: linkClass, d, fill: "none", stroke, "stroke-width": 2.2, "stroke-linecap": "round", "stroke-dasharray": !peer.online ? "1 6" : viaRelay ? "6 5" : null }));
       // 直连模式正在打洞：两个光点从两端往中间跑，像两边在往对方凿
       if (!peer.online && peer.route === "pending" && ov.direct) {
-        for (const points of ["0;0.5", "1;0.5"]) {
-          nodes.push(
-            s(
-              "circle",
-              { r: 3, fill: "rgba(255,193,85,.9)" },
-              s("animateMotion", { dur: "1.4s", repeatCount: "indefinite", keyPoints: points, keyTimes: "0;1", calcMode: "linear" }, s("mpath", { href: `#${id}` })),
-            ),
-          );
-        }
+        const [sx, sy, ex, ey] = segs[0];
+        const [hx, hy] = [(sx + ex) / 2, (sy + ey) / 2];
+        dots.push(flowDot([[sx, sy, hx, hy]], 3, "rgba(255,193,85,.9)", 1400, 0));
+        dots.push(flowDot([[ex, ey, hx, hy]], 3, "rgba(255,193,85,.9)", 1400, 0));
       }
       if (peer.online) {
         // 线上来回跑的小光点：有流量
-        const dur = `${(1.2 + (peer.rttMs || 0) / 30).toFixed(2)}s`;
-        for (const reverse of [false, true]) {
-          nodes.push(
-            s(
-              "circle",
-              { r: 3.2, fill: stroke },
-              s(
-                "animateMotion",
-                reverse ? { dur, begin: "-0.7s", repeatCount: "indefinite", keyPoints: "1;0", keyTimes: "0;1", calcMode: "linear" } : { dur, repeatCount: "indefinite" },
-                s("mpath", { href: `#${id}` }),
-              ),
-            ),
-          );
-        }
+        const dur = (1.2 + (peer.rttMs || 0) / 30) * 1000;
+        dots.push(flowDot(segs, 3.2, stroke, dur, 0));
+        dots.push(flowDot(segs.map(([x1, y1, x2, y2]) => [x2, y2, x1, y1]).reverse(), 3.2, stroke, dur, 700));
         // 胶囊在连线（圆边到圆边那一段）的正中
         const [mx, my] = viaRelay ? [(r2x + bx) / 2, (r2y + by) / 2] : [(ax + bx) / 2, (ay + by) / 2];
         const text = s("text", { class: "link-ms", x: mx, y: my + 4, "text-anchor": "middle", fill: TONE_HEX[tone(peer)] });
@@ -565,17 +591,30 @@ function meshGraph() {
     );
     glass.push(bubble(cx, cy, 27, "#3d6bff", false, null, true));
     svg.replaceChildren(...nodes.filter(Boolean));
-    // 电脑上才有玻璃泡（liquidBubble 在手机上是空的）：没有 glass 属性的不放
     bubbles.replaceChildren(...glass.filter((el) => el.hasAttribute("glass")));
+    dotLayer.replaceChildren(...dots);
     // 第一次画完：之后的重画不再整张淡入，只动变了的
     if (before === null) setTimeout(() => svg.classList.remove("first"), 600);
   }
 
-  return {
+  // 尺寸变了马上重画：页面刚放进文档（切页时新页先建好、过一会儿才放进去）、窗口改了大小。
+  // 以前只在每秒的刷新里比尺寸 —— 切回这一页时 SVG 还没进文档、量出 0，节点按默认的 600×400 摆，
+  // 最多一秒都在错的位置（手机上还撑出横向滚动）
+  let latest = null;
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      if (latest) api.update(latest);
+    }).observe(svg);
+  }
+  const api = {
     el: svg,
     bubbles,
+    dots: dotLayer,
     update(ov) {
+      latest = ov;
       const box = svg.getBoundingClientRect();
+      // 还没进文档（或者藏着）：量不到尺寸就先不画，等 ResizeObserver
+      if (!(box.width > 0 && box.height > 0)) return;
       const size = `${Math.round(box.width)}x${Math.round(box.height)}`;
       const next = [size, ov.name, ...ov.peers.map((p) => `${p.id}|${p.name}|${p.online}|${p.route}|${tone(p)}`)].join(";");
       if (next !== signature) {
@@ -587,10 +626,8 @@ function meshGraph() {
         if (text) setText(text, peer.rttMs == null ? "—" : `${msText(peer.rttMs)} ms`);
       }
     },
-    redraw() {
-      signature = "";
-    },
   };
+  return api;
 }
 
 function friendCard(peer) {
@@ -835,11 +872,6 @@ views.overview = {
       "邀请朋友",
     );
     this.extras = h("div", { class: "map-extras" }, this.invite, this.hostChip);
-    this.onResize = () => {
-      this.graph.redraw();
-      this.graph.update(state.overview);
-    };
-    addEventListener("resize", this.onResize);
     const el = h(
       "div",
       { class: "view" },
@@ -855,6 +887,7 @@ views.overview = {
         ),
         this.graph.bubbles,
         this.graph.el,
+        this.graph.dots,
         this.empty,
         h("div", { class: "legend" }, h("span", { class: "l-direct" }, "直连"), h("span", { class: "l-relay" }, "经中继"), h("span", { class: "l-off" }, "不在线")),
       ),
@@ -863,9 +896,7 @@ views.overview = {
     this.update(ov);
     return el;
   },
-  unmount() {
-    removeEventListener("resize", this.onResize);
-  },
+  unmount() {},
   update(ov) {
     this.me.update(ov);
     const online = ov.peers.filter((p) => p.online);

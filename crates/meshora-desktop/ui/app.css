@@ -625,6 +625,26 @@ main:hover {
   border-radius: 50%;
 }
 
+/* 连线上跑的光点（app.js 的 flowDot）：transform 动画由合成线程跑 */
+.graph-dots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.flow-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
+  border-radius: 50%;
+  background: var(--c);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
 /* 连线上的延迟胶囊：和 SVG 里的一样大（48×20） */
 .pill-glass {
   position: absolute;
@@ -1666,19 +1686,26 @@ html.booted .pass > :nth-child(4) { animation-delay: 270ms; }
   100% { opacity: 1; stroke-width: 2.2; }
 }
 
-/* 按钮：悬停微亮，按下轻轻一缩 */
+/* 按钮：悬停微亮，按下轻轻一缩。是玻璃的（[glass]）悬停时由 Glassium 自己亮：filter 只作用在 DOM 上，玻璃不跟着变 */
 .btn,
 .choice,
 .path,
 .update-chip,
 .tb-btn,
 .nav button {
+  transition: transform var(--t-fast) var(--ease), filter var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+
+/* 底色的过渡只给不是玻璃的（标题栏按钮、侧栏导航）：玻璃按钮的底色在 GPU 玻璃生效 / 弹窗里改 CSS 画时会切换，
+ * 一过渡 Glassium 就量到中间的半透明值、报"面板元素有底色" */
+.tb-btn,
+.nav button {
   transition: transform var(--t-fast) var(--ease), filter var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 
-.btn:hover:not(:disabled),
-.choice:hover:not(:disabled),
-.path:hover {
+.btn:hover:not(:disabled):not([glass]),
+.choice:hover:not(:disabled):not([glass]),
+.path:hover:not([glass]) {
   filter: brightness(1.15);
 }
 
