@@ -25,6 +25,8 @@ import { GlassBinding } from "./binding.js";
 import { scheduleAbsorb } from "./absorb.js";
 import { ensureStage } from "./ensure-stage.js";
 import { cornerRadiusFromCss, isInteractiveElement, runtimePreset, runtimePresetNames, RUNTIME_PRESETS } from "./presets.js";
+import { getConfig } from "./config.js";
+import { dropRefraction, syncRefraction } from "./refraction.js";
 import { GLASS_ID_ATTRIBUTE, installRuntimeStyles, removeGlassVars, setGlassVars } from "./styles.js";
 const handles = new WeakMap();
 /** 活着的 runtime 玻璃（自适应质量的局部目标从这里取）。 */
@@ -120,6 +122,7 @@ class RuntimeGlass {
     setConnected(connected) {
         if (this.destroyed)
             return;
+        syncRefraction(this.element, this.#id, this.#material, connected);
         if (connected && !this.#binding.connected)
             this.#binding.connect();
         else if (!connected && this.#binding.connected) {
@@ -139,6 +142,7 @@ class RuntimeGlass {
         this.#press = null;
         this.#motion?.dispose();
         this.#motion = null;
+        dropRefraction(this.#id);
         removeGlassVars(this.#id);
         this.element.removeAttribute(GLASS_ID_ATTRIBUTE);
         if (handles.get(this.element) === this)
@@ -160,6 +164,7 @@ class RuntimeGlass {
             : {};
         this.#material = { ...base, ...radius, ...o.material };
         setGlassVars(this.#id, this.#material);
+        syncRefraction(this.element, this.#id, this.#material, this.element.isConnected);
     }
     /** 固定的单块质量；'auto' 时由自适应质量（performance/adaptive.ts）通过 binding 设。 */
     #syncQuality() {
@@ -202,7 +207,8 @@ class RuntimeGlass {
         const auto = isInteractiveElement(this.element);
         // 果冻、飞行：跟着元素的位置走（element-motion.ts），与按压各管各的
         const motion = i === true ? { jelly: true, glide: true } : i === false ? { jelly: false, glide: false } : { jelly: i?.jelly ?? false, glide: i?.glide ?? false };
-        if (motion.jelly || motion.glide) {
+        // CSS 画的玻璃（backend: 'css'）没有 GPU 面板可推变换：不跑。它每帧都要量一次元素的位置，白量
+        if ((motion.jelly || motion.glide) && getConfig().backend !== 'css') {
             if (this.#motion)
                 this.#motion.setOptions(motion);
             else

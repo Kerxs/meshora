@@ -13,7 +13,8 @@ export const DEFAULT_CONFIG = Object.freeze({
     absorbForComponents: false,
     absorbContent: true,
     rememberQuality: true,
-    memoryBudget: null
+    memoryBudget: null,
+    cssRefraction: true
 });
 let current = DEFAULT_CONFIG;
 const listeners = new Set();

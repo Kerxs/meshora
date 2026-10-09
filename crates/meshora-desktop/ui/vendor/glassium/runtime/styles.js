@@ -10,6 +10,7 @@
  * - 收进场景的背景（absorb.ts）：`[data-glassium-absorbed] { background: transparent !important }`。
  */
 import { overlayVars } from "../core/overlay.js";
+import { onRefractVar, REFRACT_VAR } from "./refraction.js";
 /** 每块 runtime 玻璃的编号属性：CSS 变量的规则按它选中元素。 */
 export const GLASS_ID_ATTRIBUTE = 'data-glassium-glass';
 /** 背景被收进场景的元素（absorb.ts）。 */
@@ -29,7 +30,7 @@ export const BASE_CSS = `
     0 0 0 0.5px var(--glassium-edge, rgba(41, 41, 41, 0.315)),
     0 6px 12px -4px var(--glassium-shadow, rgba(0, 0, 0, 0.053));
   -webkit-backdrop-filter: blur(var(--glassium-blur, 8px)) saturate(var(--glassium-saturate, 1.4));
-  backdrop-filter: blur(var(--glassium-blur, 8px)) saturate(var(--glassium-saturate, 1.4));
+  backdrop-filter: blur(var(--glassium-blur, 8px)) saturate(var(--glassium-saturate, 1.4)) var(${REFRACT_VAR},);
 }
 :where([glass][data-glassium-active]:not([data-glassium-overlay])) {
   background-color: transparent;
@@ -69,6 +70,18 @@ svg[data-glassium-content] > * {
 let baseSheet = null;
 let varsSheet = null;
 const varRules = new Map();
+/** 每块玻璃的折射滤镜（refraction.ts 建好了才有）：`url(#…)`，写进它的变量规则里 */
+const refracts = new Map();
+const materials = new Map();
+onRefractVar((id, value) => {
+    if (value === null)
+        refracts.delete(id);
+    else
+        refracts.set(id, value);
+    const material = materials.get(id);
+    if (material)
+        setGlassVars(id, material);
+});
 let flushQueued = false;
 /** 把两张样式表挂到文档上（幂等）。没有 CSSStyleSheet 构造函数的环境什么都不做。 */
 export function installRuntimeStyles() {
@@ -87,7 +100,11 @@ export function installRuntimeStyles() {
 }
 /** 这块玻璃的材质变量（材质变了才真的重写样式表，同一个微任务里的多次更新合并成一次）。 */
 export function setGlassVars(id, material) {
-    const vars = overlayVars(material);
+    materials.set(id, material);
+    const vars = { ...overlayVars(material) };
+    const refract = refracts.get(id);
+    if (refract)
+        vars[REFRACT_VAR] = refract;
     const rule = `[${GLASS_ID_ATTRIBUTE}="${id}"] { ${Object.entries(vars)
         .map(([k, v]) => `${k}: ${v};`)
         .join(' ')} }`;
@@ -97,6 +114,8 @@ export function setGlassVars(id, material) {
     queueFlush();
 }
 export function removeGlassVars(id) {
+    materials.delete(id);
+    refracts.delete(id);
     if (varRules.delete(id))
         queueFlush();
 }
