@@ -58,6 +58,9 @@ export default defineConfig({
   head: [
     // 不从 Google Fonts 拉字体：国内访问会卡住首屏，而且 IBM Plex 不含汉字，汉字本来就落到系统字体
     ['meta', { name: 'theme-color', content: '#07080c' }],
+    // 网站图标：不写的话浏览器去站点根目录猜 /favicon.ico（GitHub Pages 上是别人的根，404），标签页上也没有图标。
+    // head 里的地址不会自动加 base，要写全
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/meshora/logo.svg' }],
     // 刘海屏横屏时内容别钻进刘海里（custom.css 里用 env(safe-area-inset-*) 让开）
     ['meta', { name: 'viewport', content: 'width=device-width,initial-scale=1,viewport-fit=cover' }],
     // 开场动画（theme/intro.ts）：第一帧之前决定放不放，放的话先把页面内容藏起来，免得先闪一下。
