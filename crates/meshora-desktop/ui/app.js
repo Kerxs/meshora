@@ -465,7 +465,6 @@ function meshGraph() {
       return `M${x1} ${y1}L${f(mx - ux * out)} ${f(my - uy * out)}M${f(mx + ux * out)} ${f(my + uy * out)}L${x2} ${y2}`;
     };
     const nodes = [
-      s("defs", {}, s("radialGradient", { id: "me-glow" }, s("stop", { offset: 0, "stop-color": "#7a9cff", "stop-opacity": 0.55 }), s("stop", { offset: 1, "stop-color": "#7a9cff", "stop-opacity": 0 }))),
       s("ellipse", { cx, cy, rx: RX, ry: R, fill: "none", stroke: "rgba(255,255,255,.12)", "stroke-dasharray": "2 6" }),
       s("ellipse", { cx, cy, rx: RX * 0.55, ry: R * 0.55, fill: "none", stroke: "rgba(255,255,255,.1)", "stroke-dasharray": "2 6" }),
     ];
@@ -475,7 +474,7 @@ function meshGraph() {
         s("path", { d: `M${relay[0] - 6} ${relay[1] - 3}h12M${relay[0] - 6} ${relay[1] + 3}h12`, stroke: RELAY_HEX, "stroke-width": 1.6, "stroke-linecap": "round" }),
         s("text", { class: "node-sub", x: relay[0], y: relay[1] - 20, "text-anchor": "middle" }, "中继"),
       );
-      if (!PHONE) glass.push(pill(relay[0], relay[1], true));
+      glass.push(pill(relay[0], relay[1], true));
     }
     const before = drawn;
     drawn = new Map(peers.map((peer) => [peer.id, `${peer.online}|${peer.route}`]));
@@ -485,13 +484,13 @@ function meshGraph() {
       const stroke = !peer.online ? "rgba(255,255,255,.3)" : viaRelay ? RELAY_HEX : TONE_HEX[tone(peer)];
       // 连线在两头的圆边上停住：节点是玻璃（透明的），线穿进去就看得见
       // 在线的连线中间有延迟胶囊（经中继的在中继到对方那一段）：电脑上胶囊是玻璃，线在那里断开
-      const gap = peer.online && !PHONE;
+      const gap = peer.online;
       const xy = (text) => text.split(" ").map(Number);
       const [ax, ay] = xy(edge(cx, cy, viaRelay ? relay[0] : x, viaRelay ? relay[1] : y, 27));
       const [bx, by] = xy(edge(x, y, viaRelay ? relay[0] : cx, viaRelay ? relay[1] : cy, 21));
       // 经中继的：电脑上中继方块也是玻璃，线在方块边上断开（离中心 15）
-      const [r1x, r1y] = !PHONE ? xy(edge(relay[0], relay[1], ax, ay, 15)) : relay;
-      const [r2x, r2y] = !PHONE ? xy(edge(relay[0], relay[1], bx, by, 15)) : relay;
+      const [r1x, r1y] = xy(edge(relay[0], relay[1], ax, ay, 15));
+      const [r2x, r2y] = xy(edge(relay[0], relay[1], bx, by, 15));
       const d = viaRelay
         ? `M${ax} ${ay}L${r1x} ${r1y}${segment(r2x, r2y, bx, by, gap)}`
         : segment(ax, ay, bx, by, gap);
@@ -544,8 +543,8 @@ function meshGraph() {
         "g",
         { class: born ? "peer-node born" : "peer-node", opacity: peer.online ? 1 : 0.5, onclick: () => copy(peer.ip, "地址") },
         s("title", {}, `${nameOf(peer)} · ${peer.ip}（点一下复制地址）`),
-        // 电脑上节点是无色的玻璃：这个人的颜色留在描边上（手机上照旧是色块加白圈）
-        s("circle", { class: "node-body", cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: PHONE ? "rgba(255,255,255,.85)" : COLOR_HEX[Number(colorClass(peer.id).slice(1))], "stroke-width": 2.5 }),
+        // 节点是无色的玻璃：这个人的颜色留在描边上
+        s("circle", { class: "node-body", cx: x, cy: y, r: 21, fill: COLOR_HEX[Number(colorClass(peer.id).slice(1))], stroke: COLOR_HEX[Number(colorClass(peer.id).slice(1))], "stroke-width": 2.5 }),
         s("text", { x, y: y + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, initialOf(peer)),
         label,
         s("text", { class: "node-sub", x, y: y + 53, "text-anchor": "middle" }, peer.ip),
@@ -559,8 +558,6 @@ function meshGraph() {
       glass.push(bubble(x, y, 21, COLOR_HEX[Number(colorClass(peer.id).slice(1))], !peer.online, from, true));
     });
     nodes.push(
-      // "我"身后的光晕只在手机上画：电脑上"我"是无色的玻璃，光晕画在 SVG 里会压在玻璃上面、把它染成一片蓝
-      PHONE ? s("circle", { cx, cy, r: 64, fill: "url(#me-glow)" }) : null,
       s("circle", { class: "node-body", cx, cy, r: 27, fill: "#3d6bff", stroke: "#fff", "stroke-width": 3 }),
       s("text", { x: cx, y: cy + 5, "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": 14 }, "我"),
       s("text", { class: "node-label", x: cx, y: cy + 46, "text-anchor": "middle" }, ov.name || DEVICE),
@@ -1977,7 +1974,7 @@ function render(ov) {
     const next = state.current.mount(ov);
     // 启动动画还盖着：直接换上，不播换页和卡片浮上来 —— 动画走完时统一浮一次
     if (document.documentElement.classList.contains("booting")) main.replaceChildren(next);
-    else swapView(main, next, dir, enter);
+    else swapView(main, next, dir, enter, PHONE ? 120 : 220);
     main.scrollTop = 0;
   } else {
     state.current.update(ov);

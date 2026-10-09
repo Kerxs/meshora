@@ -4,11 +4,9 @@
 // 客户端（index.html）、安卓（同一份）、安装程序（setup.html）都用它：页面里放一个空的 <div class="sky">，
 // 在 Glassium 之前引入这个模块。光和点都画在同一张画布上。
 // 电脑上这张画布交给 Glassium 当场景（useSkyAsGlassScene）：玻璃把后面的光晕模糊、折射成带颜色的面板；
-// 手机上玻璃用 CSS 画，backdrop-filter 直接透过页面上的这张画布，一样带颜色。
+// 手机上玻璃用 CSS 画，backdrop-filter 直接透过页面上的这张画布：一样带颜色，边上的折射、色散由 Glassium 的
+// SVG 位移滤镜做（Chromium，安卓 WebView 就是）。
 // 规矩和别处一样：不写内联样式，尺寸走 CSSOM。
-
-/** 安卓客户端：玻璃用 CSS 画（和 app.js 的 PHONE 同一个判断） */
-const PHONE_UA = /Android/i.test(navigator.userAgent);
 
 /** 点的间距（CSS 像素） */
 const GAP = 24;
@@ -44,25 +42,25 @@ const GLOWS = [
 /**
  * 页面上的卡片、面板用的液态玻璃：不模糊，后面的点阵透过来是清楚的；边缘一圈折射把点阵往里拉弯，
  * 带一点色散（红蓝分开）—— 玻璃的曲率就是靠拉弯的点阵看出来的，模糊一大点阵就没了、边缘也看不出弯。
- * 只在电脑上（GPU 画）有折射和色散；手机上玻璃用 CSS 画，没有折射，还是用磨砂。
+ * 电脑上 GPU 画；手机上 CSS 画，折射与色散由 Glassium 的 SVG 位移滤镜做（cssRefraction），不再用磨砂 ——
+ * 大面积的模糊正是手机 GPU 最吃力的地方。
  * 弹窗、提示条（overlay）不用它：它们压在别的内容上，要磨砂才看得清字
  */
-export const LIQUID_GLASS = PHONE_UA ? { glass: "frosted" } : {
+export const LIQUID_GLASS = {
   glass: "regular",
   "glass-blur": "0",
   "glass-refraction": "0.22",
   "glass-distortion": "1",
-  "glass-dispersion": "0.6",
+  // 手机上大卡片不做三通道色散（只位移一次）：位移滤镜每块要算三遍，大面积的卡片滚动时手机 GPU 吃不消。
+  // 小块的玻璃（按钮、头像、节点、延迟胶囊）照样分色
+  "glass-dispersion": /Android/i.test(navigator.userAgent) ? "0" : "0.6",
   "glass-tint": "rgba(255,255,255,0.08)",
 };
 
 /**
  * 按钮的液态玻璃边：卡片上的按钮也把后面的点阵在边上拉弯、带色散（材质照旧是 clear / tinted，只加强边缘）。
- * 手机上玻璃用 CSS 画，没有折射，给空的
  */
-export const LIQUID_EDGE = PHONE_UA
-  ? {}
-  : { "glass-refraction": "0.5", "glass-distortion": "1", "glass-dispersion": "0.45" };
+export const LIQUID_EDGE = { "glass-refraction": "0.5", "glass-distortion": "1", "glass-dispersion": "0.45" };
 
 /**
  * 输入框、文本框：深色玻璃（颜色和原来的实底 --well 一样），电脑上边缘也有折射、色散
@@ -70,10 +68,9 @@ export const LIQUID_EDGE = PHONE_UA
 export const WELL_GLASS = { glass: "tinted", "glass-tint": "rgba(0, 0, 0, 0.2)", ...LIQUID_EDGE };
 
 /**
- * 网状图连线上的延迟胶囊：深色的玻璃，边上折射、色散、一圈亮边。手机上返回空的，照旧是 SVG 画的深色胶囊
+ * 网状图连线上的延迟胶囊：深色的玻璃，边上折射、色散、一圈亮边
  */
 export function liquidPill(tint = "rgba(10, 16, 48, 0.5)", radius = "1frac") {
-  if (PHONE_UA) return {};
   return {
     glass: "regular",
     "glass-blur": "0",
@@ -90,10 +87,8 @@ export function liquidPill(tint = "rgba(10, 16, 48, 0.5)", radius = "1frac") {
  * 头像、网状图节点的彩色玻璃泡：颜色是着色，边上折射、色散、一圈亮边。`dim` 是不在线的（颜色淡一些）。
  * `lens`：无色的透明玻璃（网状图的节点、头像都用它；颜色由调用方画在描边上），后面的点阵透过来，
  * 在边上被拉弯、分成红绿蓝（和卡片边上的一样；鼠标靠近时点阵变亮，看得最清楚）。
- * 手机上不用（列表里一堆 CSS 玻璃拖慢滚动），返回空的，照旧是纯色圆
  */
 export function liquidBubble(hex, dim = false, lens = false) {
-  if (PHONE_UA) return {};
   const n = Number.parseInt(hex.slice(1), 16);
   const rgb = `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
   if (lens) {

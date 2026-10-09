@@ -252,8 +252,8 @@ glass-switch {
   font-size: var(--fs-cap);
 }
 
-/* 电脑上头像是带颜色的玻璃泡（liquidBubble）：玻璃生效了，纯色底就去掉，颜色由玻璃的着色给 */
-.ava[data-glassium-active]:not([data-glassium-overlay]) {
+/* 头像是无色的玻璃（liquidBubble，电脑上 GPU 画、手机上 CSS 画）：纯色底去掉 */
+.ava[glass] {
   background: none;
   /* 无色的玻璃：这个人的颜色留在一圈内描边上 */
   box-shadow: inset 0 0 0 2px var(--ava);
@@ -651,12 +651,12 @@ main:hover {
   animation: node-in 820ms var(--spring) both;
 }
 
-.graph-bubbles:has(> [data-glassium-active]:not([data-glassium-overlay])) ~ .graph .ms-body {
+.graph-bubbles:has(> [glass]) ~ .graph .ms-body {
   fill-opacity: 0;
   stroke-opacity: 0.6;
 }
 
-.graph-bubbles:has(> [data-glassium-active]:not([data-glassium-overlay])) ~ .graph .node-body {
+.graph-bubbles:has(> [glass]) ~ .graph .node-body {
   fill-opacity: 0;
   /* 白圈细一点：玻璃自己有一圈亮边 */
   stroke-width: 1.4;
@@ -1441,6 +1441,17 @@ td.spark-cell .spark {
 .view.leaving {
   pointer-events: none;
   animation: view-out 220ms var(--ease-in) forwards;
+}
+
+/* 手机上切页只淡入淡出整页：卡片都是玻璃（backdrop-filter 带位移滤镜），一张张带位移浮上来时每帧每块都要重算背景，
+ * 手机 GPU 跟不上 —— 底部导航连点几下，几页的动画叠在一起就卡住了 */
+.phone .view.enter > * {
+  animation: fade 160ms var(--ease) both;
+  animation-delay: 0ms;
+}
+
+.phone .view.leaving {
+  animation: fade-out 120ms var(--ease-in) forwards;
 }
 
 /* ---- 启动：点阵扩散（sky.js）、中间画 Logo，Logo 飞到左上角，界面浮上来（motion.js 的 intro） ---- */
